@@ -5,58 +5,86 @@ WORKDIR /app
 
 # Use npm mirror if needed
 RUN if [ "$USE_MIRROR" = "true" ] || ( [ "$USE_MIRROR" = "auto" ] && ! timeout 3 bash -c "</dev/tcp/www.google.com/80" 2>/dev/null ); then \
-        echo "Using npm mirror..."; \
-        npm config set registry https://registry.npmmirror.com; \
+    echo "Using npm mirror..."; \
+    npm config set registry https://registry.npmmirror.com; \
     else \
-        echo "Using default npm registry..."; \
+    echo "Using default npm registry..."; \
     fi
 
 COPY package*.json ./
-RUN npm install
-COPY . .
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --legacy-peer-deps --prefer-offline --no-audit --no-fund
+COPY tsconfig.json tsconfig.node.json vite.config.ts tailwind.config.js postcss.config.cjs index.html ./
+COPY public ./public
+COPY src ./src
+COPY src-tauri/icons ./src-tauri/icons
 RUN npm run build
 
 # --- Backend Build Stage ---
-FROM rust:1.85-slim AS backend-builder
+FROM rust:1-slim-bookworm AS backend-builder
 ARG USE_MIRROR=auto
 
 # Conditionally use Aliyun mirror for APT
 RUN if [ "$USE_MIRROR" = "true" ] || ( [ "$USE_MIRROR" = "auto" ] && ! timeout 3 bash -c "</dev/tcp/www.google.com/80" 2>/dev/null ); then \
-        echo "Using Aliyun mirror for APT..."; \
-        sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources || \
-        sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list; \
+    echo "Using Aliyun mirror for APT..."; \
+    sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources || \
+    sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list; \
     else \
-        echo "Using default APT sources..."; \
+    echo "Using default APT sources..."; \
     fi
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
     pkg-config \
+    build-essential \
+    curl \
+    wget \
+    file \
     libssl-dev \
-    libsqlite3-dev \
     libgtk-3-dev \
     libwebkit2gtk-4.1-dev \
     libayatana-appindicator3-dev \
     librsvg2-dev \
+    libsoup-3.0-dev \
+    libjavascriptcoregtk-4.1-dev \
+    perl \
+    cmake \
+    golang-go \
+    clang \
+    libclang-dev \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 # Use Aliyun mirror for Cargo if needed (Sparse Index)
 ENV CARGO_HTTP_MULTIPLEXING=false
 RUN if [ "$USE_MIRROR" = "true" ] || ( [ "$USE_MIRROR" = "auto" ] && ! timeout 3 bash -c "</dev/tcp/www.google.com/80" 2>/dev/null ); then \
-        echo "Using Aliyun mirror for Cargo..."; \
-        mkdir -p /root/.cargo && \
-        echo "[source.crates-io]\nreplace-with = 'aliyun'\n\n[source.aliyun]\nregistry = \"sparse+https://mirrors.aliyun.com/crates.io-index/\"" > /root/.cargo/config.toml; \
+    echo "Using Aliyun mirror for Cargo..."; \
+    mkdir -p /root/.cargo && \
+    echo "[source.crates-io]\nreplace-with = 'aliyun'\n\n[source.aliyun]\nregistry = \"sparse+https://mirrors.aliyun.com/crates.io-index/\"" > /root/.cargo/config.toml; \
     else \
-        echo "Using default Cargo registry..."; \
+    echo "Using default Cargo registry..."; \
     fi
 
-WORKDIR /app
-# Copy the whole project to build the Rust workspace
-COPY . .
+# Verify Go installation for BoringSSL build
+RUN which go && go version || (echo "ERROR: Go compiler not found" && exit 1)
 
-# Build the Rust backend in release mode
+WORKDIR /app
+# Copy only backend sources to keep frontend cache intact on backend-only changes
+COPY src-tauri ./src-tauri
+
+# [FIX] Copy locales for Rust compilation (needed by i18n.rs include_str!)
+COPY src/locales ./src/locales
+
+# Copy frontend dist from builder so Tauri can embed it
+COPY --from=frontend-builder /app/dist ./dist
+
+# Build the Rust backend in release mode (with BuildKit cache)
 WORKDIR /app/src-tauri
-RUN cargo build --release --bin antigravity_tools
+RUN --mount=type=cache,target=/root/.cargo/registry \
+    --mount=type=cache,target=/root/.cargo/git \
+    --mount=type=cache,target=/app/src-tauri/target \
+    cargo build --release --bin antigravity_tools && \
+    cp target/release/antigravity_tools /tmp/antigravity_tools
 
 # --- Final Runtime Stage ---
 FROM debian:bookworm-slim
@@ -65,11 +93,11 @@ WORKDIR /app
 
 # Conditionally use Aliyun mirror for APT
 RUN if [ "$USE_MIRROR" = "true" ] || ( [ "$USE_MIRROR" = "auto" ] && ! timeout 3 bash -c "</dev/tcp/www.google.com/80" 2>/dev/null ); then \
-        echo "Using Aliyun mirror for APT..."; \
-        sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources || \
-        sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list; \
+    echo "Using Aliyun mirror for APT..."; \
+    sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources || \
+    sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list; \
     else \
-        echo "Using default APT sources..."; \
+    echo "Using default APT sources..."; \
     fi
 
 # Install runtime dependencies
@@ -84,7 +112,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy binary from builder
-COPY --from=backend-builder /app/src-tauri/target/release/antigravity_tools /app/antigravity-tools
+COPY --from=backend-builder /tmp/antigravity_tools /app/antigravity-tools
 
 # Copy frontend dist from builder
 COPY --from=frontend-builder /app/dist /app/dist

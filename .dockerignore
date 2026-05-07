@@ -1,6 +1,5 @@
 target/
 node_modules/
-dist/
 .git/
 src-tauri/target/
 src-tauri/bin/

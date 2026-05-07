@@ -8,10 +8,7 @@ use serde_json::{json, Value};
 use tracing::{debug, info};
 use uuid::Uuid;
 
-use crate::proxy::{
-    audio::AudioProcessor,
-    server::AppState,
-};
+use crate::proxy::{audio::AudioProcessor, server::AppState};
 
 /// 处理音频转录请求 (OpenAI Whisper API 兼容)
 pub async fn handle_audio_transcription(
@@ -24,17 +21,23 @@ pub async fn handle_audio_transcription(
     let mut prompt = "Generate a transcript of the speech.".to_string();
 
     // 1. 解析 multipart/form-data
-    while let Some(field) = multipart.next_field().await.map_err(|e| {
-        (StatusCode::BAD_REQUEST, format!("解析表单失败: {}", e))
-    })? {
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("解析表单失败: {}", e)))?
+    {
         let name = field.name().unwrap_or("").to_string();
 
         match name.as_str() {
             "file" => {
                 filename = field.file_name().map(|s| s.to_string());
-                audio_data = Some(field.bytes().await.map_err(|e| {
-                    (StatusCode::BAD_REQUEST, format!("读取文件失败: {}", e))
-                })?.to_vec());
+                audio_data = Some(
+                    field
+                        .bytes()
+                        .await
+                        .map_err(|e| (StatusCode::BAD_REQUEST, format!("读取文件失败: {}", e)))?
+                        .to_vec(),
+                );
             }
             "model" => {
                 model = field.text().await.unwrap_or(model);
@@ -46,15 +49,9 @@ pub async fn handle_audio_transcription(
         }
     }
 
-    let audio_bytes = audio_data.ok_or((
-        StatusCode::BAD_REQUEST,
-        "缺少音频文件".to_string(),
-    ))?;
+    let audio_bytes = audio_data.ok_or((StatusCode::BAD_REQUEST, "缺少音频文件".to_string()))?;
 
-    let file_name = filename.ok_or((
-        StatusCode::BAD_REQUEST,
-        "无法获取文件名".to_string(),
-    ))?;
+    let file_name = filename.ok_or((StatusCode::BAD_REQUEST, "无法获取文件名".to_string()))?;
 
     info!(
         "收到音频转录请求: 文件={}, 大小={} bytes, 模型={}",
@@ -64,8 +61,8 @@ pub async fn handle_audio_transcription(
     );
 
     // 2. 检测 MIME 类型
-    let mime_type = AudioProcessor::detect_mime_type(&file_name)
-        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    let mime_type =
+        AudioProcessor::detect_mime_type(&file_name).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
 
     // 3. 验证文件大小
     if AudioProcessor::exceeds_size_limit(audio_bytes.len()) {
@@ -100,7 +97,7 @@ pub async fn handle_audio_transcription(
 
     // 6. 获取 Token 和上游客户端
     let token_manager = state.token_manager;
-    let (access_token, project_id, email) = token_manager
+    let (access_token, project_id, email, account_id, _wait_ms) = token_manager
         .get_token("text", false, None, &model)
         .await
         .map_err(|e| (StatusCode::SERVICE_UNAVAILABLE, e))?;
@@ -120,12 +117,22 @@ pub async fn handle_audio_transcription(
     // 8. 发送请求到 Gemini
     let upstream = state.upstream.clone();
     let response = upstream
-        .call_v1_internal("generateContent", &access_token, wrapped_body, None)
+        .call_v1_internal(
+            "generateContent",
+            &access_token,
+            wrapped_body,
+            None,
+            Some(account_id.as_str()),
+        )
         .await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("上游请求失败: {}", e)))?;
+        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("上游请求失败: {}", e)))?
+        .response;
 
     if !response.status().is_success() {
-        let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+        let error_text = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unknown error".to_string());
         return Err((
             StatusCode::BAD_GATEWAY,
             format!("Gemini API 错误: {}", error_text),
@@ -157,6 +164,7 @@ pub async fn handle_audio_transcription(
         [("X-Account-Email", email.as_str())],
         Json(json!({
             "text": text
-        }))
-    ).into_response())
+        })),
+    )
+        .into_response())
 }

@@ -39,6 +39,12 @@ export default function ThemeManager() {
                     getCurrentWindow().setBackgroundColor(bgColor).catch(e =>
                         console.error('Failed to set window background color:', e)
                     );
+
+                    // Sync Windows title bar theme (for minimize/maximize/close button colors)
+                    const { invoke } = await import('@tauri-apps/api/core');
+                    invoke('set_window_theme', { theme }).catch(() => {
+                        // Ignore errors on non-Windows platforms
+                    });
                 }
             } catch (e) {
                 console.error('Window background sync failed:', e);

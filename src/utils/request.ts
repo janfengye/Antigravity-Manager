@@ -1,10 +1,8 @@
-import { invoke } from '@tauri-apps/api/core';
-
 // 探测环境
 const isTauri = typeof window !== 'undefined' && (!!(window as any).__TAURI_INTERNALS__ || !!(window as any).__TAURI__);
 
 // 命令到 API 的映射
-const COMMAND_MAPPING: Record<string, { url: string; method: 'GET' | 'POST' | 'DELETE' }> = {
+const COMMAND_MAPPING: Record<string, { url: string; method: 'GET' | 'POST' | 'DELETE' | 'PATCH' }> = {
   // Accounts
   'list_accounts': { url: '/api/accounts', method: 'GET' },
   'get_current_account': { url: '/api/accounts/current', method: 'GET' },
@@ -20,6 +18,8 @@ const COMMAND_MAPPING: Record<string, { url: string; method: 'GET' | 'POST' | 'D
   'warm_up_accounts': { url: '/api/accounts/warmup', method: 'POST' },
   'warm_up_all_accounts': { url: '/api/accounts/warmup', method: 'POST' },
   'warm_up_account': { url: '/api/accounts/:accountId/warmup', method: 'POST' },
+  'update_account_label': { url: '/api/accounts/:accountId/label', method: 'POST' },
+  'export_accounts': { url: '/api/accounts/export', method: 'POST' },
   'bind_device_profile': { url: '/api/accounts/:accountId/bind-device', method: 'POST' },
   'get_device_profiles': { url: '/api/accounts/:accountId/device-profiles', method: 'GET' },
   'list_device_versions': { url: '/api/accounts/:accountId/device-versions', method: 'GET' },
@@ -37,6 +37,9 @@ const COMMAND_MAPPING: Record<string, { url: string; method: 'GET' | 'POST' | 'D
   'update_model_mapping': { url: '/api/proxy/mapping', method: 'POST' },
   'generate_api_key': { url: '/api/proxy/api-key/generate', method: 'POST' },
   'clear_proxy_session_bindings': { url: '/api/proxy/session-bindings/clear', method: 'POST' },
+  'clear_proxy_rate_limit': { url: '/api/proxy/rate-limits/:accountId', method: 'DELETE' },
+  'clear_all_proxy_rate_limits': { url: '/api/proxy/rate-limits', method: 'DELETE' },
+  'check_proxy_health': { url: '/api/proxy/health-check/trigger', method: 'POST' },
   'get_preferred_account': { url: '/api/proxy/preferred-account', method: 'GET' },
   'set_preferred_account': { url: '/api/proxy/preferred-account', method: 'POST' },
   'fetch_zai_models': { url: '/api/zai/models/fetch', method: 'POST' },
@@ -51,11 +54,25 @@ const COMMAND_MAPPING: Record<string, { url: string; method: 'GET' | 'POST' | 'D
   'clear_proxy_logs': { url: '/api/logs/clear', method: 'POST' },
   'get_proxy_log_detail': { url: '/api/logs/:logId', method: 'GET' },
 
+  // Debug Console
+  'enable_debug_console': { url: '/api/debug/enable', method: 'POST' },
+  'disable_debug_console': { url: '/api/debug/disable', method: 'POST' },
+  'is_debug_console_enabled': { url: '/api/debug/enabled', method: 'GET' },
+  'get_debug_console_logs': { url: '/api/debug/logs', method: 'GET' },
+  'clear_debug_console_logs': { url: '/api/debug/logs/clear', method: 'POST' },
+
   // CLI Sync
   'get_cli_sync_status': { url: '/api/proxy/cli/status', method: 'POST' },
   'execute_cli_sync': { url: '/api/proxy/cli/sync', method: 'POST' },
   'execute_cli_restore': { url: '/api/proxy/cli/restore', method: 'POST' },
   'get_cli_config_content': { url: '/api/proxy/cli/config', method: 'POST' },
+
+  // OpenCode Sync
+  'get_opencode_sync_status': { url: '/api/proxy/opencode/status', method: 'POST' },
+  'execute_opencode_sync': { url: '/api/proxy/opencode/sync', method: 'POST' },
+  'execute_opencode_restore': { url: '/api/proxy/opencode/restore', method: 'POST' },
+  'execute_opencode_clear': { url: '/api/proxy/opencode/clear', method: 'POST' },
+  'get_opencode_config_content': { url: '/api/proxy/opencode/config', method: 'POST' },
 
   // Stats
   'get_token_stats_hourly': { url: '/api/stats/token/hourly', method: 'GET' },
@@ -68,16 +85,18 @@ const COMMAND_MAPPING: Record<string, { url: string; method: 'GET' | 'POST' | 'D
   'get_token_stats_model_trend_daily': { url: '/api/stats/token/model-trend/daily', method: 'GET' },
   'get_token_stats_account_trend_hourly': { url: '/api/stats/token/account-trend/hourly', method: 'GET' },
   'get_token_stats_account_trend_daily': { url: '/api/stats/token/account-trend/daily', method: 'GET' },
+  'clear_token_stats': { url: '/api/stats/token/clear', method: 'POST' },
 
   // System
   'get_data_dir_path': { url: '/api/system/data-dir', method: 'GET' },
-  'save_text_file': { url: '/api/system/save-file', method: 'POST' },
   'get_update_settings': { url: '/api/system/updates/settings', method: 'GET' },
   'save_update_settings': { url: '/api/system/updates/save', method: 'POST' },
   'is_auto_launch_enabled': { url: '/api/system/autostart/status', method: 'GET' },
   'toggle_auto_launch': { url: '/api/system/autostart/toggle', method: 'POST' },
   'get_http_api_settings': { url: '/api/system/http-api/settings', method: 'GET' },
   'save_http_api_settings': { url: '/api/system/http-api/settings', method: 'POST' },
+  'get_antigravity_path': { url: '/api/system/antigravity/path', method: 'GET' },
+  'get_antigravity_args': { url: '/api/system/antigravity/args', method: 'GET' },
 
   // Cloudflared
   'cloudflared_install': { url: '/api/proxy/cloudflared/install', method: 'POST' },
@@ -95,6 +114,10 @@ const COMMAND_MAPPING: Record<string, { url: string; method: 'GET' | 'POST' | 'D
   'start_oauth_login': { url: '/api/accounts/oauth/start', method: 'POST' },
   'complete_oauth_login': { url: '/api/accounts/oauth/complete', method: 'POST' },
   'cancel_oauth_login': { url: '/api/accounts/oauth/cancel', method: 'POST' },
+  'submit_oauth_code': { url: '/api/accounts/oauth/submit-code', method: 'POST' },
+  'list_oauth_clients': { url: '/api/accounts/oauth/clients', method: 'GET' },
+  'get_active_oauth_client': { url: '/api/accounts/oauth/client', method: 'GET' },
+  'set_active_oauth_client': { url: '/api/accounts/oauth/client', method: 'POST' },
 
   // Import
   'import_v1_accounts': { url: '/api/accounts/import/v1', method: 'POST' },
@@ -102,14 +125,50 @@ const COMMAND_MAPPING: Record<string, { url: string; method: 'GET' | 'POST' | 'D
   'import_custom_db': { url: '/api/accounts/import/db-custom', method: 'POST' },
   'sync_account_from_db': { url: '/api/accounts/sync/db', method: 'POST' },
 
-  // System Extra
+  // System Extra & Cache
   'open_data_folder': { url: '/api/system/open-folder', method: 'POST' },
+  'clear_antigravity_cache': { url: '/api/system/cache/clear', method: 'POST' },
+  'get_antigravity_cache_paths': { url: '/api/system/cache/paths', method: 'GET' },
+  'clear_log_cache': { url: '/api/system/logs/clear-cache', method: 'POST' },
+
+  // Security / IP Management
+  'get_ip_access_logs': { url: '/api/security/logs', method: 'GET' },
+  'clear_ip_access_logs': { url: '/api/security/logs/clear', method: 'POST' },
+  'get_ip_stats': { url: '/api/security/stats', method: 'GET' },
+  'get_ip_token_stats': { url: '/api/security/token-stats', method: 'GET' },
+  'get_ip_blacklist': { url: '/api/security/blacklist', method: 'GET' },
+  'add_ip_to_blacklist': { url: '/api/security/blacklist', method: 'POST' },
+  'remove_ip_from_blacklist': { url: '/api/security/blacklist', method: 'DELETE' },
+  'clear_ip_blacklist': { url: '/api/security/blacklist/clear', method: 'POST' },
+  'check_ip_in_blacklist': { url: '/api/security/blacklist/check', method: 'GET' },
+  'get_ip_whitelist': { url: '/api/security/whitelist', method: 'GET' },
+  'add_ip_to_whitelist': { url: '/api/security/whitelist', method: 'POST' },
+  'remove_ip_from_whitelist': { url: '/api/security/whitelist', method: 'DELETE' },
+  'clear_ip_whitelist': { url: '/api/security/whitelist/clear', method: 'POST' },
+  'check_ip_in_whitelist': { url: '/api/security/whitelist/check', method: 'GET' },
+  'get_security_config': { url: '/api/security/config', method: 'GET' },
+  'update_security_config': { url: '/api/security/config', method: 'POST' },
+  // User Tokens
+  'list_user_tokens': { url: '/api/user-tokens', method: 'GET' },
+  'get_user_token_summary': { url: '/api/user-tokens/summary', method: 'GET' },
+  'create_user_token': { url: '/api/user-tokens', method: 'POST' },
+  'renew_user_token': { url: '/api/user-tokens/:id/renew', method: 'POST' },
+  'delete_user_token': { url: '/api/user-tokens/:id', method: 'DELETE' },
+  'update_user_token': { url: '/api/user-tokens/:id', method: 'PATCH' },
+
+  // Proxy Pool (Web Mode Fix)
+  'get_proxy_pool_config': { url: '/api/proxy/pool/config', method: 'GET' },
+  'get_all_account_bindings': { url: '/api/proxy/pool/bindings', method: 'GET' },
+  'bind_account_proxy': { url: '/api/proxy/pool/bind', method: 'POST' },
+  'unbind_account_proxy': { url: '/api/proxy/pool/unbind', method: 'POST' },
+  'get_account_proxy_binding': { url: '/api/proxy/pool/binding/:accountId', method: 'GET' },
 };
 
 export async function request<T>(cmd: string, args?: any): Promise<T> {
   // 1. Tauri 环境：直接使用 invoke ...
   if (isTauri) {
     try {
+      const { invoke } = await import('@tauri-apps/api/core');
       return await invoke<T>(cmd, args);
     } catch (error) {
       console.error(`Tauri Invoke Error [${cmd}]:`, error);
@@ -125,17 +184,24 @@ export async function request<T>(cmd: string, args?: any): Promise<T> {
   }
 
   let url = mapping.url;
+  // [FIX] 创建 args 副本，用于移除已使用的路径参数
+  let bodyArgs = args ? { ...args } : undefined;
+
   // 通用路径参数处理：替换 :key 为 args[key]
   if (args) {
     Object.keys(args).forEach(key => {
       const placeholder = `:${key}`;
       if (url.includes(placeholder)) {
         url = url.replace(placeholder, encodeURIComponent(String(args[key])));
+        // [FIX] 从 body 参数中移除已用于路径的参数
+        if (bodyArgs) {
+          delete bodyArgs[key];
+        }
       }
     });
   }
 
-  const apiKey = typeof window !== 'undefined' ? localStorage.getItem('abv_admin_api_key') : null;
+  const apiKey = typeof window !== 'undefined' ? sessionStorage.getItem('abv_admin_api_key') : null;
 
   const options: RequestInit = {
     method: mapping.method,
@@ -148,24 +214,34 @@ export async function request<T>(cmd: string, args?: any): Promise<T> {
     },
   };
 
-  if (mapping.method === 'GET' && args) {
+  if ((mapping.method === 'GET' || mapping.method === 'DELETE') && args) {
     const params = new URLSearchParams();
     Object.entries(args).forEach(([key, value]) => {
+      // [FIX] 跳过已用于路径替换的参数
+      if (url.includes(encodeURIComponent(String(value)))) return;
       if (value !== undefined && value !== null) {
         params.append(key, String(value));
       }
     });
     const qs = params.toString();
     if (qs) url += `?${qs}`;
-  } else if (mapping.method === 'POST' && args) {
-    options.body = JSON.stringify(args);
+  } else if ((mapping.method === 'POST' || mapping.method === 'PATCH') && bodyArgs) {
+    // [FIX] 如果有 request 包装，提取其内容作为 body
+    const body = bodyArgs.request !== undefined ? bodyArgs.request : bodyArgs;
+    options.body = JSON.stringify(body);
   }
 
   try {
     const response = await fetch(url, options);
     if (!response.ok) {
       if (!isTauri && response.status === 401) {
-        window.dispatchEvent(new CustomEvent('abv-unauthorized'));
+        // [FIX #1163] 增加防抖锁，避免重复事件导致 UI 抖动
+        const now = Date.now();
+        const lastAuthError = (window as any)._lastAuthErrorTime || 0;
+        if (now - lastAuthError > 2000) {
+          (window as any)._lastAuthErrorTime = now;
+          window.dispatchEvent(new CustomEvent('abv-unauthorized'));
+        }
       }
       const errorData = await response.json().catch(() => ({}));
       throw errorData.error || `HTTP Error ${response.status}`;

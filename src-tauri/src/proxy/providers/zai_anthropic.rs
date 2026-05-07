@@ -55,7 +55,8 @@ fn build_client(
 
     if let Some(config) = upstream_proxy {
         if config.enabled && !config.url.is_empty() {
-            let proxy = reqwest::Proxy::all(&config.url)
+            let url = crate::proxy::config::normalize_proxy_url(&config.url);
+            let proxy = reqwest::Proxy::all(&url)
                 .map_err(|e| format!("Invalid upstream proxy url: {}", e))?;
             builder = builder.proxy(proxy);
         }

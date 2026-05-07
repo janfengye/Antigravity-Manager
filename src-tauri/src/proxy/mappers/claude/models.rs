@@ -17,9 +17,9 @@ pub struct ClaudeRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub temperature: Option<f32>,
+    pub temperature: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub top_p: Option<f32>,
+    pub top_p: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub top_k: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -40,10 +40,14 @@ pub struct ClaudeRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThinkingConfig {
     #[serde(rename = "type")]
-    pub type_: String, // "enabled"
+    pub type_: String, // "enabled" or "adaptive"
+    #[serde(alias = "budgetTokens")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub budget_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>, // "low", "high", or "max"
 }
+
 
 /// System Prompt
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,9 +109,7 @@ pub enum ContentBlock {
     },
 
     #[serde(rename = "redacted_thinking")]
-    RedactedThinking {
-        data: String,
-    },
+    RedactedThinking { data: String },
 
     #[serde(rename = "tool_use")]
     ToolUse {
@@ -154,8 +156,8 @@ pub struct ImageSource {
 pub struct DocumentSource {
     #[serde(rename = "type")]
     pub source_type: String, // "base64"
-    pub media_type: String,  // e.g. "application/pdf"
-    pub data: String,        // base64 data
+    pub media_type: String, // e.g. "application/pdf"
+    pub data: String,       // base64 data
 }
 
 /// Tool - supports both client tools (with input_schema) and server tools (like web_search)

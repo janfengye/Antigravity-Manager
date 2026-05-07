@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { Plus, Database, Globe, FileClock, Loader2, CheckCircle2, XCircle, Copy, Check, Info } from 'lucide-react';
+import { Plus, Database, Globe, FileClock, Loader2, CheckCircle2, XCircle, Copy, Check, Info, Link2 } from 'lucide-react';
 import { useAccountStore } from '../../stores/useAccountStore';
 import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
@@ -11,11 +11,12 @@ import { copyToClipboard } from '../../utils/clipboard';
 
 interface AddAccountDialogProps {
     onAdd: (email: string, refreshToken: string) => Promise<void>;
+    showText?: boolean;
 }
 
 type Status = 'idle' | 'loading' | 'success' | 'error';
 
-function AddAccountDialog({ onAdd }: AddAccountDialogProps) {
+function AddAccountDialog({ onAdd, showText = true }: AddAccountDialogProps) {
     const { t } = useTranslation();
     const fetchAccounts = useAccountStore(state => state.fetchAccounts);
     const [isOpen, setIsOpen] = useState(false);
@@ -23,6 +24,7 @@ function AddAccountDialog({ onAdd }: AddAccountDialogProps) {
     const [refreshToken, setRefreshToken] = useState('');
     const [oauthUrl, setOauthUrl] = useState('');
     const [oauthUrlCopied, setOauthUrlCopied] = useState(false);
+    const [manualCode, setManualCode] = useState('');
 
     // UI State
     const [status, setStatus] = useState<Status>('idle');
@@ -282,7 +284,7 @@ function AddAccountDialog({ onAdd }: AddAccountDialogProps) {
             const url = typeof res === 'string' ? res : res.url;
 
             if (!url) {
-                throw new Error('Could not obtain OAuth URL');
+                throw new Error(t('accounts.add.oauth.error_no_url', 'OAuth URLを取得できませんでした'));
             }
 
             setOauthUrl(url); // 确保链接在 UI 中可见，方便用户手动复制
@@ -292,7 +294,7 @@ function AddAccountDialog({ onAdd }: AddAccountDialogProps) {
 
             if (!popup) {
                 setStatus('error');
-                setMessage(t('common.error') + ': Popup blocked');
+                setMessage(t('accounts.add.oauth.popup_blocked', 'ポップアップがブロックされました'));
                 return;
             }
 
@@ -362,6 +364,41 @@ function AddAccountDialog({ onAdd }: AddAccountDialogProps) {
         }
     };
 
+    const handleManualSubmit = async () => {
+        if (!manualCode.trim()) return;
+
+        setStatus('loading');
+        setMessage(t('accounts.add.oauth.manual_submitting', '認可コードを送信中...'));
+
+        try {
+            await invoke('submit_oauth_code', { code: manualCode.trim(), state: null });
+
+            // 提交成功反馈
+            setStatus('success');
+            setMessage(t('accounts.add.oauth.manual_submitted', '認可コードを送信しました。バックエンドで処理中です...'));
+
+            setManualCode('');
+
+            // 对齐 Web 模式下的刷新逻辑
+            if (!isTauri()) {
+                setTimeout(async () => {
+                    await fetchAccounts();
+                    setIsOpen(false);
+                    resetState();
+                }, 2000);
+            }
+        } catch (error) {
+            let errStr = String(error);
+            if (errStr.includes("No active OAuth flow")) {
+                setMessage(t('accounts.add.oauth.error_no_flow'));
+                setStatus('error');
+            } else {
+                setMessage(`${t('common.error')}: ${errStr}`);
+                setStatus('error');
+            }
+        }
+    };
+
     const handleImportDb = () => {
         handleAction(t('accounts.add.tabs.import'), importFromDb);
     };
@@ -422,14 +459,15 @@ function AddAccountDialog({ onAdd }: AddAccountDialogProps) {
     return (
         <>
             <button
-                className="px-4 py-2 bg-white dark:bg-base-100 text-gray-700 dark:text-gray-300 text-sm font-medium rounded-lg hover:bg-gray-50 dark:hover:bg-base-200 transition-colors flex items-center gap-2 shadow-sm border border-gray-200/50 dark:border-base-300 relative z-[100]"
+                className="px-2.5 lg:px-4 py-2 bg-white dark:bg-base-100 text-gray-700 dark:text-gray-300 text-sm font-medium rounded-lg hover:bg-gray-50 dark:hover:bg-base-200 transition-colors flex items-center gap-2 shadow-sm border border-gray-200/50 dark:border-base-300 relative z-[100]"
                 onClick={() => {
                     console.log('AddAccountDialog button clicked');
                     setIsOpen(true);
                 }}
+                title={!showText ? t('accounts.add_account') : undefined}
             >
                 <Plus className="w-4 h-4" />
-                {t('accounts.add_account')}
+                {showText && <span className="hidden lg:inline">{t('accounts.add_account')}</span>}
             </button>
 
             {isOpen && createPortal(
@@ -548,6 +586,32 @@ function AddAccountDialog({ onAdd }: AddAccountDialogProps) {
                                                 </button>
                                             </div>
                                         )}
+
+                                        {/* Manual Code Entry - Always enabled to rescue stuck flows */}
+                                        <div className="pt-4 mt-2 border-t border-gray-100 dark:border-base-200">
+                                            <div className="text-[11px] font-medium text-gray-400 dark:text-gray-500 mb-2 uppercase tracking-wider">
+                                                {t('accounts.add.oauth.manual_hint')}
+                                            </div>
+                                            <div className="relative group/manual flex gap-2">
+                                                <div className="relative flex-1">
+                                                    <input
+                                                        type="text"
+                                                        className="w-full text-xs py-2 px-3 bg-white dark:bg-base-100 border border-gray-200 dark:border-base-300 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all placeholder:text-gray-300 dark:placeholder:text-gray-600"
+                                                        placeholder={t('accounts.add.oauth.manual_placeholder')}
+                                                        value={manualCode}
+                                                        onChange={(e) => setManualCode(e.target.value)}
+                                                    />
+                                                </div>
+                                                <button
+                                                    className="px-4 py-2 bg-neutral text-white dark:bg-white dark:text-neutral text-xs font-semibold rounded-xl hover:opacity-90 active:scale-95 transition-all disabled:opacity-50 disabled:scale-100 flex items-center gap-1.5"
+                                                    onClick={handleManualSubmit}
+                                                    disabled={!manualCode.trim()}
+                                                >
+                                                    <Link2 className="w-3.5 h-3.5" />
+                                                    {t('common.submit')}
+                                                </button>
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
                             )}
@@ -650,9 +714,10 @@ function AddAccountDialog({ onAdd }: AddAccountDialogProps) {
                             )}
                         </div>
                     </div>
-                </div>,
+                </div >,
                 document.body
-            )}
+            )
+            }
         </>
     );
 }

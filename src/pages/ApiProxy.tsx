@@ -14,7 +14,6 @@ import {
     Terminal,
     Trash2,
     BrainCircuit,
-    Layers,
     Puzzle,
     Zap,
     ArrowRight,
@@ -22,7 +21,8 @@ import {
     Code,
     Check,
     X,
-    Edit2
+    Edit2,
+    Save
 } from 'lucide-react';
 import { AppConfig, ProxyConfig, StickySessionConfig, ExperimentalConfig } from '../types/config';
 import HelpTooltip from '../components/common/HelpTooltip';
@@ -34,12 +34,22 @@ import GroupedSelect, { SelectOption } from '../components/common/GroupedSelect'
 import { CliSyncCard } from '../components/proxy/CliSyncCard';
 import DebouncedSlider from '../components/common/DebouncedSlider';
 import { listAccounts } from '../services/accountService';
+import CircuitBreaker from '../components/settings/CircuitBreaker';
+import AdvancedThinking from '../components/settings/AdvancedThinking';
+import { CircuitBreakerConfig } from '../types/config';
 
 interface ProxyStatus {
     running: boolean;
     port: number;
     base_url: string;
     active_accounts: number;
+}
+
+interface CustomPreset {
+    id: string;
+    name: string;
+    description: string;
+    mappings: Record<string, string>;
 }
 
 
@@ -128,6 +138,7 @@ function CollapsibleCard({
                         {children}
                     </div>
                 </div>
+
             </div>
         </div>
     );
@@ -165,10 +176,22 @@ export default function ApiProxy() {
     const [isEditingApiKey, setIsEditingApiKey] = useState(false);
     const [tempApiKey, setTempApiKey] = useState('');
 
+    const [isEditingAdminPassword, setIsEditingAdminPassword] = useState(false);
+    const [tempAdminPassword, setTempAdminPassword] = useState('');
+
+    // Preset selection state
+    const [selectedPreset, setSelectedPreset] = useState<string>('default');
+    const [customPresets, setCustomPresets] = useState<CustomPreset[]>([]);
+    const [isPresetManagerOpen, setIsPresetManagerOpen] = useState(false);
+    const [newPresetName, setNewPresetName] = useState('');
+
+    // Modal states
+
     // Modal states
     const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
     const [isRegenerateKeyConfirmOpen, setIsRegenerateKeyConfirmOpen] = useState(false);
     const [isClearBindingsConfirmOpen, setIsClearBindingsConfirmOpen] = useState(false);
+    const [isClearRateLimitsConfirmOpen, setIsClearRateLimitsConfirmOpen] = useState(false);
 
     // [FIX #820] Fixed account mode states
     const [preferredAccountId, setPreferredAccountId] = useState<string | null>(null);
@@ -210,6 +233,7 @@ export default function ApiProxy() {
         loadAccounts();
         loadPreferredAccount();
         loadCfStatus();
+        loadCustomPresets();
         const interval = setInterval(loadStatus, 3000);
         const cfInterval = setInterval(loadCfStatus, 5000);
         return () => {
@@ -217,6 +241,8 @@ export default function ApiProxy() {
             clearInterval(cfInterval);
         };
     }, []);
+
+
 
     // [FIX #820] Load available accounts for fixed account mode
     const loadAccounts = async () => {
@@ -287,10 +313,38 @@ export default function ApiProxy() {
                 const status = await invoke<typeof cfStatus>('cloudflared_start', { config });
                 setCfStatus(status);
                 showToast(t('proxy.cloudflared.started', { defaultValue: 'Tunnel started' }), 'success');
+
+                // 持久化“启用”状态
+                if (appConfig) {
+                    const newConfig = {
+                        ...appConfig,
+                        cloudflared: {
+                            ...appConfig.cloudflared,
+                            enabled: true,
+                            mode: cfMode,
+                            token: cfToken,
+                            use_http2: cfUseHttp2,
+                            port: appConfig.proxy.port || 8045
+                        }
+                    };
+                    saveConfig(newConfig);
+                }
             } else {
                 const status = await invoke<typeof cfStatus>('cloudflared_stop');
                 setCfStatus(status);
                 showToast(t('proxy.cloudflared.stopped', { defaultValue: 'Tunnel stopped' }), 'success');
+
+                // 持久化“禁用”状态
+                if (appConfig) {
+                    const newConfig = {
+                        ...appConfig,
+                        cloudflared: {
+                            ...appConfig.cloudflared,
+                            enabled: false
+                        }
+                    };
+                    saveConfig(newConfig);
+                }
             }
         } catch (error) {
             showToast(String(error), 'error');
@@ -355,6 +409,20 @@ export default function ApiProxy() {
         try {
             const config = await invoke<AppConfig>('load_config');
             setAppConfig(config);
+
+            // 恢复 Cloudflared 持久化状态
+            if (config.cloudflared) {
+                setCfMode(config.cloudflared.mode || 'quick');
+                setCfToken(config.cloudflared.token || '');
+                setCfUseHttp2(config.cloudflared.use_http2 !== false); // 默认开启 HTTP/2
+            }
+
+            // 恢复 Cloudflared 状态并实现持久化同步
+            if (config.cloudflared) {
+                setCfMode(config.cloudflared.mode || 'quick');
+                setCfToken(config.cloudflared.token || '');
+                setCfUseHttp2(config.cloudflared.use_http2 !== false); // 默认 true
+            }
         } catch (error) {
             console.error('加载配置失败:', error);
             setConfigError(String(error));
@@ -436,37 +504,171 @@ export default function ApiProxy() {
     };
 
 
+    // 定义多个预设方案
+    const defaultPresets = useMemo(() => [
+        {
+            id: 'default',
+            name: t('proxy.router.preset_default'),
+            description: t('proxy.router.preset_default_desc'),
+            mappings: {
+                "gpt-4*": "gemini-3.1-pro-high",
+                "gpt-4o*": "gemini-3-flash",
+                "gpt-3.5*": "gemini-2.5-flash",
+                "o1-*": "gemini-3.1-pro-high",
+                "o3-*": "gemini-3.1-pro-high",
+                "claude-3-5-sonnet-*": "claude-sonnet-4-6",
+                "claude-3-opus-*": "claude-opus-4-6-thinking",
+                "claude-opus-4-6*": "claude-opus-4-6-thinking",
+                "claude-haiku-*": "gemini-2.5-flash",
+                "claude-3-haiku-*": "gemini-2.5-flash",
+            }
+        },
+        {
+            id: 'performance',
+            name: t('proxy.router.preset_performance'),
+            description: t('proxy.router.preset_performance_desc'),
+            mappings: {
+                "gpt-4*": "claude-opus-4-6-thinking",
+                "gpt-4o*": "claude-sonnet-4-6",
+                "gpt-3.5*": "gemini-3-flash",
+                "o1-*": "claude-opus-4-6-thinking",
+                "o3-*": "claude-opus-4-6-thinking",
+                "claude-3-5-sonnet-*": "claude-sonnet-4-6",
+                "claude-3-opus-*": "claude-opus-4-6-thinking",
+                "claude-opus-4-6*": "claude-opus-4-6-thinking",
+                "claude-haiku-*": "claude-sonnet-4-6",
+                "claude-3-haiku-*": "claude-sonnet-4-6",
+            }
+        },
+        {
+            id: 'cost-effective',
+            name: t('proxy.router.preset_cost'),
+            description: t('proxy.router.preset_cost_desc'),
+            mappings: {
+                "gpt-4*": "gemini-3-flash",
+                "gpt-4o*": "gemini-2.5-flash",
+                "gpt-3.5*": "gemini-2.5-flash",
+                "o1-*": "gemini-3-flash",
+                "o3-*": "gemini-3-flash",
+                "claude-3-5-sonnet-*": "gemini-3-flash",
+                "claude-3-opus-*": "gemini-3-flash",
+                "claude-opus-4-*": "gemini-3-flash", // Cost-effective: map all opus 4 to flash
+                "claude-haiku-*": "gemini-2.5-flash",
+                "claude-3-haiku-*": "gemini-2.5-flash",
+            }
+        },
+        {
+            id: 'balanced',
+            name: t('proxy.router.preset_balanced'),
+            description: t('proxy.router.preset_balanced_desc'),
+            mappings: {
+                "gpt-4*": "gemini-3.1-pro-high",
+                "gpt-4o*": "gemini-3-flash",
+                "gpt-3.5*": "gemini-2.5-flash",
+                "o1-*": "claude-sonnet-4-6",
+                "o3-*": "claude-sonnet-4-6",
+                "claude-3-5-sonnet-*": "claude-sonnet-4-6",
+                "claude-3-opus-*": "gemini-3.1-pro-high",
+                "claude-opus-4-5*": "gemini-3.1-pro-high",
+                "claude-opus-4-6*": "claude-opus-4-6-thinking", // Balanced: Keep 4.6 as itself (or map to high?) Let's map to itself for now to utilize header
+                "claude-haiku-*": "gemini-2.5-flash",
+                "claude-3-haiku-*": "gemini-2.5-flash",
+            }
+        },
+    ], [t]);
+
+    const presetOptions = useMemo(() => {
+        return [...defaultPresets, ...customPresets];
+    }, [defaultPresets, customPresets]);
+
+    // Custom Presets Logic
+    const loadCustomPresets = () => {
+        try {
+            const saved = localStorage.getItem('antigravity_custom_presets');
+            if (saved) {
+                setCustomPresets(JSON.parse(saved));
+            }
+        } catch (error) {
+            console.error('Failed to load custom presets:', error);
+        }
+    };
+
+    const saveCustomPresetsToStorage = (presets: CustomPreset[]) => {
+        try {
+            localStorage.setItem('antigravity_custom_presets', JSON.stringify(presets));
+            setCustomPresets(presets);
+        } catch (error) {
+            console.error('Failed to save custom presets:', error);
+            showToast('Failed to save preset', 'error');
+        }
+    };
+
+    const handleSaveCurrentAsPreset = () => {
+        if (!appConfig?.proxy.custom_mapping || Object.keys(appConfig.proxy.custom_mapping).length === 0) {
+            showToast(t('proxy.router.no_mapping_to_save'), 'warning');
+            return;
+        }
+        if (!newPresetName.trim()) {
+            showToast(t('proxy.router.preset_name_required'), 'warning');
+            return;
+        }
+
+        const newPreset: CustomPreset = {
+            id: `custom_${Date.now()}`,
+            name: newPresetName,
+            description: t('proxy.router.custom_preset_desc'),
+            mappings: { ...appConfig.proxy.custom_mapping }
+        };
+
+        const updatedPresets = [...customPresets, newPreset];
+        saveCustomPresetsToStorage(updatedPresets);
+        setNewPresetName('');
+        setIsPresetManagerOpen(false);
+        showToast(t('proxy.router.preset_saved', { defaultValue: 'Preset saved successfully' }), 'success');
+        // Auto select the new preset
+        setSelectedPreset(newPreset.id);
+    };
+
+    const handleDeletePreset = (id: string) => {
+        const updatedPresets = customPresets.filter(p => p.id !== id);
+        saveCustomPresetsToStorage(updatedPresets);
+        if (selectedPreset === id) {
+            setSelectedPreset('default');
+        }
+    };
+
     // 应用预设映射 (通配符)
     const handleApplyPresets = async () => {
         if (!appConfig) return;
 
-        const presets: Record<string, string> = {
-            // OpenAI (通配符)
-            "gpt-4*": "gemini-3-pro-high",
-            "gpt-4o*": "gemini-3-flash",
-            "gpt-3.5*": "gemini-2.5-flash",
-            "o1-*": "gemini-3-pro-high",
-            "o3-*": "gemini-3-pro-high",
+        const selectedPresetData = presetOptions.find(p => p.id === selectedPreset);
+        if (!selectedPresetData) return;
 
-            // Claude (通配符)
-            "claude-3-5-sonnet-*": "claude-sonnet-4-5",
-            "claude-3-opus-*": "claude-opus-4-5-thinking",
-            "claude-opus-4-*": "claude-opus-4-5-thinking",
-            "claude-haiku-*": "gemini-2.5-flash",
-            "claude-3-haiku-*": "gemini-2.5-flash",
-        };
-
+        // 构造新配置
         const newConfig = {
             ...appConfig.proxy,
-            custom_mapping: { ...appConfig.proxy.custom_mapping, ...presets }
+            // 策略:覆盖同名 key,保留其他自定义 key
+            // [FIX #1738] Type assertion to ensure Record<string, string> compatibility
+            custom_mapping: { ...appConfig.proxy.custom_mapping, ...selectedPresetData.mappings } as Record<string, string>
         };
 
+        // 备份旧配置用于回滚
+        const oldConfig = { ...appConfig };
+
         try {
-            await invoke('update_model_mapping', { config: newConfig });
+            // 1. 乐观更新：立即更新 UI
             setAppConfig({ ...appConfig, proxy: newConfig });
-            showToast(t('proxy.router.presets_applied'), 'success');
+            showToast(t('proxy.router.presets_applied') + ` (${selectedPresetData.name})`, 'success');
+
+            // 2. 后台异步保存
+            await invoke('update_model_mapping', { config: newConfig });
+
+            // 3. 重新加载配置以确保一致性
+            await loadConfig();
         } catch (error) {
             console.error('Failed to apply presets:', error);
+            // 3. 失败回滚
+            setAppConfig(oldConfig);
             showToast(`${t('common.error')}: ${error}`, 'error');
         }
     };
@@ -531,6 +733,15 @@ export default function ApiProxy() {
         saveConfig(newConfig);
     };
 
+    const updateCircuitBreakerConfig = (newBreakerConfig: CircuitBreakerConfig) => {
+        if (!appConfig) return;
+        const newConfig = {
+            ...appConfig,
+            circuit_breaker: newBreakerConfig
+        };
+        saveConfig(newConfig);
+    };
+
     const handleClearSessionBindings = () => {
         setIsClearBindingsConfirmOpen(true);
     };
@@ -542,6 +753,21 @@ export default function ApiProxy() {
             showToast(t('common.success'), 'success');
         } catch (error) {
             console.error('Failed to clear session bindings:', error);
+            showToast(`${t('common.error')}: ${error}`, 'error');
+        }
+    };
+
+    const handleClearRateLimits = () => {
+        setIsClearRateLimitsConfirmOpen(true);
+    };
+
+    const executeClearRateLimits = async () => {
+        setIsClearRateLimitsConfirmOpen(false);
+        try {
+            await invoke('clear_all_proxy_rate_limits');
+            showToast(t('common.success'), 'success');
+        } catch (error) {
+            console.error('Failed to clear rate limits:', error);
             showToast(`${t('common.error')}: ${error}`, 'error');
         }
     };
@@ -701,6 +927,28 @@ export default function ApiProxy() {
         setIsEditingApiKey(false);
     };
 
+    // Admin Password editing functions
+    const handleEditAdminPassword = () => {
+        setTempAdminPassword(appConfig?.proxy.admin_password || '');
+        setIsEditingAdminPassword(true);
+    };
+
+    const handleSaveAdminPassword = () => {
+        // Validation: can be empty (meaning fallback to api_key) or at least 4 chars
+        if (tempAdminPassword && tempAdminPassword.length < 4) {
+            showToast(t('proxy.config.admin_password_short', { defaultValue: 'Password is too short (min 4 chars)' }), 'error');
+            return;
+        }
+        updateProxyConfig({ admin_password: tempAdminPassword || undefined });
+        setIsEditingAdminPassword(false);
+        showToast(t('proxy.config.admin_password_updated', { defaultValue: 'Web UI password updated' }), 'success');
+    };
+
+    const handleCancelEditAdminPassword = () => {
+        setTempAdminPassword('');
+        setIsEditingAdminPassword(false);
+    };
+
 
     const getPythonExample = (modelId: string) => {
         const port = status.running ? status.port : (appConfig?.proxy.port || 8045);
@@ -711,21 +959,21 @@ export default function ApiProxy() {
         // 1. Anthropic Protocol
         if (selectedProtocol === 'anthropic') {
             return `from anthropic import Anthropic
- 
- client = Anthropic(
-     # 推荐使用 127.0.0.1
-     base_url="${`http://127.0.0.1:${port}`}",
-     api_key="${apiKey}"
- )
- 
- # 注意: Antigravity 支持使用 Anthropic SDK 调用任意模型
- response = client.messages.create(
-     model="${modelId}",
-     max_tokens=1024,
-     messages=[{"role": "user", "content": "Hello"}]
- )
- 
- print(response.content[0].text)`;
+
+client = Anthropic(
+    # 推荐使用 127.0.0.1
+    base_url="${`http://127.0.0.1:${port}`}",
+    api_key="${apiKey}"
+)
+
+# 注意: Antigravity 支持使用 Anthropic SDK 调用任意模型
+response = client.messages.create(
+    model="${modelId}",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "Hello"}]
+)
+
+print(response.content[0].text)`;
         }
 
         // 2. Gemini Protocol (Native)
@@ -749,43 +997,43 @@ print(response.text)`;
         // 3. OpenAI Protocol
         if (modelId.startsWith('gemini-3-pro-image')) {
             return `from openai import OpenAI
- 
- client = OpenAI(
-     base_url="${baseUrl}",
-     api_key="${apiKey}"
- )
- 
- response = client.chat.completions.create(
-     model="${modelId}",
-     # 方式 1: 使用 size 参数 (推荐)
-     # 支持: "1024x1024" (1:1), "1280x720" (16:9), "720x1280" (9:16), "1216x896" (4:3)
-     extra_body={ "size": "1024x1024" },
-     
-     # 方式 2: 使用模型后缀
-     # 例如: gemini-3-pro-image-16-9, gemini-3-pro-image-4-3
-     # model="gemini-3-pro-image-16-9",
-     messages=[{
-         "role": "user",
-         "content": "Draw a futuristic city"
-     }]
- )
- 
- print(response.choices[0].message.content)`;
+
+client = OpenAI(
+    base_url="${baseUrl}",
+    api_key="${apiKey}"
+)
+
+response = client.chat.completions.create(
+    model="${modelId}",
+    # 方式 1: 使用 size 参数 (推荐)
+    # 支持: "1024x1024" (1:1), "1280x720" (16:9), "720x1280" (9:16), "1216x896" (4:3)
+    extra_body={ "size": "1024x1024" },
+    
+    # 方式 2: 使用模型后缀
+    # 例如: gemini-3-pro-image-16-9, gemini-3-pro-image-4-3
+    # model="gemini-3-pro-image-16-9",
+    messages=[{
+        "role": "user",
+        "content": "Draw a futuristic city"
+    }]
+)
+
+print(response.choices[0].message.content)`;
         }
 
         return `from openai import OpenAI
- 
- client = OpenAI(
-     base_url="${baseUrl}",
-     api_key="${apiKey}"
- )
- 
- response = client.chat.completions.create(
-     model="${modelId}",
-     messages=[{"role": "user", "content": "Hello"}]
- )
- 
- print(response.choices[0].message.content)`;
+
+client = OpenAI(
+    base_url="${baseUrl}",
+    api_key="${apiKey}"
+)
+
+response = client.chat.completions.create(
+    model="${modelId}",
+    messages=[{"role": "user", "content": "Hello"}]
+)
+
+print(response.choices[0].message.content)`;
     };
 
     // 在 filter 逻辑中，当选择 openai 协议时，允许显示所有模型
@@ -810,7 +1058,7 @@ print(response.text)`;
                         <div className="flex flex-col items-center gap-4">
                             <RefreshCw size={32} className="animate-spin text-blue-500" />
                             <span className="text-sm text-gray-500 dark:text-gray-400">
-                                {t('common.loading') || 'Loading...'}
+                                {t('common.loading')}
                             </span>
                         </div>
                     </div>
@@ -825,7 +1073,7 @@ print(response.text)`;
                             </div>
                             <div className="space-y-2">
                                 <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-                                    {t('proxy.error.load_failed') || 'Failed to load configuration'}
+                                    {t('proxy.error.load_failed')}
                                 </h3>
                                 <p className="text-sm text-gray-500 dark:text-gray-400 max-w-md">
                                     {configError}
@@ -836,7 +1084,7 @@ print(response.text)`;
                                 className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium flex items-center gap-2 transition-colors"
                             >
                                 <RefreshCw size={16} />
-                                {t('common.retry') || 'Retry'}
+                                {t('common.retry')}
                             </button>
                         </div>
                     </div>
@@ -856,7 +1104,7 @@ print(response.text)`;
                                     <div className={`w-2 h-2 rounded-full ${status.running ? 'bg-green-500 animate-pulse' : 'bg-gray-400'}`} />
                                     <span className={`text-xs font-medium ${status.running ? 'text-green-600' : 'text-gray-500'}`}>
                                         {status.running
-                                            ? `${t('proxy.status.running')} (${status.active_accounts} ${t('common.accounts') || 'Accounts'})`
+                                            ? `${t('proxy.status.running')} (${status.active_accounts} ${t('common.accounts')})`
                                             : t('proxy.status.stopped')}
                                     </span>
                                 </div>
@@ -1133,6 +1381,126 @@ print(response.text)`;
                                 </p>
                             </div>
 
+                            {/* Web UI 管理密码 */}
+                            <div className="border-t border-gray-200 dark:border-base-300 pt-3 mt-3">
+                                <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                                    <span className="inline-flex items-center gap-1">
+                                        {t('proxy.config.admin_password', { defaultValue: 'Web UI Login Password' })}
+                                        <HelpTooltip
+                                            text={t('proxy.config.admin_password_tooltip', { defaultValue: 'Used for logging into the Web Management Console. If empty, it defaults to the API Key.' })}
+                                            ariaLabel={t('proxy.config.admin_password')}
+                                            placement="right"
+                                        />
+                                    </span>
+                                </label>
+                                <div className="flex gap-2">
+                                    <input
+                                        type="text"
+                                        value={isEditingAdminPassword ? tempAdminPassword : (appConfig.proxy.admin_password || t('proxy.config.admin_password_default', { defaultValue: '(Same as API Key)' }))}
+                                        onChange={(e) => isEditingAdminPassword && setTempAdminPassword(e.target.value)}
+                                        readOnly={!isEditingAdminPassword}
+                                        placeholder={t('proxy.config.admin_password_placeholder', { defaultValue: 'Enter new password or leave empty to use API Key' })}
+                                        className={`flex-1 px-2.5 py-1.5 border border-gray-300 dark:border-base-200 rounded-lg text-xs font-mono ${isEditingAdminPassword
+                                            ? 'bg-white dark:bg-base-200 text-gray-900 dark:text-base-content'
+                                            : 'bg-gray-50 dark:bg-base-300 text-gray-600 dark:text-gray-400'
+                                            }`}
+                                    />
+                                    {isEditingAdminPassword ? (
+                                        <>
+                                            <button
+                                                onClick={handleSaveAdminPassword}
+                                                className="px-2.5 py-1.5 border border-green-300 dark:border-green-700 rounded-lg bg-green-50 dark:bg-green-900/20 hover:bg-green-100 dark:hover:bg-green-900/30 transition-colors text-green-600 dark:text-green-400"
+                                                title={t('proxy.config.btn_save')}
+                                            >
+                                                <CheckCircle size={14} />
+                                            </button>
+                                            <button
+                                                onClick={handleCancelEditAdminPassword}
+                                                className="px-2.5 py-1.5 border border-gray-300 dark:border-base-200 rounded-lg bg-white dark:bg-base-200 hover:bg-gray-50 dark:hover:bg-base-300 transition-colors"
+                                                title={t('common.cancel')}
+                                            >
+                                                <X size={14} />
+                                            </button>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <button
+                                                onClick={handleEditAdminPassword}
+                                                className="px-2.5 py-1.5 border border-gray-300 dark:border-base-200 rounded-lg bg-white dark:bg-base-200 hover:bg-gray-50 dark:hover:bg-base-300 transition-colors"
+                                                title={t('proxy.config.btn_edit')}
+                                            >
+                                                <Edit2 size={14} />
+                                            </button>
+                                            <button
+                                                onClick={() => copyToClipboardHandler(appConfig.proxy.admin_password || appConfig.proxy.api_key, 'admin_password')}
+                                                className="px-2.5 py-1.5 border border-gray-300 dark:border-base-200 rounded-lg bg-white dark:bg-base-200 hover:bg-gray-50 dark:hover:bg-base-300 transition-colors"
+                                                title={t('proxy.config.btn_copy')}
+                                            >
+                                                {copied === 'admin_password' ? (
+                                                    <CheckCircle size={14} className="text-green-500" />
+                                                ) : (
+                                                    <Copy size={14} />
+                                                )}
+                                            </button>
+                                        </>
+                                    )}
+                                </div>
+                                <p className="mt-0.5 text-[10px] text-gray-500 dark:text-gray-400">
+                                    {t('proxy.config.admin_password_hint', { defaultValue: 'For safety in Docker/Browser environments, you can set a separate login password from your API Key.' })}
+                                </p>
+                            </div>
+
+                            {/* User-Agent Overrides */}
+                            <div className="border-t border-gray-200 dark:border-base-300 pt-3 mt-3">
+                                <div className="flex items-center justify-between mb-2">
+                                    <label className="text-xs font-medium text-gray-700 dark:text-gray-300 inline-flex items-center gap-1">
+                                        {t('proxy.config.request.user_agent', { defaultValue: 'User-Agent Override' })}
+                                        <HelpTooltip text={t('proxy.config.request.user_agent_tooltip', { defaultValue: 'Override the User-Agent header sent to upstream APIs.' })} />
+                                    </label>
+                                    <input
+                                        type="checkbox"
+                                        className="toggle toggle-sm bg-gray-200 dark:bg-gray-700 border-gray-300 dark:border-gray-600 checked:bg-blue-500 checked:border-blue-500"
+                                        checked={!!appConfig.proxy.user_agent_override}
+                                        onChange={(e) => {
+                                            const enabled = e.target.checked;
+                                            if (enabled) {
+                                                // Restore saved override from config or use default
+                                                const restoredValue = appConfig.proxy.saved_user_agent || 'antigravity/1.15.8 darwin/arm64';
+                                                updateProxyConfig({
+                                                    user_agent_override: restoredValue,
+                                                    saved_user_agent: restoredValue
+                                                });
+                                            } else {
+                                                // Disable active override but keep saved value
+                                                updateProxyConfig({ user_agent_override: undefined });
+                                            }
+                                        }}
+                                    />
+                                </div>
+
+                                {!!appConfig.proxy.user_agent_override && (
+                                    <div className="space-y-2 animate-in fade-in slide-in-from-top-1 duration-200">
+                                        <input
+                                            type="text"
+                                            value={appConfig.proxy.user_agent_override}
+                                            onChange={(e) => {
+                                                const newValue = e.target.value;
+                                                updateProxyConfig({
+                                                    user_agent_override: newValue,
+                                                    saved_user_agent: newValue
+                                                });
+                                            }}
+                                            className="w-full px-2.5 py-1.5 border border-gray-300 dark:border-base-200 rounded-lg bg-white dark:bg-base-200 text-xs font-mono text-gray-900 dark:text-base-content focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                            placeholder={t('proxy.config.request.user_agent_placeholder', { defaultValue: 'Enter custom User-Agent string...' })}
+                                        />
+                                        <div className="bg-gray-50 dark:bg-base-300 rounded p-2 text-[10px] text-gray-500 font-mono break-all">
+                                            <span className="font-bold select-none mr-2">{t('common.example', { defaultValue: 'Example' })}:</span>
+                                            antigravity/1.15.8 darwin/arm64
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
 
                         </div>
                     </div>
@@ -1142,18 +1510,16 @@ print(response.text)`;
                 {
                     !configLoading && !configError && appConfig && (
                         <div className="space-y-4">
-                            <div className="px-1 flex items-center gap-2 text-gray-400">
-                                <Layers size={14} />
-                                <span className="text-[10px] font-bold uppercase tracking-widest">
-                                    {t('proxy.config.external_providers.title', { defaultValue: 'External Providers' })}
-                                </span>
-                            </div>
-
-                            {/* CLI 同步卡片 - 支持桌面端与 Web 端 */}
-                            <CliSyncCard
-                                proxyUrl={status.running ? status.base_url : `http://127.0.0.1:${appConfig.proxy.port || 8045}`}
-                                apiKey={appConfig.proxy.api_key}
-                            />
+                            <CollapsibleCard
+                                title={t('proxy.cli_sync.title', { defaultValue: 'CLI Sync' })}
+                                icon={<Terminal size={18} className="text-gray-500" />}
+                                defaultExpanded={false}
+                            >
+                                <CliSyncCard
+                                    proxyUrl={status.running ? status.base_url : `http://127.0.0.1:${appConfig.proxy.port || 8045}`}
+                                    apiKey={appConfig.proxy.api_key}
+                                />
+                            </CollapsibleCard>
 
                             {/* z.ai (GLM) Dispatcher */}
                             <CollapsibleCard
@@ -1238,7 +1604,7 @@ print(response.text)`;
                                                                 value=""
                                                                 onChange={(e) => e.target.value && updateZaiDefaultModels({ [family]: e.target.value })}
                                                             >
-                                                                <option value="">Select</option>
+                                                                <option value="">{t('proxy.config.zai.models.select_placeholder')}</option>
                                                                 {zaiModelOptions.map(m => <option key={m} value={m}>{m}</option>)}
                                                             </select>
                                                         )}
@@ -1396,13 +1762,17 @@ print(response.text)`;
                                                         placement="right"
                                                     />
                                                 </label>
-                                                <button
-                                                    onClick={handleClearSessionBindings}
-                                                    className="text-[10px] text-indigo-500 hover:text-indigo-600 transition-colors flex items-center gap-1"
-                                                >
-                                                    <Trash2 size={12} />
-                                                    {t('proxy.config.scheduling.clear_bindings')}
-                                                </button>
+                                                <div className="flex items-center gap-3">
+                                                    {/* [MOVED] Clear Rate Limit button moved to CircuitBreaker component */}
+                                                    <button
+                                                        onClick={handleClearSessionBindings}
+                                                        className="text-[10px] text-indigo-500 hover:text-indigo-600 transition-colors flex items-center gap-1"
+                                                        title={t('proxy.config.scheduling.clear_bindings_tooltip')}
+                                                    >
+                                                        <Trash2 size={12} />
+                                                        {t('proxy.config.scheduling.clear_bindings')}
+                                                    </button>
+                                                </div>
                                             </div>
                                             <div className="grid grid-cols-1 gap-2">
                                                 {(['CacheFirst', 'Balance', 'PerformanceFirst'] as const).map(mode => (
@@ -1516,7 +1886,44 @@ print(response.text)`;
                                             </div>
                                         </div>
                                     </div>
+
+                                    {/* Circuit Breaker Section */}
+                                    {appConfig.circuit_breaker && (
+                                        <div className="pt-4 border-t border-gray-100 dark:border-gray-700/50">
+                                            <div className="flex items-center justify-between mb-4">
+                                                <label className="text-xs font-medium text-gray-700 dark:text-gray-300 inline-flex items-center gap-1">
+                                                    {t('proxy.config.circuit_breaker.title', { defaultValue: 'Adaptive Circuit Breaker' })}
+                                                    <HelpTooltip text={t('proxy.config.circuit_breaker.tooltip', { defaultValue: 'Prevent continuous failures by exponentially backing off when quota is exhausted.' })} />
+                                                </label>
+                                                <input
+                                                    type="checkbox"
+                                                    className="toggle toggle-sm toggle-warning"
+                                                    checked={appConfig.circuit_breaker.enabled}
+                                                    onChange={(e) => updateCircuitBreakerConfig({ ...appConfig.circuit_breaker, enabled: e.target.checked })}
+                                                />
+                                            </div>
+
+                                            {appConfig.circuit_breaker.enabled && (
+                                                <CircuitBreaker
+                                                    config={appConfig.circuit_breaker}
+                                                    onChange={updateCircuitBreakerConfig}
+                                                    onClearRateLimits={handleClearRateLimits}
+                                                />
+                                            )}
+                                        </div>
+                                    )}
                                 </div>
+                            </CollapsibleCard>
+
+                            {/* Advanced Thinking & Global Config */}
+                            <CollapsibleCard
+                                title={t('settings.advanced_thinking.title', { defaultValue: 'Advanced Thinking & Global Config' })}
+                                icon={<BrainCircuit size={18} className="text-pink-500" />}
+                            >
+                                <AdvancedThinking
+                                    config={appConfig.proxy}
+                                    onChange={(newProxyConfig) => updateProxyConfig(newProxyConfig)}
+                                />
                             </CollapsibleCard>
 
                             {/* 实验性设置 */}
@@ -1667,7 +2074,15 @@ print(response.text)`;
                                                 {/* 隧道模式选择 */}
                                                 <div className="grid grid-cols-2 gap-3">
                                                     <button
-                                                        onClick={() => setCfMode('quick')}
+                                                        onClick={() => {
+                                                            setCfMode('quick');
+                                                            if (appConfig) {
+                                                                saveConfig({
+                                                                    ...appConfig,
+                                                                    cloudflared: { ...appConfig.cloudflared, mode: 'quick' }
+                                                                });
+                                                            }
+                                                        }}
                                                         disabled={cfStatus.running}
                                                         className={cn(
                                                             "p-3 rounded-lg border-2 text-left transition-all",
@@ -1685,7 +2100,15 @@ print(response.text)`;
                                                         </p>
                                                     </button>
                                                     <button
-                                                        onClick={() => setCfMode('auth')}
+                                                        onClick={() => {
+                                                            setCfMode('auth');
+                                                            if (appConfig) {
+                                                                saveConfig({
+                                                                    ...appConfig,
+                                                                    cloudflared: { ...appConfig.cloudflared, mode: 'auth' }
+                                                                });
+                                                            }
+                                                        }}
                                                         disabled={cfStatus.running}
                                                         className={cn(
                                                             "p-3 rounded-lg border-2 text-left transition-all",
@@ -1714,6 +2137,14 @@ print(response.text)`;
                                                             type="password"
                                                             value={cfToken}
                                                             onChange={(e) => setCfToken(e.target.value)}
+                                                            onBlur={() => {
+                                                                if (appConfig) {
+                                                                    saveConfig({
+                                                                        ...appConfig,
+                                                                        cloudflared: { ...appConfig.cloudflared, token: cfToken }
+                                                                    });
+                                                                }
+                                                            }}
                                                             disabled={cfStatus.running}
                                                             placeholder="eyJhIjoiNj..."
                                                             className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-base-200 text-sm font-mono disabled:opacity-60"
@@ -1735,7 +2166,20 @@ print(response.text)`;
                                                         type="checkbox"
                                                         className="toggle toggle-sm"
                                                         checked={cfUseHttp2}
-                                                        onChange={(e) => setCfUseHttp2(e.target.checked)}
+                                                        onChange={(e) => {
+                                                            const val = e.target.checked;
+                                                            setCfUseHttp2(val);
+                                                            if (appConfig) {
+                                                                const newConfig = {
+                                                                    ...appConfig,
+                                                                    cloudflared: {
+                                                                        ...appConfig.cloudflared,
+                                                                        use_http2: val
+                                                                    }
+                                                                };
+                                                                saveConfig(newConfig);
+                                                            }
+                                                        }}
                                                         disabled={cfStatus.running}
                                                     />
                                                 </div>
@@ -1784,31 +2228,93 @@ print(response.text)`;
                 {
                     !configLoading && !configError && appConfig && (
                         <div className="bg-white dark:bg-base-100 rounded-xl shadow-sm border border-gray-100 dark:border-base-200 overflow-hidden">
-                            <div className="px-4 py-2.5 border-b border-gray-100 dark:border-gray-700/50 bg-gray-50/50 dark:bg-gray-800/50">
-                                <div className="flex items-center justify-between">
-                                    <div>
+                            <div className="px-4 py-3 border-b border-gray-100 dark:border-gray-700/50 bg-gray-50/50 dark:bg-gray-800/50">
+                                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                                    <div className="flex-1">
                                         <h2 className="text-base font-bold flex items-center gap-2 text-gray-900 dark:text-base-content">
                                             <BrainCircuit size={18} className="text-blue-500" />
                                             {t('proxy.router.title')}
                                         </h2>
-                                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 max-w-xl leading-relaxed">
                                             {t('proxy.router.subtitle_simple')}
                                         </p>
                                     </div>
-                                    <div className="flex items-center gap-2">
+                                    <div className="flex flex-wrap items-center gap-2 bg-white dark:bg-base-100 p-1.5 rounded-xl border border-gray-100 dark:border-gray-700/50 shadow-sm">
+                                        {/* 预设选择下拉框 */}
+                                        <div className="relative min-w-[140px]">
+                                            <select
+                                                value={selectedPreset}
+                                                onChange={(e) => setSelectedPreset(e.target.value)}
+                                                className="select select-sm w-full bg-gray-50 dark:bg-base-200 border-gray-200 dark:border-gray-700 text-xs font-medium focus:ring-1 focus:ring-blue-500 h-9 min-h-0 rounded-lg"
+                                            >
+                                                <optgroup label={t('proxy.router.built_in_presets')}>
+                                                    {defaultPresets.map(preset => (
+                                                        <option key={preset.id} value={preset.id}>
+                                                            {preset.name}
+                                                        </option>
+                                                    ))}
+                                                </optgroup>
+                                                {customPresets.length > 0 && (
+                                                    <optgroup label={t('proxy.router.custom_presets')}>
+                                                        {customPresets.map(preset => (
+                                                            <option key={preset.id} value={preset.id}>
+                                                                {preset.name}
+                                                            </option>
+                                                        ))}
+                                                    </optgroup>
+                                                )}
+                                            </select>
+                                        </div>
+
                                         <button
                                             onClick={handleApplyPresets}
-                                            className="px-3 py-1 rounded-lg text-xs font-medium transition-colors flex items-center gap-2 bg-blue-500 text-white hover:bg-blue-600 shadow-sm"
+                                            className="px-3 md:px-4 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white shadow-sm hover:shadow active:scale-95 h-9"
+                                            title={presetOptions.find(p => p.id === selectedPreset)?.description}
                                         >
-                                            <Sparkles size={14} />
-                                            {t('proxy.router.apply_presets')}
+                                            <Sparkles size={14} className="fill-white/20" />
+                                            {t('proxy.router.apply_selected')}
                                         </button>
+
+                                        <div className="w-[1px] h-5 bg-gray-200 dark:bg-gray-700 mx-1"></div>
+
+                                        {/* 添加映射预设 */}
+                                        <button
+                                            onClick={() => setIsPresetManagerOpen(true)}
+                                            className="p-2 rounded-lg text-gray-500 hover:text-green-600 hover:bg-green-50 dark:hover:bg-green-900/20 transition-all h-9 w-9 flex items-center justify-center border border-transparent hover:border-green-100 dark:hover:border-green-900/30"
+                                            title={t('proxy.router.add_preset')}
+                                        >
+                                            <Plus size={16} />
+                                        </button>
+
+                                        {/* 删除当前预设（仅自定义预设） */}
+                                        <button
+                                            onClick={() => {
+                                                if (selectedPreset.startsWith('custom_')) {
+                                                    handleDeletePreset(selectedPreset);
+                                                } else {
+                                                    showToast(t('proxy.router.cannot_delete_builtin'), 'warning');
+                                                }
+                                            }}
+                                            className={`p-2 rounded-lg transition-all h-9 w-9 flex items-center justify-center border border-transparent ${selectedPreset.startsWith('custom_')
+                                                ? 'text-gray-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 hover:border-red-100 dark:hover:border-red-900/30'
+                                                : 'text-gray-300 dark:text-gray-600 cursor-not-allowed'
+                                                }`}
+                                            title={selectedPreset.startsWith('custom_')
+                                                ? t('proxy.router.delete_preset')
+                                                : t('proxy.router.cannot_delete_builtin')}
+                                            disabled={!selectedPreset.startsWith('custom_')}
+                                        >
+                                            <Trash2 size={16} />
+                                        </button>
+
+                                        <div className="w-[1px] h-5 bg-gray-200 dark:bg-gray-700 mx-1"></div>
+
                                         <button
                                             onClick={handleResetMapping}
-                                            className="px-3 py-1 rounded-lg text-xs font-medium transition-colors flex items-center gap-2 bg-white dark:bg-base-100 border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-base-200 hover:text-blue-600 dark:hover:text-blue-400 hover:border-blue-200 dark:hover:border-blue-800 shadow-sm"
+                                            className="p-2 rounded-lg text-gray-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-all h-9 w-9 flex items-center justify-center border border-transparent hover:border-red-100 dark:hover:border-red-900/30"
+                                            title={t('proxy.router.reset_mapping')}
                                         >
-                                            <RefreshCw size={14} />
-                                            {t('proxy.router.reset_mapping')}
+                                            <RefreshCw size={16} />
                                         </button>
                                     </div>
                                 </div>
@@ -1858,9 +2364,15 @@ print(response.text)`;
                                     </div>
 
                                     <div className="flex items-center justify-between mb-3">
-                                        <h3 className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2">
-                                            <ArrowRight size={14} /> {t('proxy.router.custom_mappings')}
-                                        </h3>
+                                        <div className="flex flex-col gap-1">
+                                            <h3 className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2">
+                                                <ArrowRight size={14} /> {t('proxy.router.custom_mappings')}
+                                            </h3>
+                                            <p className="text-[9px] text-gray-500 dark:text-gray-400 leading-relaxed">
+                                                {t('proxy.router.custom_mapping_tip')}
+                                                <span className="text-amber-600 dark:text-amber-400">{t('proxy.router.custom_mapping_warning')}</span>
+                                            </p>
+                                        </div>
                                     </div>
                                     <div className="flex flex-col gap-4">
                                         {/* 当前映射列表 (置顶 2 列) */}
@@ -1887,6 +2399,7 @@ print(response.text)`;
                                                                                 options={customMappingOptions}
                                                                                 placeholder="Select..."
                                                                                 className="font-mono text-[10px] h-7 dark:bg-gray-800 border-blue-200 dark:border-blue-800"
+                                                                                allowCustomInput={true}
                                                                             />
                                                                         </div>
                                                                     ) : (
@@ -1967,6 +2480,7 @@ print(response.text)`;
                                                             options={customMappingOptions}
                                                             placeholder={t('proxy.router.select_target_model') || 'Select Target Model'}
                                                             className="font-mono text-[11px] h-8 dark:bg-gray-800"
+                                                            allowCustomInput={true}
                                                         />
                                                     </div>
                                                 </div>
@@ -2225,6 +2739,87 @@ print(response.text)`;
                     onConfirm={executeClearSessionBindings}
                     onCancel={() => setIsClearBindingsConfirmOpen(false)}
                 />
+
+                <ModalDialog
+                    isOpen={isClearRateLimitsConfirmOpen}
+                    title={t('proxy.dialog.clear_rate_limits_title') || '清除限流记录'}
+                    message={t('proxy.dialog.clear_rate_limits_confirm') || '确定要清除所有本地限流记录吗？'}
+                    type="confirm"
+                    isDestructive={true}
+                    onConfirm={executeClearRateLimits}
+                    onCancel={() => setIsClearRateLimitsConfirmOpen(false)}
+                />
+
+                <ModalDialog
+                    isOpen={isPresetManagerOpen}
+                    title={t('proxy.router.manage_presets_title')}
+                    onConfirm={() => setIsPresetManagerOpen(false)}
+                    confirmText={t('common.close')}
+                    type="info"
+                >
+                    <div className="space-y-6">
+                        {/* Save Current Section */}
+                        <div className="space-y-3 p-4 bg-blue-50/50 dark:bg-blue-900/10 rounded-xl border border-blue-100 dark:border-blue-900/20">
+                            <h3 className="text-sm font-bold text-gray-800 dark:text-gray-200 flex items-center gap-2">
+                                <Save size={16} className="text-blue-500" />
+                                {t('proxy.router.save_current_as_preset')}
+                            </h3>
+                            <div className="flex gap-2">
+                                <input
+                                    type="text"
+                                    value={newPresetName}
+                                    onChange={(e) => setNewPresetName(e.target.value)}
+                                    placeholder={t('proxy.router.preset_name_placeholder')}
+                                    className="input input-sm flex-1 border-gray-300 focus:border-blue-500"
+                                />
+                                <button
+                                    onClick={handleSaveCurrentAsPreset}
+                                    disabled={!newPresetName.trim()}
+                                    className="btn btn-sm btn-primary text-white"
+                                >
+                                    {t('common.save')}
+                                </button>
+                            </div>
+                            <p className="text-[10px] text-gray-500 dark:text-gray-400">
+                                {t('proxy.router.save_hint')}
+                            </p>
+                        </div>
+
+                        {/* Existing Presets List */}
+                        <div className="space-y-3">
+                            <h3 className="text-sm font-bold text-gray-800 dark:text-gray-200 px-1">
+                                {t('proxy.router.your_presets')}
+                            </h3>
+                            <div className="max-h-[300px] overflow-y-auto space-y-2 pr-1">
+                                {customPresets.length === 0 ? (
+                                    <div className="text-center py-8 text-gray-400 dark:text-gray-600 bg-gray-50 dark:bg-base-200 rounded-xl border border-dashed border-gray-200 dark:border-gray-700">
+                                        <p>{t('proxy.router.no_custom_presets')}</p>
+                                    </div>
+                                ) : (
+                                    customPresets.map(preset => (
+                                        <div key={preset.id} className="flex items-center justify-between p-3 bg-white dark:bg-base-200 border border-gray-100 dark:border-gray-700 rounded-xl hover:shadow-sm transition-all group">
+                                            <div className="flex-1 min-w-0">
+                                                <div className="font-bold text-sm text-gray-800 dark:text-gray-200 truncate">{preset.name}</div>
+                                                <div className="text-[10px] text-gray-400 dark:text-gray-500 truncate">
+                                                    {Object.keys(preset.mappings).length} {t('proxy.router.mappings_count')}
+                                                </div>
+                                            </div>
+                                            <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                <button
+                                                    onClick={() => handleDeletePreset(preset.id)}
+                                                    className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
+                                                    title={t('common.delete')}
+                                                >
+                                                    <Trash2 size={16} />
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ))
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </ModalDialog>
             </div >
         </div >
     );

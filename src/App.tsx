@@ -7,8 +7,11 @@ import Settings from './pages/Settings';
 import ApiProxy from './pages/ApiProxy';
 import Monitor from './pages/Monitor';
 import TokenStats from './pages/TokenStats';
+import Security from './pages/Security';
 import ThemeManager from './components/common/ThemeManager';
+import UserToken from './pages/UserToken';
 import { UpdateNotification } from './components/UpdateNotification';
+import DebugConsole from './components/debug/DebugConsole';
 import { useEffect, useState } from 'react';
 import { useConfigStore } from './stores/useConfigStore';
 import { useAccountStore } from './stores/useAccountStore';
@@ -44,6 +47,14 @@ const router = createBrowserRouter([
         element: <TokenStats />,
       },
       {
+        path: 'user-token',
+        element: <UserToken />,
+      },
+      {
+        path: 'security',
+        element: <Security />,
+      },
+      {
         path: 'settings',
         element: <Settings />,
       },
@@ -64,6 +75,12 @@ function App() {
   useEffect(() => {
     if (config?.language) {
       i18n.changeLanguage(config.language);
+      // Support RTL
+      if (config.language === 'ar') {
+        document.documentElement.dir = 'rtl';
+      } else {
+        document.documentElement.dir = 'ltr';
+      }
     }
   }, [config?.language, i18n]);
 
@@ -85,6 +102,15 @@ function App() {
     unlistenPromises.push(
       listen('tray://refresh-current', () => {
         console.log('[App] Tray refresh triggered, refreshing...');
+        fetchCurrentAccount();
+        fetchAccounts();
+      })
+    );
+
+    // 监听后端全量刷新事件 (Command / Scheduler)
+    unlistenPromises.push(
+      listen('accounts://refreshed', () => {
+        console.log('[App] Backend triggered quota refresh, syncing UI...');
         fetchCurrentAccount();
         fetchAccounts();
       })
@@ -129,6 +155,7 @@ function App() {
   return (
     <AdminAuthGuard>
       <ThemeManager />
+      <DebugConsole />
       {showUpdateNotification && (
         <UpdateNotification onClose={() => setShowUpdateNotification(false)} />
       )}

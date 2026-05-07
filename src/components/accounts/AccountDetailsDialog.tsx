@@ -1,8 +1,9 @@
-import { X, Clock, AlertCircle } from 'lucide-react';
+import { X, Clock, AlertCircle, Bot } from 'lucide-react';
 import { createPortal } from 'react-dom';
-import { Account, ModelQuota } from '../../types/account';
+import { Account } from '../../types/account';
 import { formatDate } from '../../utils/format';
 import { useTranslation } from 'react-i18next';
+import { MODEL_CONFIG, sortModels } from '../../config/modelConfig';
 
 interface AccountDetailsDialogProps {
     account: Account | null;
@@ -28,7 +29,7 @@ export default function AccountDetailsDialog({ account, onClose }: AccountDetail
                         </div>
                         {account.quota?.subscription_tier && (
                             <div className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${account.quota.subscription_tier === 'ultra' ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400' :
-                                    account.quota.subscription_tier === 'pro' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400' : 'bg-gray-100 text-gray-600 dark:bg-base-300 dark:text-gray-400'
+                                account.quota.subscription_tier === 'pro' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400' : 'bg-gray-100 text-gray-600 dark:bg-base-300 dark:text-gray-400'
                                 }`}>
                                 {account.quota.subscription_tier}
                             </div>
@@ -83,39 +84,69 @@ export default function AccountDetailsDialog({ account, onClose }: AccountDetail
 
                     <h4 className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-widest mb-3">{t('accounts.details.model_quota')}</h4>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        {account.quota?.models?.map((model: ModelQuota) => (
-                            <div key={model.name} className="p-4 rounded-xl border border-gray-100 dark:border-base-200 bg-white dark:bg-base-100 hover:border-blue-100 dark:hover:border-blue-900 hover:shadow-sm transition-all group">
-                                <div className="flex justify-between items-start mb-3">
-                                    <span className="text-sm font-medium text-gray-700 dark:text-gray-300 group-hover:text-blue-700 dark:group-hover:text-blue-400 transition-colors">
-                                        {model.name}
-                                    </span>
-                                    <span
-                                        className={`text-xs font-bold px-2 py-0.5 rounded-md ${model.percentage >= 50 ? 'bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-400' :
-                                            model.percentage >= 20 ? 'bg-orange-50 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400' :
-                                                'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-400'
-                                            }`}
-                                    >
-                                        {model.percentage}%
-                                    </span>
-                                </div>
+                        {(() => {
+                            const uniqueLabels = new Set<string>();
+                            return sortModels(
+                                (account.quota?.models || []).map(model => {
+                                    const config = MODEL_CONFIG[model.name.toLowerCase()];
+                                    const label = model.display_name || (config?.i18nKey ? t(config.i18nKey) : (config?.label || model.name));
+                                    return {
+                                        id: model.name.toLowerCase(),
+                                        label: label,
+                                        model
+                                    };
+                                })
+                            ).filter(m => {
+                                if (uniqueLabels.has(m.label)) return false;
+                                uniqueLabels.add(m.label);
+                                return true;
+                            }).map(({ model, label }) => (
+                                <div key={model.name} className="p-4 rounded-xl border border-gray-100 dark:border-base-200 bg-white dark:bg-base-100 hover:border-blue-100 dark:hover:border-blue-900 hover:shadow-sm transition-all group">
+                                    <div className="flex justify-between items-start mb-3">
+                                        <div className="flex flex-col gap-1">
+                                            <div className="flex items-center gap-2">
+                                                {(() => {
+                                                    const Icon = MODEL_CONFIG[model.name.toLowerCase()]?.Icon || Bot;
+                                                    return <Icon size={16} className="shrink-0" />;
+                                                })()}
+                                                <span className="text-sm font-medium font-mono text-gray-700 dark:text-gray-300 group-hover:text-blue-700 dark:group-hover:text-blue-400 transition-colors">
+                                                    {label}
+                                                </span>
+                                            </div>
+                                            {model.thinking_budget !== undefined && (
+                                                <span className="text-[10px] text-gray-500 font-mono bg-gray-100 dark:bg-base-200 px-1 rounded inline-block w-max mt-0.5">
+                                                    {t('proxy.config.thinking_budget', 'Thinking Budget')}: {model.thinking_budget}
+                                                </span>
+                                            )}
+                                        </div>
+                                        <span
+                                            className={`text-xs font-bold px-2 py-0.5 rounded-md ${model.percentage >= 50 ? 'bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-400' :
+                                                model.percentage >= 20 ? 'bg-orange-50 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400' :
+                                                    'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-400'
+                                                }`}
+                                        >
+                                            {model.percentage}%
+                                        </span>
+                                    </div>
 
-                                {/* Progress Bar */}
-                                <div className="h-1.5 w-full bg-gray-100 dark:bg-base-200 rounded-full overflow-hidden mb-3">
-                                    <div
-                                        className={`h-full rounded-full transition-all duration-500 ${model.percentage >= 50 ? 'bg-emerald-500' :
-                                            model.percentage >= 20 ? 'bg-orange-400' :
-                                                'bg-red-500'
-                                            }`}
-                                        style={{ width: `${model.percentage}%` }}
-                                    ></div>
-                                </div>
+                                    {/* Progress Bar */}
+                                    <div className="h-1.5 w-full bg-gray-100 dark:bg-base-200 rounded-full overflow-hidden mb-3">
+                                        <div
+                                            className={`h-full rounded-full transition-all duration-500 ${model.percentage >= 50 ? 'bg-emerald-500' :
+                                                model.percentage >= 20 ? 'bg-orange-400' :
+                                                    'bg-red-500'
+                                                }`}
+                                            style={{ width: `${model.percentage}%` }}
+                                        ></div>
+                                    </div>
 
-                                <div className="flex items-center gap-1.5 text-[10px] text-gray-400 dark:text-gray-500 font-mono">
-                                    <Clock size={10} />
-                                    <span>{t('accounts.reset_time')}: {formatDate(model.reset_time) || t('common.unknown')}</span>
+                                    <div className="flex items-center gap-1.5 text-[10px] text-gray-400 dark:text-gray-500 font-mono">
+                                        <Clock size={10} />
+                                        <span>{t('accounts.reset_time')}: {formatDate(model.reset_time) || t('common.unknown')}</span>
+                                    </div>
                                 </div>
-                            </div>
-                        )) || (
+                            ));
+                        })() || (
                                 <div className="col-span-2 py-10 text-center text-gray-400 flex flex-col items-center">
                                     <AlertCircle className="w-8 h-8 mb-2 opacity-20" />
                                     <span>{t('accounts.no_data')}</span>

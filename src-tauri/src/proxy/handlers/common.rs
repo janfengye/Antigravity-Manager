@@ -17,6 +17,8 @@ pub enum RetryStrategy {
     LinearBackoff { base_ms: u64 },
     /// 指数退避：base_ms * 2^attempt，上限 max_ms
     ExponentialBackoff { base_ms: u64, max_ms: u64 },
+    /// [NEW] 原地重试 (Grace Retry)：在当前账号上小窗口等待后直接重试，不计入常规切换
+    GraceRetry(Duration),
 }
 
 /// 根据错误状态码和错误信息确定重试策略
@@ -38,10 +40,17 @@ pub fn determine_retry_strategy(
 
         // 429 限流错误
         429 => {
-            // 优先使用服务端返回的 Retry-After
+            // 优先使用服务端返回的 Retry-After / quotaResetDelay
             if let Some(delay_ms) = crate::proxy::upstream::retry::parse_retry_delay(error_text) {
-                let actual_delay = delay_ms.saturating_add(200).min(30_000); // 上限上调至 30s
-                RetryStrategy::FixedDelay(Duration::from_millis(actual_delay))
+                // [NEW] 如果延迟在 2s 内，执行 Grace Retry (原地重试)
+                if crate::proxy::upstream::retry::should_grace_retry(delay_ms) {
+                    let actual_delay = delay_ms.saturating_add(100); // 增加 100ms 安全缓冲
+                    tracing::info!("Grace Retry Triggered: Delay {}ms is within window, using same account", actual_delay);
+                    RetryStrategy::GraceRetry(Duration::from_millis(actual_delay))
+                } else {
+                    let actual_delay = delay_ms.saturating_add(200).min(30_000); 
+                    RetryStrategy::FixedDelay(Duration::from_millis(actual_delay))
+                }
             } else {
                 // 否则使用线性退避：起始 5s，逐步增加
                 RetryStrategy::LinearBackoff { base_ms: 5000 }
@@ -65,6 +74,10 @@ pub fn determine_retry_strategy(
 
         // 401/403 认证/权限错误：切换账号前给予极短缓冲
         401 | 403 => RetryStrategy::FixedDelay(Duration::from_millis(200)),
+
+        // 404 资源未找到：Google Cloud Code API 的 404 通常是账号级别的间歇性问题
+        // (灰度发布、账号权限不同步等)，轮换账号往往能解决
+        404 => RetryStrategy::FixedDelay(Duration::from_millis(300)),
 
         // 其他错误：不重试
         _ => RetryStrategy::NoRetry,
@@ -126,16 +139,31 @@ pub async fn apply_retry_strategy(
             sleep(Duration::from_millis(calculated_ms)).await;
             true
         }
+
+        RetryStrategy::GraceRetry(duration) => {
+            info!(
+                "[{}] ⚡ Grace Retry: Performing micro-wait ({}ms) on current account...",
+                trace_id,
+                duration.as_millis()
+            );
+            sleep(duration).await;
+            true // 原地重试在 handlers 层面通过 should_rotate_account 判断是否切换
+        }
     }
 }
 
 /// 判断是否应该轮换账号
-pub fn should_rotate_account(status_code: u16) -> bool {
+pub fn should_rotate_account(status_code: u16, strategy: Option<&RetryStrategy>) -> bool {
+    // [NEW] 如果识别为 Grace Retry，则显式要求不轮换账号
+    if let Some(RetryStrategy::GraceRetry(_)) = strategy {
+        return false;
+    }
+
     match status_code {
         // 这些错误是账号级别或特定节点配额的，需要轮换
-        429 | 401 | 403 | 500 => true,
-        // 这些错误通常是协议或服务端全局性、甚至参数错误的，轮换账号通常无意义
-        400 | 503 | 529 => false,
+        429 | 401 | 403 | 404 | 500 => true,
+        // 503/529 通常是后端过载，切号效果有限，暂不轮换
+        503 | 529 => false,
         _ => false,
     }
 }
@@ -164,7 +192,9 @@ pub async fn handle_detect_model(
         &mapped_model,
         &None, // We don't check tools for static capability detection
         None,  // size
-        None   // quality
+        None,  // quality
+        None,  // image_size
+        None,  // body (not needed for static detection)
     );
 
     // 3. Construct response

@@ -9,6 +9,8 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+// 预留 HTTP API 模块，当前未在主流程中启用
+
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};

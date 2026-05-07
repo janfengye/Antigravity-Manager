@@ -47,7 +47,17 @@ impl SystemIntegration for DesktopIntegration {
             &account.token.access_token,
             &account.token.refresh_token,
             account.token.expiry_timestamp,
+            &account.email,
+            account.token.is_gcp_tos,
+            account.token.project_id.as_deref(),
+            account.token.id_token.as_deref(),
+            account.token.oauth_client_key.as_deref(),
         )?;
+        
+        // 4.1 同步 Service Machine ID 到数据库 (关键修复点)
+        if let Some(ref profile) = account.device_profile {
+            let _ = db::write_service_machine_id(&db_path, &profile.mac_machine_id);
+        }
 
         // 5. 重启外部进程
         process::start_antigravity()?;

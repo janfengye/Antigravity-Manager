@@ -15,14 +15,15 @@ pub use response::transform_response;
 pub use streaming::{PartProcessor, StreamingState};
 pub use thinking_utils::{close_tool_loop_for_thinking, filter_invalid_thinking_blocks_with_family};
 pub use collector::collect_stream_to_json;
+use crate::proxy::common::client_adapter::ClientAdapter; // [NEW]
 
 use bytes::Bytes;
 use futures::Stream;
 use std::pin::Pin;
 
 /// 创建从 Gemini SSE 流到 Claude SSE 流的转换
-pub fn create_claude_sse_stream(
-    mut gemini_stream: Pin<Box<dyn Stream<Item = Result<Bytes, reqwest::Error>> + Send>>,
+pub fn create_claude_sse_stream<S, E>(
+    mut gemini_stream: Pin<Box<S>>,
     trace_id: String,
     email: String,
     session_id: Option<String>, // [NEW v3.3.17] Session ID for signature caching
@@ -30,7 +31,13 @@ pub fn create_claude_sse_stream(
     context_limit: u32,
     estimated_prompt_tokens: Option<u32>, // [FIX] Estimated tokens for calibrator learning
     message_count: usize, // [NEW v4.0.0] Message count for rewind detection
-) -> Pin<Box<dyn Stream<Item = Result<Bytes, String>> + Send>> {
+    client_adapter: Option<std::sync::Arc<dyn ClientAdapter>>, // [NEW] Adapter reference
+    registered_tool_names: Vec<String>, // [FIX #MCP] Tool names for fuzzy matching
+) -> Pin<Box<dyn Stream<Item = Result<Bytes, String>> + Send>> 
+where
+    S: Stream<Item = Result<Bytes, E>> + Send + ?Sized + 'static,
+    E: std::fmt::Display + Send + 'static,
+{
     use async_stream::stream;
     use bytes::BytesMut;
     use futures::StreamExt;
@@ -42,12 +49,14 @@ pub fn create_claude_sse_stream(
         state.scaling_enabled = scaling_enabled; // Set scaling enabled flag
         state.context_limit = context_limit;
         state.estimated_prompt_tokens = estimated_prompt_tokens; // [FIX] Pass estimated tokens
+        state.set_client_adapter(client_adapter); // [NEW] Set adapter
+        state.set_registered_tool_names(registered_tool_names); // [FIX #MCP] Set tool names
         let mut buffer = BytesMut::new();
 
         loop {
-            // [NEW] 30秒心跳保活: 延长超时时间以兼容长延迟模型
+            // [NEW] 60秒心跳保活: 延长超时时间以增加网络抖动容错
             let next_chunk = tokio::time::timeout(
-                std::time::Duration::from_secs(30),
+                std::time::Duration::from_secs(60),
                 gemini_stream.next()
             ).await;
 
@@ -73,7 +82,13 @@ pub fn create_claude_sse_stream(
                             }
                         }
                         Err(e) => {
-                            yield Err(format!("Stream error: {}", e));
+                            let error_json = serde_json::json!({
+                                "error": {
+                                    "message": format!("Stream error: {}", e),
+                                    "type": "stream_error"
+                                }
+                            });
+                            yield Ok(Bytes::from(format!("data: {}\n\n", error_json)));
                             break;
                         }
                     }
@@ -84,6 +99,23 @@ pub fn create_claude_sse_stream(
                     yield Ok(Bytes::from(": ping\n\n"));
                 }
             }
+        }
+        
+        // [FIX #1732] Mandatory Flush remaining buffer on stream termination
+        // Prevents hangs when the last SSE chunk doesn't end with a newline (network fragmentation)
+        if !buffer.is_empty() {
+             if let Ok(line_str) = std::str::from_utf8(&buffer) {
+                 let line = line_str.trim();
+                 if !line.is_empty() {
+                     tracing::debug!("[{}] SSE Termination: Flushing remaining {} bytes in buffer", trace_id, buffer.len());
+                     if let Some(sse_chunks) = process_sse_line(line, &mut state, &trace_id, &email) {
+                         for sse_chunk in sse_chunks {
+                             yield Ok(sse_chunk);
+                         }
+                     }
+                 }
+             }
+             buffer.clear();
         }
 
         // [FIX #859] Post-thinking interruption recovery
@@ -464,7 +496,7 @@ mod tests {
                 "modelVersion": "gemini-2.0-flash-thinking",
                 "responseId": "msg_interrupted"
             });
-            yield Ok(bytes::Bytes::from(format!("data: {}\n\n", thinking_json)));
+            yield Ok::<_, String>(bytes::Bytes::from(format!("data: {}\n\n", thinking_json)));
             
             // 然后突然结束 (没有 Text, 没有 Usage, 直接 None)
         };
@@ -479,6 +511,8 @@ mod tests {
             1_000,
             None,
             1, // message_count
+            None, // client_adapter
+            Vec::new(), // registered_tool_names
         );
 
         // 3. 收集输出

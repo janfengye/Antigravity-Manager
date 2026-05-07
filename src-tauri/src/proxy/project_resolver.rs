@@ -3,7 +3,8 @@ use serde_json::Value;
 /// 使用 Antigravity 的 loadCodeAssist API 获取 project_id
 /// 这是获取 cloudaicompanionProject 的正确方式
 pub async fn fetch_project_id(access_token: &str) -> Result<String, String> {
-    let url = "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
+    // 使用 Sandbox 环境，避免 Prod 环境的 429 错误
+    let url = "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:loadCodeAssist";
     
     let request_body = serde_json::json!({
         "metadata": {
@@ -15,8 +16,9 @@ pub async fn fetch_project_id(access_token: &str) -> Result<String, String> {
     let response = client
         .post(url)
         .bearer_auth(access_token)
-        .header("Host", "cloudcode-pa.googleapis.com")
-        .header("User-Agent", "antigravity/1.11.9 windows/amd64")
+        // .header("Host", "cloudcode-pa.googleapis.com") // 移除 Host header，因为已切换域名
+
+        .header("User-Agent", crate::constants::USER_AGENT.as_str())
         .header("Content-Type", "application/json")
         .json(&request_body)
         .send()
@@ -39,32 +41,6 @@ pub async fn fetch_project_id(access_token: &str) -> Result<String, String> {
         return Ok(project_id.to_string());
     }
     
-    // 如果没有返回 project_id，说明账号无资格，使用内置随机生成逻辑作为兜底
-    let mock_id = generate_mock_project_id();
-    tracing::warn!("账号无资格获取官方 cloudaicompanionProject，将使用随机生成的 Project ID 作为兜底: {}", mock_id);
-    Ok(mock_id)
-}
-
-/// 生成随机 project_id（当无法从 API 获取时使用）
-/// 格式：{形容词}-{名词}-{5位随机字符}
-pub fn generate_mock_project_id() -> String {
-    use rand::Rng;
-    
-    let adjectives = ["useful", "bright", "swift", "calm", "bold"];
-    let nouns = ["fuze", "wave", "spark", "flow", "core"];
-    
-    let mut rng = rand::thread_rng();
-    let adj = adjectives[rng.gen_range(0..adjectives.len())];
-    let noun = nouns[rng.gen_range(0..nouns.len())];
-    
-    // 生成5位随机字符（base36）
-    let random_num: String = (0..5)
-        .map(|_| {
-            let chars = "abcdefghijklmnopqrstuvwxyz0123456789";
-            let idx = rng.gen_range(0..chars.len());
-            chars.chars().nth(idx).unwrap()
-        })
-        .collect();
-    
-    format!("{}-{}-{}", adj, noun, random_num)
+    // 如果没有返回 project_id，说明账号无资格，返回错误以触发 token_manager 的稳定兜底逻辑
+    Err("账号无资格获取官方 cloudaicompanionProject".to_string())
 }

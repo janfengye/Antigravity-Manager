@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> 专业的 AI 账号管理与协议反代系统 (v4.0.1)
+> 专业级 AI 账号管理与协议代理系统 (v4.1.33)
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
 
@@ -8,7 +8,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.0.1-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.1.33-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -38,8 +38,13 @@
 
 ## 💖 赞助商 (Sponsors)
 
+| 赞助商 (Sponsor) | 简介 (Description) |
+| :---: | :--- |
 | <img src="docs/images/packycode_logo.png" width="200" alt="PackyCode Logo"> | 感谢 **PackyCode** 对本项目的赞助！PackyCode 是一家可靠高效的 API 中转服务商，提供 Claude Code、Codex、Gemini 等多种服务的中转。PackyCode 为本项目的用户提供了特别优惠：使用[此链接](https://www.packyapi.com/register?aff=Ctrler)注册，并在充值时输入 **“Ctrler”** 优惠码即可享受 **九折优惠**。 |
-| :--- | :--- |
+| <img src="docs/images/AICodeMirror.jpg" width="200" alt="AICodeMirror Logo"> | 感谢 AICodeMirror 赞助了本项目！AICodeMirror 提供 Claude Code / Codex / Gemini CLI 官方高稳定中转服务，支持企业级高并发、极速开票、7×24 专属技术支持。 Claude Code / Codex / Gemini 官方渠道低至 3.8 / 0.2 / 0.9 折，充值更有折上折！AICodeMirror 为 Antigravity-Manager 的用户提供了特别福利，通过[此链接](https://www.aicodemirror.com/register?invitecode=MV5XUM)注册的用户，可享受首充8折，企业客户最高可享 7.5 折！ |
+| <img src="https://coder.visioncoder.cn/logo.png" width="200" alt="VisionCoder Logo"> | 感谢 VisionCoder 对本项目的支持。[VisionCoder 开发平台](https://coder.visioncoder.cn) 是一个可靠高效性 API 中继服务提供商，提供 Claude Code、Codex、Gemini 等主流 AI 模型，帮助开发者和团队更轻松地集成 AI 功能，提升工作效率。VisionCoder 为本站用户提供了专属福利：通过[此链接](https://coder.visioncoder.cn)注册并购买 [Token Plan](https://coder.visioncoder.cn) 限时活动，可享受“买 1 个月赠 1 个月”优惠。 |
+
+
 
 ### ☕ 支持项目 (Support)
 
@@ -50,6 +55,12 @@
 | 支付宝 (Alipay) | 微信支付 (WeChat) | Buy Me a Coffee |
 | :---: | :---: | :---: |
 | ![Alipay](./docs/images/donate_alipay.png) | ![WeChat](./docs/images/donate_wechat.png) | ![Coffee](./docs/images/donate_coffee.png) |
+
+## 🚀 推荐项目 (Recommended Projects)
+
+如果您喜欢本项目，可能也会对以下项目感兴趣：
+
+*   **[Antigravity-Tools-LS](https://github.com/lbjlaq/Antigravity-Tools-LS)**: 专为 AI 协议设计的语言服务器 (LSP)，为您提供更智能的代码补全、诊断和协议调试体验。
 
 ## 🌟 深度功能解析 (Detailed Features)
 
@@ -78,7 +89,7 @@
 
 ### 5. 🎨 多模态与 Imagen 3 支持
 *   **高级画质控制**: 支持通过 OpenAI `size` (如 `1024x1024`, `16:9`) 参数自动映射到 Imagen 3 的相应规格。
-*   **超强 Body 支持**: 后端支持高达 **100MB** 的 Payload，处理 4K 高清图识别绰绰有余。
+*   **超强 Body 支持**: 后端支持高达 **100MB** (可配置) 的 Payload，处理 4K 高清图识别绰绰有余。
 
 ## 📸 界面导览 (GUI Overview)
 
@@ -111,10 +122,28 @@ graph TD
 
 ##  安装指南 (Installation)
 
-### 选项 A: 终端安装 (macOS & Linux 推荐)
+### 选项 A: 终端安装 (推荐)
 
-#### macOS 
-如果您已安装 [Homebrew](https://brew.sh/)，可以通过以下命令快速安装：
+#### 跨平台一键安装脚本
+
+自动检测操作系统、架构和包管理器，一条命令完成下载与安装。
+
+**Linux / macOS:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.1.33/install.sh | bash
+```
+
+**Windows (PowerShell):**
+```powershell
+irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps1 | iex
+```
+
+> **支持的格式**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
+>
+> **高级用法**: 安装指定版本 `curl -fsSL ... | bash -s -- --version 4.1.33`，预览模式 `curl -fsSL ... | bash -s -- --dry-run`
+
+#### macOS - Homebrew
+如果您已安装 [Homebrew](https://brew.sh/)，也可以通过以下命令安装：
 
 ```bash
 # 1. 订阅本仓库的 Tap
@@ -149,13 +178,42 @@ brew install --cask antigravity-tools
 *   **Linux**: `.deb` 或 `AppImage`
 
 ### 选项 C: Docker 部署 (推荐用于 NAS/服务器)
-如果您希望在容器化环境中运行，我们提供了原生的 Docker 镜像。该镜像内置了对 v4.0.1 原生 Headless 架构的支持，可自动托管前端静态资源，并通过浏览器直接进行管理。
+如果您希望在容器化环境中运行，我们提供了原生的 Docker 镜像。该镜像内置了对 v4.0.2 原生 Headless 架构的支持，可自动托管前端静态资源，并通过浏览器直接进行管理。
 
 ```bash
 # 方式 1: 直接运行 (推荐)
-# 请务必通过 -e API_KEY=xxx 设置您的密钥，否则无法通过 Web 端管理账号
-# 若未设置密钥或忘记了，请通过 `docker logs antigravity-manager` 或执行 `grep '"api_key"' ~/.antigravity_tools/gui_config.json` 查看
-docker run -d --name antigravity-manager -p 8045:8045 -e API_KEY=your-secret-key -v ~/.antigravity_tools:/root/.antigravity_tools lbjlaq/antigravity-manager:latest
+# - API_KEY: 必填。用于所有协议的 AI 请求鉴定。
+# - WEB_PASSWORD: 可选。用于管理后台登录。若不设置则默认使用 API_KEY。
+docker run -d --name antigravity-manager \
+  -p 8045:8045 \
+  -e API_KEY=sk-your-api-key \
+  -e WEB_PASSWORD=your-login-password \
+  -e ABV_MAX_BODY_SIZE=104857600 \
+  -v ~/.antigravity_tools:/root/.antigravity_tools \
+  lbjlaq/antigravity-manager:latest
+
+# 忘记密钥？执行 docker logs antigravity-manager 或 grep -E '"api_key"|"admin_password"' ~/.antigravity_tools/gui_config.json
+
+#### 🔐 鉴权逻辑说明
+*   **场景 A：仅设置了 `API_KEY`**
+    - **Web 登录**：使用 `API_KEY` 进入后台。
+    - **API 调用**：使用 `API_KEY` 进行 AI 请求鉴权。
+*   **场景 B：同时设置了 `API_KEY` 和 `WEB_PASSWORD` (推荐)**
+    - **Web 登录**：**必须**使用 `WEB_PASSWORD`，使用 API Key 将被拒绝（更安全）。
+    - **API 调用**：统一使用 `API_KEY`。这样您可以将 API Key 分发给成员，而保留密码仅供管理员使用。
+
+#### 🆙 旧版本升级指引
+如果您是从 v4.0.1 及更早版本升级，系统默认未设置 `WEB_PASSWORD`。您可以通过以下任一方式设置：
+1.  **Web UI 界面 (推荐)**：使用原有 `API_KEY` 登录后，在 **API 反代设置** 页面手动设置并保存。新密码将持久化存储在 `gui_config.json` 中。
+2.  **环境变量 (Docker)**：在启动容器时增加 `-e WEB_PASSWORD=您的新密码`。**注意：环境变量具有最高优先级，将覆盖 UI 中的任何修改。**
+3.  **配置文件 (持久化)**：直接修改 `~/.antigravity_tools/gui_config.json`，在 `proxy` 对象中修改或添加 `"admin_password": "您的新密码"` 字段。
+    - *注：`WEB_PASSWORD` 是环境变量名，`admin_password` 是配置文件中的 JSON 键名。*
+
+> [!TIP]
+> **密码优先级逻辑 (Priority)**:
+> - **第一优先级 (环境变量)**: `ABV_WEB_PASSWORD` 或 `WEB_PASSWORD`。只要设置了环境变量，系统将始终使用它。
+> - **第二优先级 (配置文件)**: `gui_config.json` 中的 `admin_password` 字段。UI 的“保存”操作会更新此值。
+> - **保底回退 (向后兼容)**: 若上述均未设置，则回退使用 `API_KEY` 作为登录密码。
 
 # 方式 2: 使用 Docker Compose
 # 1. 进入项目的 docker 目录
@@ -207,6 +265,23 @@ Copyright © 2024-2026 [lbjlaq](https://github.com/lbjlaq)
 export ANTHROPIC_API_KEY="sk-antigravity"
 export ANTHROPIC_BASE_URL="http://127.0.0.1:8045"
 claude
+```
+
+### 如何接入 OpenCode?
+1.  进入 **API 反代**页面 → **外部 Providers** → 点击 **OpenCode Sync** 卡片。
+2.  点击 **Sync** 按钮，将自动生成 `~/.config/opencode/opencode.json` 配置文件：
+    - 创建独立 provider `antigravity-manager`（不覆盖 google/anthropic 原生配置）
+    - 可选：勾选 **Sync accounts** 导出 `antigravity-accounts.json`（plugin-compatible v3 格式），供 OpenCode 插件直接导入
+3.  点击 **Clear Config** 可一键清除 Manager 配置并清理 legacy 残留；点击 **Restore** 可从备份恢复。
+4.  Windows 用户路径为 `C:\Users\<用户名>\.config\opencode\`（与 `~/.config/opencode` 规则一致）。
+
+**快速验证命令：**
+```bash
+# 测试 antigravity-manager provider（支持 --variant）
+opencode run "test" --model antigravity-manager/claude-sonnet-4-5-thinking --variant high
+
+# 若已安装 opencode-antigravity-auth 插件，验证 google provider 仍可独立工作
+opencode run "test" --model google/antigravity-claude-sonnet-4-5-thinking --variant max
 ```
 
 ### 如何接入 Kilo Code?
@@ -296,7 +371,42 @@ curl -X POST http://127.0.0.1:8045/v1/messages \
   }'
 ```
 
-**参数优先级**: 请求体参数 > 模型后缀
+```
+
+**参数优先级**: `imageSize` 参数 > `quality` 参数 > 模型后缀
+
+**✨ 新增 `imageSize` 参数支持**:
+
+除了 `quality` 参数外,现在还支持直接使用 Gemini 原生的 `imageSize` 参数:
+
+```python
+# 使用 imageSize 参数(最高优先级)
+response = client.chat.completions.create(
+    model="gemini-3-pro-image",
+    size="16:9",           # 宽高比
+    imageSize="4K",        # ✨ 直接指定分辨率: "1K" | "2K" | "4K"
+    messages=[{"role": "user", "content": "一座未来主义风格的城市"}]
+)
+```
+
+```bash
+# Claude Messages API 也支持 imageSize
+curl -X POST http://127.0.0.1:8045/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: sk-antigravity" \
+  -d '{
+    "model": "gemini-3-pro-image",
+    "size": "1280x720",
+    "imageSize": "4K",
+    "messages": [{"role": "user", "content": "一只可爱的猫咪"}]
+  }'
+```
+
+**参数说明**:
+- **`imageSize`**: 直接指定分辨率 (`"1K"` / `"2K"` / `"4K"`)
+- **`quality`**: 通过质量等级推断分辨率 (`"standard"` → 1K, `"medium"` → 2K, `"hd"` → 4K)
+- **优先级**: 如果同时指定 `imageSize` 和 `quality`,系统会优先使用 `imageSize`
+
 
 #### 方式三：Chat 接口 + 模型后缀
 ```python
@@ -330,6 +440,932 @@ response = client.chat.completions.create(
 ## 📝 开发者与社区
 
 *   **版本演进 (Changelog)**:
+    *   **v4.1.33 (2026-05-01)**:
+        -   **[核心修复] 解决 Antigravity IDE  OAuth Token 刷新失效及 invalid_grant 报错问题。**
+        -   **[核心修复] 解决由于项目 ID 冲突导致的 403 报错，并实现企业/个人配额的自动重试降级。**
+        -   **[功能增强] 支持旧账号数据的自动兼容与静默升级，旧用户无需重新登录即可恢复功能。**
+    *   **v4.1.32 (2026-04-18)**:
+        -   **[代理增强] Gemini 代理生产级稳定性重构**:
+            -   **指纹同构化**: 重写 `requestId` 生成逻辑，严格遵循官方 `agent/{timestamp}/{hex8}` 路径指纹。
+            -   **链路追踪注入**: 在 OpenAI/Claude 协议转换层强制注入 `__cloudCodeMeta` 追踪 ID，实现协议级流量拟真。
+            -   **冗余重试窗口**: 针对 `10xx`/`503`/`529` 等瞬时错误实现 1500ms 原地容错窗口，大幅提升高并发稳定性。
+        -   **[核心修复] 修正反代服务拦截漏洞 (Issue #3027)**:
+            -   修复了在应用启动但未点击“启动”按钮时，后端代理端口已处于活动状态并能处理请求的逻辑缺陷。
+            -   现在服务初始运行状态默认为禁止，只有在显式启动（手动或自动）后才会放行代理流量，确保了 UI 状态与后端逻辑的严格一致。
+            -   管理后台 API 路径已做豁免处理，确保基础管理功能不受影响。
+        -   **[核心修复] 彻底解决账号切换时的“状态失效”与“指纹冲突”问题**:
+            -   **指纹同步**: 实现了 `serviceMachineId` 在磁盘配置与 `state.vscdb` 数据库间的同步注入，解决了切换账号后 VS Code 弹出“环境变更”并要求重新登录的顽疾。
+            -   **校验降级**: 弱化了企业版账号的项目预检逻辑。当无法自动解析到 `project_id` 时，系统将改为记录警告而非抛错中断切换，确保权限受限账号依然可以完成切换并正常使用。
+        -   **[重要提示] 账号切换与风险建议**:
+            -   **自动重试提示**: 如果在 Antigravity 客户端不停地出现 `retry`，请尝试切换账号使用即可。
+            -   **风险控制说明**: 对于反代用户，虽然本次更新了部分增强，但使用第三方工具仍可能因违反服务条款而被暂停使用。如有必要，建议使用 Free 账号或企业 Free 账号。
+
+    *   **v4.1.31 (2026-03-25)**:
+        -   **[推荐项目] 支持新成员 [Antigravity-Tools-LS](https://github.com/lbjlaq/Antigravity-Tools-LS)**: 专为 AI 协议设计的语言服务器，提供极致的开发辅助与调试体验。
+        -   **[核心修复] 稳定企业切换与多 OAuth 客户端认证 (PR #2330)**:
+            -   **多客户端支持**: 引入了对多 OAuth-client 的支持与 `oauth_client_key` 跟踪机制，支持主动切换。
+            -   **企业模式增强**: 加格了企业模式切换时的预检（检测 `project_id`），并优化了失败提示。
+            -   **状态显示优化**: 改进了需要验证 (Verification Required)、风险 (Risk)、受限 (Rate Limited) 等异常账号状态的 UI 显示。
+            -   **API 访问回退**: 为 `fetchAvailableModels` 接口添加了 Sandbox -> Daily -> Prod 的自动回退路径，在遇到 429 或 5xx 错误时自动尝试备选环境。
+        -   **[代理修复] 修复使用 Gemini v1internal 协议时的 400 错误 (PR #2356)**:
+            -   **冲突避让**: 解决了 `v1internal` 协议不支持同时使用 `googleSearch` 和 `functionDeclarations` 的限制。
+            -   **智能注入**: 现在当请求中包含函数定义时，代理将自动跳过 Google 搜索工具的注入，确保请求成功率。
+        -   **[代理修复] 标准化 Gemini SSE 错误格式，防止 IDE 崩溃 (Issue #2371)**:
+            -   **格式规范化**: 将 Gemini 处理器的流式错误输出包装为标准 OpenAI `choices` 格式，彻底解决了 IDE 解析器因 `TypeError` 导致的 UI 冻结问题。
+            -   **连接自愈**: 为 SSE 流添加了标准的 `data: [DONE]` 终止符，并优化了错误状态下的存储路径探测逻辑。
+    *   **v4.1.30 (2026-03-15)**:
+        -   **[核心优化] 引入 fetchAvailableModels 接口的多级降级机制 (PR #2329)**:
+            -   **端点降级策略**: 为 `fetchAvailableModels` API 引入了 Sandbox -> Daily -> Prod 的端点自动降级机制。当请求遇到 `429 (Too Many Requests)` 或 `5xx` 服务器错误时，系统会自动平滑切换到备选端点，显著提升了配额刷新和模型列表获取的稳定性。
+            -   **逻辑对齐**: 将配额获取的错误处理和重试逻辑与核心 API 处理器 (Handler) 进行了对齐，确保了请求管道在极端情况下的行为一致性。
+        -   **[核心修复] 优化 Gemini SSE 流错误处理，防止传输编码错误 (PR #2322)**:
+            -   **错误封装导出**: 修复了 Gemini SSE 流 en 遇到上游错误时直接抛出原始错误导致客户端触发 `TransferEncodingError` 的问题。系统现在会将流错误捕获并封装为标准的 JSON 格式数据帧输出，确保连接能够优雅关闭并向前端传递清晰的错误信息。
+            -   **多协议对齐**: 该修复同步应用到了 Gemini 原生处理器与 Claude 协议映射器，确保了跨协议流式输出的一致性和健壮性。
+    *   **v4.1.29 (2026-03-12)**:
+        -   **[重要提醒] 谷歌风控与第三方工具使用风险**:
+            -   由于谷歌加强风控，第三方工具会违反服务条款而被暂停使用 Antigravity、Gemini CLI 或 Gemini Code Assist。
+            -   使用第三方软件、工具或服务访问 Antigravity、Gemini CLI 或 Gemini Code Assist（例如，使用 OpenClaw 和 Antigravity OAuth）违反了适用的条款和政策。此类行为可能导致您的帐户被暂停或终止。建议只使用切换功能
+            -   **申诉链接**: 如果您认为帐户被误封，请通过 [此链接](https://forms.gle/hGzM9MEUv2azZsrb9) 进行申诉。
+            -   如果你对新的反代功能感兴趣可以查看 [TG 频道](https://t.me/AntigravityManager) 获取最新动态。
+            -   ![风险提示](docs/images/CleanShot%202026-03-12%20at%2009.34.34@2x.png)
+        -   **[核心功能] 账号感知的动态模型重映射与回退 (PR #2286)**:
+            -   **动态回退逻辑**: 解决了由于不同账号对 Gemini Pro 模型层级（如 `high` / `low`）访问权限不一致导致的 `404/400` 报错问题。系统现在会根据选中账号的实际权限，在同系列模型间自动执行平滑回退（例如：`gemini-3.1-pro-high` -> `gemini-3.1-pro-low` -> 默认层级）。
+            -   **账号权限实时校验**: 在请求进入处理器前，动态通过账号文件数据校验目标模型的可用性，实现真正意义上的“账号感知”调度。
+            -   **重映射优先级优化**: 确立了 `API 弃用规则 > 账号感知回退 > 用户自定义映射 > 系统默认映射` 的科学优先级链条。
+            -   **文档同步**: 新增了 `docs/model-remapping-logic.md`，完整记录了复杂的重映射逻辑流程。
+        -   **[核心修复] Windows CLI 探测增强与路径扫描优化 (PR #2298)**:
+            -   **路径主动扫描**: 引入了对 `APPDATA`、`LOCALAPPDATA` 以及 `NVM_HOME` 等路径的自动扫描机制，确保即使 CLI 未正确配置在系统 `PATH` 中也能被精准识别。
+            -   **脚本处理优化**: 改进了 Windows 环境下 `.cmd` 和 `.bat` 脚本的调用方式，解决了直接执行无法稳定获取版本号的问题。
+            -   **执行安全加固**: 新增了路径安全性校验逻辑，通过绝对路径检查与危险字符过滤，有效防范命令注入风险。
+        -   **[持续集成] 引入 GitHub Actions CI 工作流 (PR #2298)**:
+            -   **自动化质量控制**: 构建了基础的 CI 流水线，涵盖 Rust 代码格式化检查、静态分析以及跨平台编译测试，提升了代码合规性与交付稳定性。
+    *   **v4.1.28 (2026-03-03)**:
+        -   **[重要提醒] 谷歌风控与第三方工具使用风险**:
+            -   由于谷歌加强风控，第三方工具会违反服务条款而被暂停使用 Antigravity、Gemini CLI 或 Gemini Code Assist。
+            -   使用第三方软件、工具或服务访问 Antigravity、Gemini CLI 或 Gemini Code Assist（例如，使用 OpenClaw 和 Antigravity OAuth）违反了适用的条款和政策。此类行为可能导致您的帐户被暂停或终止。
+            -   **申诉链接**: 如果您认为帐户被误封，请通过 [此链接](https://forms.gle/hGzM9MEUv2azZsrb9) 进行申诉。
+            -   **[后续规划] 关于未来版本更迭**:
+                -   我们计划在后续推送新版本，届时可能会将“账号切换”与“反代代理”功能解耦为独立的模块或工具。
+                -   由于作者近期工作繁忙，发布可能会有延迟，感谢理解。
+                -   欢迎关注公众号 **Ctrler** 或 **[TG 频道](https://t.me/AntigravityManager)** 获取最新动态。
+            -   **请谨慎使用本项目。**
+        -   **[核心修复] 全系列模型限流锁定修复 (Fix Issue #2209)**:
+            -   **统一归一化逻辑**: 修复了 Claude 和 Gemini 系列模型在发生 429 (Too Many Requests) 错误时，由于限流 Key 未归一化导致负载均衡器无法识别锁定状态的问题。
+            -   **熔断器联动增强**: 确保即使在禁用"额度保护"的情况下，内置熔断器也能通过归一化后的模型 ID（如 `claude`, `gemini-3-flash` 等）精确拦截已耗尽账号，消除 90s 的无效等待。
+        -   **[核心修复] Gemini 系列模型 adaptive 模式下错误注入 `thinkingLevel` 导致 400 报错 (Fix Issue #2208)**:
+            -   **根因定位**: 4.1.27 引入的自适应识别逻辑将 `gemini-3.1-pro-high` / `gemini-3.1-pro-low` 等 Gemini 系列模型误判为支持 `thinkingLevel`，而 `thinkingLevel` 是 Vertex AI Claude 原生协议专有参数，Gemini 系列底层走 v1internal 协议，仅接受 `thinkingBudget`，导致请求被 Google API 拒绝并返回 `400 INVALID_ARGUMENT`。
+            -   **条件收窄**: 将注入 `thinkingLevel` 的触发条件从 `contains("gemini-3")` 修正为 `contains("claude")`，确保 `thinkingLevel` 仅在 Claude 协议路径下注入，Gemini 系列模型在 adaptive 模式下统一回落到安全的 `thinkingBudget: 24576`。
+            -   **零附带损伤**: OpenAI 协议与 Gemini 原生协议路径本身无此问题，本次修复仅针对 Claude 协议映射器，影响范围最小。
+        -   **[核心修复] 修复 Claude Code 4.1.27+ 联网搜索 (Internal Tool) 失效问题 (Issue #2224)**:
+            -   **混合工具支持**: 克服了 Gemini v1internal API 对 `googleSearch` 与自定义 `functionDeclarations` 同时使用的限制。
+            -   **智能感知注入**: 重构了工具注入引擎，实现在 Gemini 2.0+ 和 3.0 系列模型上自动同时开启内置搜索与自定义开发者工具。
+            -   **多协议对齐**: 本次修复同步覆盖了 OpenAI 和 Gemini Native 协议，确保全协议栈在高性能模型下的联网能力一致性。
+            -   **后向兼容**: 针对旧版 Gemini 1.5 模型保留了自动排他转换逻辑，规避 400 错误。
+        -   **[核心修复] gemini-3-flash / gemini-3.1-flash 函数调用时缺少 thought_signature 导致 400 报错 (Fix Issue #2167)**:
+            -   **根因定位**: 三个协议映射器（OpenAI / Claude / Gemini 原生）的模型识别逻辑均未将 `gemini-3-flash` 系列纳入 "thinking 模型" 范畴，致使在首次函数调用（无 Session 签名缓存）时，`thoughtSignature` 字段未被注入，Google v1internal API 返回 `400 INVALID_ARGUMENT`。
+            -   **OpenAI 协议**: 新增 `is_gemini_flash_thinking` 判断变量，在 `functionCall` 构建阶段，当 Session 缓存为空时自动注入哨兵值 `skip_thought_signature_validator`。
+            -   **Claude 协议**: 将 `gemini-3-flash` / `gemini-3.1-flash` 加入 `target_model_supports_thinking` 识别列表；无签名时 flash 模型不再强制禁用 thinking，改为依赖现有哨兵注入路径（`build_contents` L1249-1256），保留模型思考能力。
+            -   **Gemini 原生协议**: 在 `wrap_request` 的 `functionCall` 处理块中，当 Session 缓存为空时对 flash 模型补充哨兵 fallback，覆盖首次调用场景。
+            -   **零附带损伤**: flash 模型不触发 `thinkingConfig` 注入逻辑，不影响非思考类请求的正常路径；顺带修复了 `test_wrap_request_with_signature` 单元测试中 `session_id` 参数位置错误的既有 Bug。
+        -   **[核心修复] Token 统计时区偏差修复 (Fix Issue #2214)**:
+            -   **自动时区贴合**: 将 Token 统计的基准时间从标准时间 (UTC) 切换为系统本地时间 (Local Time)。
+            -   **全球多时区支持**: 引入了 SQLite `'localtime'` 转换机制。无论用户身处全球何处，统计图表的时间轴都将自动与其系统时钟对齐，彻底解决了北京时间或其他非 UTC 时区下的数据错位问题。
+
+    *   **v4.1.27 (2026-03-01)**:
+        -   **[核心优化] 代理配置初始化与工具图片保留修复 (Issue #2156)**:
+            -   **补全默认配置**: 修复了 `ProxyConfig` 默认初始化时缺失 `global_system_prompt`、`proxy_pool` 和 `image_thinking_mode` 字段导致的编译失败问题。
+            -   **模式匹配完善**: 补充了 `OpenAIContentBlock` 枚举匹配中的未知类型兜底分支 (`_ => {}`)，消除非穷尽匹配的编译警告/错误。
+            -   **图片无条件保留**: 移除冗余的 `preserve_tool_result_images` 开关，现已强制保留 `tool_result` 中的图片数据结构，转为大模型支持的 `inlineData` 结构，大幅简化逻辑。
+        -   **[功能增强] 修改 docker-compose.yml 的配置 (PR #2185)**:
+            -   **命名空间更新**: 将构建的默认镜像名称从 `antigravity-manager` 更新为 `lbjlaq/antigravity-manager`。
+            -   **环境变量占位符**: 为环境变量添加了带默认值的占位符语法，允许用户通过宿主机的环境变量或 `.env` 文件来灵活覆盖默认配置。
+        -   **[核心修复] OpenCode thinking budget 参数全面兼容 (Issue #2186)**:
+            -   **架构支持**：解决了 Vercel AI SDK (`@ai-sdk/anthropic`) 配合 OpenCode 使用时，因原生蛇形命名 `budget_tokens` 导致系统无法启动并抛出 `AI_UnsupportedFunctionalityError: 'thinking requires a budget'` 的问题。
+            -   **双字段输出**：在向 OpenCode / Claude CLI 等外部客户端同步模型配置时，自动同时输出标准的 `budget_tokens` 与小驼峰的 `budgetTokens` 字段。
+            -   **服务端适配**：后端配置解析器现已原生支持这两种命名变体。
+        -   **[核心修复] 解决免费账号配额耗尽后的无限重试与路由死锁问题 (Issue #2184)**：
+            -   **问题根源**：修补了 Google API `fetchAvailableModels` 接口在特定负载下无法正确返回 `remainingFraction` 的缺陷。由于缺失 `project` 标识，导致接口错误地为已耗尽配额（HTTP 429）的账号返回 `1.0`（100%），进而导致智能路由算法将请求持续分配给不可用账号，引发长时间重试及配额显示错误。
+            -   **负载修复**：修改配额刷新请求，在负载中精准注入正确的 `{"project": project_id}` 结构。恢复了配额信息的准确感知，并在未破坏原生字段（如 `supportsThinking`）的前提下实现了接口完全兼容。
+            -   **自愈恢复**：通过读取真实配额，系统现已能够实时识别免费账号的耗尽状态并将其可用度置为 0%，无缝触发多账号自愈轮询（Smart Status Self-healing），解决请求受阻与长等待问题。
+        -   **[核心修复] 解决首页 Gemini 绘图平均配额显示为 0 的问题 (Issue #2160)**：
+            -   **匹配更新**：将 Dashboard 中的绘图模型匹配逻辑从硬编码的 `gemini-3-pro-image` 更新为包含最新的 `gemini-3.1-flash-image`。
+            -   **配置同步**：在 `modelConfig.ts` 中补全了新版绘图模型的 UI 定义，确保图标和标签正常渲染。
+        -   **[核心功能] 全协议动态模型规格 (Model Specs) 集成 (Issue #2176)**：
+            -   **动态引擎**：实现了“动态优先、静态兜底”的规格引擎，优先识别 API 返回的 `max_output_tokens` 等硬限额数据。
+            -   **静态资源**：引入 `model_specs.json` 集中管理 30+ 种模型的默认参数，彻底告别映射器中的硬编码逻辑。
+            -   **协议注入**：统一了 OpenAI、Claude 和 Gemini 协议处理器对 Token 限额的注入方式，增强了跨版本兼容性。
+        -   **[核心修复] 深度解决 Claude -> Gemini 3 路径下的 400 INVALID_ARGUMENT 异常**：
+            -   **自适应识别**：修正了自适应模式逻辑，确保映射后的 Gemini 3 模型能正确使用 `thinkingLevel` 支持，而非失效的 budget 逻辑。
+            -   **冲突规避**：实现了参数排他性检查，在开启分级思维时自动剥离不兼容的 `thinkingBudget`。
+            -   **Token 溢出保护**：为 `maxOutputTokens` 自动提升补齐逻辑增加了 `65536` 的模型硬上限保护，根除参数越界导致的请求失败。
+    *   **v4.1.26 (2026-02-27)**:
+        -   **[功能增强] 优化配额刷新逻辑，支持同步禁用账号**:
+            -   **逻辑放宽**: “刷新所有”和“批量刷新”现在不再跳过标记为 `disabled` 或 `proxy_disabled` 的账号。
+            -   **自动恢复**: 允许通过刷新操作尝试重新激活因 Token 过期或临时错误而被禁用的账号，提升了多账号管理的灵活性。
+        -   **[核心修复] 修复 Windows 系统下后台任务导致 cmd 黑框闪烁的问题**:
+            -   **静默执行**: 通过为 `std::process::Command` 封装注入 `CREATE_NO_WINDOW` 标志，解决了在 Windows 端应用底层组件（如版本探测、重启更新等）调用系统命令时引发的命令行窗口一闪而过的视觉干扰，确保全过程无边框静默执行。
+    *   **v4.1.25 (2026-02-27)**:
+        -   **[核心功能] 动态画图模型与新架构支持**:
+            -   **动态解析**: 移除了针对 `gemini-3-pro-image` 的硬编码限制。通过新增的 `clean_image_model_name` 智能清洗后缀（如 `-4k`, `-16x9`），全面兼容如 `gemini-3.1-flash-image` 等任意未来新增的画图模型。
+            -   **配额自适应**: 优化了 `normalize_to_standard_id`，使用 `image` 关键词宽泛匹配，确保新模型也能正确触发配额保护机制。
+        -   **[核心功能] 聊天接口 (Chat Completions) 画图拦截支持**:
+            -   **跨界融合**: OpenAI 和 Claude 协议的对话流现在能智能探测画像生成意图。当使用带有 `image` 的模型名时，系统会将常规文本生成请求静默转移给高级画图引擎。
+            -   **流式回显**: 生成完成后，通过 Markdown 格式（`![Generated Image](url)`）以 SSE 流式返回图片链接，完美适配所有支持 Markdown 的聊天客户端。
+        -   **[核心修复] 彻底修复画图重定向 404 与参数穿透失效**:
+            -   **404 移除**: 移除了底层调用中残留的旧模型硬编码，根除因模型信息不一致导致的 404 Not Found 崩溃及账号受损。
+            -   **精准参数继承**: 修复了未传参数时系统强制塞入默认 `1024x1024` 的行为。现在，如果模型名带有后缀（如 `gemini-3-pro-image-16x9-4k`），后台会严格优先解析后缀分辨率进行穿透绘图。
+    *   **v4.1.24 (2026-02-26)**:
+        -   **[功能调整] 禁用自动预热调度程序，保留手动预热**:
+            -   **变更说明**: 为了减少不必要的后台资源占用，本版本已注释掉自动预热（Smart Warmup）的后台调度逻辑。
+            -   **设置隐藏**: 设置页面中的“智能预热”配置项已隐藏。
+            -   **手动保留**: 账号管理页面的手动预热功能保持不变，仍可正常使用。
+            -   **恢复指引**: 如果您需要自动预热功能，可以自行拉取本项目源代码，在 `src-tauri/src/lib.rs` 中取消 `start_scheduler` 的注释并解除 `Settings.tsx` 中相关 UI 的注释后重新编译使用。
+        -   **[核心修复] 智能版本指纹选择与启动 Panic 修复 (Issue #2123)**:
+            -   **问题根源**: 1) `constants.rs` 中的 `KNOWN_STABLE_VERSION` 硬编码了低版本号，当本地 IDE 检测失败时回退该版本作为请求头，导致 Google 拒绝 Gemini 3.1 Pro 模型。2) 新增的远端版本网络调用直接在 `LazyLock` 初始化（Tokio 异步上下文）中执行，导致 `Cannot block the current thread` 严重崩溃。
+            -   **修复方案**: 1) 引入"智能最大版本"策略 `max(本地版本, 远端版本, 4.1.27)`，始终取最高值。2) 将网络探测逻辑移至独立 OS 线程并配合 `mpsc` 通道，安全避开异步运行时限制。保证无论本地版本新旧，指纹均不低于上游要求，且应用能稳定启动。
+        -   **[核心修复] 动态模型 maxOutputTokens 限额系统 (替代 PR #2119 硬编码方案)**:
+            -   **问题根源**: 部分客户端发送的 `maxOutputTokens` 超过模型物理上限（如 Flash 限制 64k），导致上游返回 400 错误。
+            -   **三层限额架构**:
+                -   **第一层（动态优先）**: 实时读取账号 `quota.models` 数据。
+                -   **第二层（静态默认表）**: `model_limits.rs` 内置已知限额（如 Flash 65536）。
+                -   **第三层（全局兜底）**: 默认 131072。
+            -   **实现细节**: 在 `wrap_request()` 中注入裁剪逻辑，确保请求参数合法。
+    *   **v4.1.23 (2026-02-25)**:
+        -   **[安全增强] 优化与原生对齐应用层与底层特征指纹，提升请求稳定性与防拦截能力。**
+        -   **[核心修复] 将 v1beta thinkingLevel 转换为 v1internal thinkingBudget (PR #2095)**:
+            -   **问题根源**: OpenClaw、Cline 等客户端发送 v1beta 格式的 `thinkingLevel` 字符串（`"NONE"` / `"LOW"` / `"MEDIUM"` / `"HIGH"`）到 `generationConfig.thinkingConfig`。当 AGM 通过 Google v1internal API 代理请求时，Google 会因为 v1internal 仅接受数字型 `thinkingBudget` 而拒绝请求，返回 `400 INVALID_ARGUMENT`。
+            -   **修复方案**: 在 `wrap_request()` 的现有 budget 处理逻辑之前，新增一个早期转换步骤：检测 `thinkingLevel` 字符串，将其映射为对应的数字 `thinkingBudget`（`NONE`→0, `LOW`→4096, `MEDIUM`→8192, `HIGH`→24576），然后删除 `thinkingLevel` 字段并写入 `thinkingBudget`，确保下游所有 budget 处理逻辑（预算封顶、`maxOutputTokens` 调整、自适应检测）都能看到正确的数值预算。
+            -   **测试**: 已验证 OpenClaw 发送 `thinkingLevel: "LOW"` 到 `gemini-3.1-pro-high`（Gemini 原生协议），请求现返回 `200 OK`，不再报 400 错误。
+        -   **[核心修复] 账号数据损坏与后台任务无限循环修复 (PR #2094)**:
+            -   **问题根源**: 当用户在设置中输入过大的刷新间隔值（如 999999999）时，`interval * 60 * 1000` 超过 JS 引擎 32 位有符号整数上限 `2,147,483,647ms`，浏览器会将 `setInterval` 延迟静默截断为 1ms，导致前端每秒触发数千次 `refreshAllQuotas`/`syncAccountFromDb` 请求，进而引发多线程并发写同一 `[uuid].json` 文件，造成字节流交错、JSON 尾部残留，账号数据永久损坏。
+            -   **原子文件写入 (`account.rs`)**: `save_account` 改为先写入 UUID 后缀的临时文件，再通过 `fs::rename`（POSIX）/ `MoveFileExW`（Windows）原子替换目标文件，与已有的 `save_account_index` 保持一致，从根本上消除并发写导致的 JSON 损坏。
+            -   **setInterval 溢出保护 (`BackgroundTaskRunner.tsx`)**: 对 `refresh_interval` 和 `sync_interval` 两个定时器的延迟参数加上 `Math.min(..., 2147483647)` 上界限制，防止超过 INT32_MAX 后被浏览器截断为 1ms 无限循环。
+            -   **输入验证 (`Settings.tsx`)**: 将 `refresh_interval` 和 `sync_interval` 输入框的 `max` 属性从 `60` 更新为 `35791`（35791 min × 60000 < INT32_MAX），并在 `onChange` 中添加 `NaN` fallback（默认为 1）及范围夹紧 `[1, 35791]`，从源头阻断非法值输入。
+        -   **[核心优化] OAuth 换票专属：剔除 JA3 指纹与动态 User-Agent 伪装**:
+            -   **纯净请求**: 仅针对 `exchange_code`（首次授权）和 `refresh_access_token`（静默续期）的换票请求，移除了底层网络库的 Chrome JA3 指纹伪装，恢复标准纯净的 TLS特征。
+            -   **动态 UA**: 换票时自动提取编译时版本号 (`CURRENT_VERSION`) 构建专属的 `User-Agent`（如 `vscode/1.X.X (Antigravity/4.1.27)`），以匹配纯净 TLS 链路。
+        -   **[功能增强] API 反代页面与设置页模型列表全面接入动态模型数据**:
+            -   **问题根源**: "API 反代 → 支持模型与集成"列表与"模型路由中心"的目标模型选择下拉框，以及"设置 → 固定配额模型"列表，此前均仅从静态 `MODEL_CONFIG` 读取硬编码模型信息，导致账号实际下发的动态新模型（如 `GPT-OSS 120B`、`Gemini 3.1 Pro (High)` 等）无法出现在这些列表中。
+            -   **修复方案**:
+                -   重构 `useProxyModels` Hook：以账号 `quota.models` 动态数据为第一优先数据源，聚合所有账号里所有模型的 `display_name`（为主展示名称）和 `name`（为模型 ID）；`MODEL_CONFIG` 仅作为图标/分组的样式补充，以及无账号数据时的静态兜底。
+                -   新增自动懒加载逻辑：`ApiProxy` 页面本身不调用 `fetchAccounts`，现在 Hook 内部检测到 store 为空时自动触发，保证动态模型在任意导航路径下均可正常展示。
+                -   重构 `PinnedQuotaModels` 组件：采用同等策略，从 `useAccountStore` 拉取全账号动态模型，并修复了已固定的 "thinking" 类型模型显示"未知"的问题，改为优先展示其真实 `display_name`。
+            -   **去重优化**: 所有列表均基于模型原始 `name`（小写）去重，并额外过滤掉 `-thinking` 后缀的 MODEL_CONFIG 静态别名条目（这类变体已由账号数据中的 `supports_thinking` 标记覆盖）。
+    *   **v4.1.22 (2026-02-21)**:
+        -   **[重要提醒] 2api 风控风险提示**:
+            -   由于近期的谷歌风控原因，使用 2api 功能会导致账号被风控的概率显著增加。
+            -   **强烈建议**: 为了确保您的账号安全与调用稳定性，建议减少或停止使用 2api 功能。目前更原生、更稳定的 **gRPC (`application/grpc`)** 或 **gRPC-Web (`application/grpc-web`)** 协议代理支持仍在积极测试中，如果您有相关的测试经验或想法，非常欢迎联系讨论，也欢迎您建立新分支一起探索！
+            -   <details><summary>📸 点击查看 gRPC 实时转换 OpenAI 规范测试演示</summary><img src="docs/images/usage/grpc-test.png" alt="gRPC Test" width="600"></details>
+        -   **[核心优化] Claude Sonnet 4.5 迁移至 4.6 (PR #2014)**:
+            -   **模型升级**: 引入 `claude-sonnet-4-6` 及 `claude-sonnet-4-6-thinking` 作为主推模型。
+            -   **平滑过渡**: 自动将 legacy 模型 `claude-sonnet-4-5` 重定向至 `4.6`。
+            -   **全局适配**: 更新了全部 12 种语言的本地化文件、UI 标签（Sonnet 4.6, Sonnet 4.6 TK, Opus 4.6 TK）以及预设路由。
+        -   **[核心优化] Gemini Pro 模型名称迁移 (PR #2063)**: 将 `gemini-pro-high/low` 迁移至 `gemini-3.1-pro`，确保与 Google 最新 API 命名对齐。
+        -   **[重大架构] 国际化 (i18n) 与结构化模型配置集成 (PR #2040)**:
+            -   **架构重构**: 引入了全新的 i18n 翻译框架，将硬编码的模型展示逻辑解耦至结构化 `MODEL_CONFIG`。
+            -   **逻辑适配**: 在账号表格、详情弹窗和设置页面中集成了基于 i18n 标签的动态去重机制，修复了 Gemini 3.1 Pro 额度重复显示的 UI 问题。
+            -   **多语言提升**: 优化并修正了所有 12 种语言的版本描述，将 `Claude 4.5` 描述全面升级为正式版 `4.6`，并将 `G3` 描述统一为 `G3.1`。
+            -   **[核心修复] Claude Opus 4.6 思考模式 400 报错 (Claude 协议)**:
+            -   **参数专项对齐**: 修复了 `claude-opus-4-6-thinking` 在 Claude 协议下返回 `400 INVALID_ARGUMENT` 的问题。通过强制对齐 `thinkingBudget` (24576) 与 `maxOutputTokens` (57344)，并剔除在该模式下不兼容的 `stopSequences`，确保其请求参数与 100% 成功的 OpenAI 协议完全一致，提升了对 Claude 原生协议客户端的兼容性。
+    *   **v4.1.21 (2026-02-17)**:
+        -   **[核心修复] Cherry Studio / Claude 协议兼容性 (Fix Issue #2007)**:
+            -   **maxOutputTokens 限制**: 修复了 Cherry Studio 等客户端发送超大 `maxOutputTokens` (128k) 导致 Google API 返回 `400 INVALID_ARGUMENT` 的问题。现在自动将 Claude 协议的输出上限限制为 **65536**，确保请求始终在 Gemini 允许的范围内。
+            -   **Adaptive 思考模式对齐**: 针对 Gemini 模型优化了 Claude 协议的 `thinking: { type: "adaptive" }` 行为。现在自动映射为 **24576** 的固定思考预算 (与 OpenAI 协议一致)，解决了 Gemini Vertex AI 对 `thinkingBudget: -1` 的不兼容问题，显著提升了 Cherry Studio 的思考模式稳定性。
+        -   **[核心修复] 生产环境自定义协议支持 (PR #2005)**:
+            -   **协议修复**: 默认启用 `custom-protocol` 特性，修复了生产环境下自定义协议 (如 `tauri://`) 加载失败的问题，确保本地资源和特殊协议请求的稳定性。
+        -   **[核心优化] 托盘图标与窗口生命周期管理**:
+            -   **智能托盘**: 引入 `AppRuntimeFlags` 状态管理，实现了窗口关闭行为与托盘状态的联动。
+            -   **行为优化**: 当托盘启用时，关闭窗口将自动隐藏而非退出应用；当托盘禁用时，关闭窗口将正常退出，提供了更符合直觉的桌面体验。
+        -   **[核心增强] Linux 版本检测与 HTTP 客户端鲁棒性**:
+            -   **版本解析**: 增强了 Linux 平台的版本号提取逻辑 (`extract_semver`)，能从复杂的命令行输出中准确识别版本，提升了自动更新和环境检测的准确性。
+            -   **客户端降级**: 为 HTTP 客户端构建过程增加了自动降级机制。当代理配置导致构建失败时，系统会自动回退到无代理模式或默认配置，防止因网络配置错误导致应用完全不可用。
+        -   **[核心修复] Cherry Studio 联网搜索空响应修复 (/v1/responses)**:
+            -   **SSE 事件补全**: 重写了 `create_codex_sse_stream`，补全了 OpenAI Responses API 规范要求的完整 SSE 事件生命周期（`response.output_item.added`、`content_part.added/done`、`output_item.done`、`response.completed`），解决了 Cherry Studio 因事件缺失导致无法组装响应内容的问题。
+            -   **联网搜索注入修复**: 过滤了 Cherry Studio 发送的 `builtin_web_search` 工具声明，防止其与 `inject_google_search_tool` 冲突，确保 Google Search 工具被正确注入。
+            -   **搜索引文回显**: 为 Codex 流式响应添加了 `groundingMetadata` 解析，支持在联网搜索结果中回显搜索查询和来源引文。
+        -   **[优化] Claude 协议联网与思考稳定性 (PR #2007)**:
+            -   **移除联网降级**: 移除了 Claude 协议中针对联网搜索的激进模型降级逻辑，避免不必要的模型回退。
+            -   **移除思考历史降级**: 移除了 `should_disable_thinking_due_to_history` 检查，不再因历史消息格式问题永久禁用思考模式，改为依赖 `thinking_recovery` 机制自动修复。
+        -   **UI 优化 (Fix #2008)**: 改进了冷却时间的显示颜色 (使用蓝色)，提高了在小字体下的可读性。
+    *   **v4.1.20 (2026-02-16)**:
+        *   **[✨ 新春祝福] 祝大家马年一马当先，万事如意！Code 运昌隆，上线无 Bug！🧧**
+        *   **[Critical]** 修复了 Claude Opus/Haiku 等模型在 Antigravity API 上的 `400 INVALID_ARGUMENT` 错误（通过恢复 v4.1.16 的核心协议格式）。
+        *   增强了流式响应的健壮性，优化了对心跳包和非从零开始的 Thinking Block 的处理。
+        *   **[核心修复] 修复图像生成配额同步问题 (Issue #1995)**：
+            *   **放宽模型过滤**：优化了配额抓取逻辑，增加了对 `image` / `imagen` 关键字的支持，确保图像模型的配额信息能正常同步。
+            *   **即时刷新机制**：在图像生成成功后立即异步触发全局配额刷新，实现了 UI 侧剩余配额的实时反馈。
+        *   **[核心修复] 修复 OpenAI 流式收集器工具调用合并 Bug (PR #1994)**：
+            *   **ID 冲突校验**：在聚合流式片段时引入 ID 校验，防止多个工具调用因索引重叠而导致参数被错误拼接。
+            *   **索引稳定性优化**：优化了流式输出中的索引分配逻辑，确保多轮数据传输下工具调用索引始终单向递增。
+        *   **[核心优化] 极致拟真请求伪装 (Request Identity Camouflage)**:
+            *   **动态版本伪装**: 实现了智能版本探测机制。Antigravity 现在会自动读取本地安装的真实版本号构建 User-Agent，彻底告别了硬编码的 "1.0.0" 时代。
+            *   **Docker 环境兜底**: 针对无头模式（Docker/Linux Server），内置了“已知稳定版”指纹库。当无法检测到本地客户端时，自动伪装为最新稳定版客户端（如 v1.16.5），确保服务端看到的永远是合法的官方客户端。
+            *   **全维度 Header 注入**: 补全了 `X-Client-Name`, `X-Client-Version`, `X-Machine-Id`, `X-VSCode-SessionId` 等关键指纹头，实现了从网络层到应用层的像素级伪装，进一步降低了 403 风控概率。
+        *   **[核心功能] 后台自动刷新开关与设置热保存**:
+            *   **独立开关**: 在设置页面新增了“后台自动刷新”的独立开关，允许用户更精细地控制后台任务。
+            *   **配置热保存**: 实现了设置项（自动刷新、智能预热、配额保护）的热保存机制，无需手动点击保存按钮即可实时生效。
+        *   **[逻辑优化] 智能预热与配额保护解耦**:
+            *   **解除锁定**: 彻底移除了“额度保护”对“智能预热”的强制绑定。现在开启额度保护仅会强制开启“后台自动刷新”（用于检测配额），而不会强制启动预热请求。
+            *   **[重要建议]**: 建议用户在当前版本暂时关闭“额度保护”和“后台自动刷新”功能，以避免因频繁请求导致的潜在问题。
+    *   **v4.1.19 (2026-02-15)**:
+        -   **[核心修复] 修复 Claude Code CLI 工具调用空文本块错误 (Fix #1974)**:
+            -   **字段缺失修复**: 修复了 Claude Code CLI 在工具调用过程中，因发送空文本块 (`text: ""`) 导致上游 API 报错 `Field required` 的问题。
+            -   **空值过滤**: 在协议转换层增加了对无效空文本块的自动过滤与清理。
+        -   **[核心功能] Gemini 模型 MCP 工具名模糊匹配支持**:
+            -   **幻觉修复**: 针对 Gemini 模型经常幻觉出错误的 MCP 工具名称（如显式调用 `mcp__puppeteer_navigate` 而非注册名 `mcp__puppeteer__puppeteer_navigate`）的问题，实现了智能模糊匹配算法。
+            -   **三级匹配策略**: 引入了后缀匹配、包含匹配及 Token 重叠度评分机制，显著提升了 Gemini 模型调用 MCP 工具的成功率。
+        -   **[核心修复] Opencode 同步逻辑修正 (Fix #1972)**:
+            -   **模型缺失修复**: 修复了 Opencode CLI 同步时缺失 `claude-opus-4-6-thinking` 模型定义的问题，确保该模型能被客户端正确识别和调用。
+    *   **v4.1.18 (2026-02-14)**:
+        -   **[核心升级] JA3 指纹伪装 (Chrome 123) 全面实装**:
+            -   **反爬虫突破**: 引入 `rquest` 核心库并集成 BoringSSL，实现了像素级复刻 Chrome 123 的 TLS 指纹 (JA3/JA4)，有效解决高防护上游的 403/Captchas 拦截问题。
+            -   **全局覆盖**: 指纹伪装已应用至全局共享客户端及代理池管理器，确保从配额查询到对话补全的所有出站流量均模拟为真实浏览器行为。
+        -   **[架构重构] 通用流式响应处理 (Universal Stream Handling) (Issue #1955)**:
+            -   **双核兼容**: 重构了 SSE 处理与调试日志模块，通过 `Box<dyn Stream>` 实现了对 `reqwest` (标准) 与 `rquest` (伪装) 响应流的统一兼容，消除了底层类型冲突。
+        -   **[核心功能] 账号错误详情增强 (Account Error Details Expansion)**:
+            -   **详情解读**: 为“已禁用”和“403 Forbidden”状态的账号引入了深度错误详情弹窗，自动展示底层 API 报错原因（如 `invalid_grant` 等）。
+            -   **验证链接识别**: [新] 智能检测错误文本中的 Google 验证/申诉链接，支持在弹窗内直接点击跳转，加速账号修复流程。
+            -   **时间校准**: 修复了由于单位转换错误导致的“检测时间”显示为未来的 Bug。
+        -   **[i18n] 全球化多语言支持大满贯**:
+            -   **全语言适配**: 为全部 12 种支持语言（阿、西、日、韩、缅、葡、俄、土、越、英及简繁中）同步补全了账号详情与错误状态词条。
+            -   **本地化精修**: 优化了各语言下的术语匹配（特别是日语、土耳其语和繁体中文），确保全球用户都能获得准确的母语提示。
+        -   **[核心修复] 修复图像生成模型后缀导致的配额匹配失效 (Issue #1955)**:
+            -   **模式归一化**: 修复了 `gemini-3-pro-image` 及其分辨率/比例后缀（如 `-4k`, `-16x9`）因归一化匹配不精确导致的配额校验失效问题。
+            -   **配额对齐**: 确保所有图像模型变体都能正确映射到标准 ID，从而准确触发账号配额保护，解决了“无可用配额账号”的误报。
+    *   **v4.1.17 (2026-02-13)**:
+        -   **[用户体验] 自动更新体验升级 (PR #1923)**:
+            -   **后台下载**: 实现了更新包的后台静默下载，下载过程中不再阻断用户操作。
+            -   **进度反馈**: 新增下载进度条显示，实时反馈下载状态。
+            -   **重启提示**: 下载完成后会弹出更友好的重启提示，支持“立即重启”或“稍后重启”。
+            -   **逻辑优化**: 优先检查 `updater.json`，减少对 GitHub API 的直接依赖，提升检查速度。
+        -   **[文档更新] 跨平台安装脚本 (PR #1931)**:
+            -   **一键安装**: 在 README 中更新了 Option A 安装方式，推荐使用跨平台一键安装脚本。
+        -   **[社区建设] 新增 Telegram 频道入口**:
+            -   **社群卡片**: 在“设置 -> 关于”页面新增了 Telegram 频道卡片，方便用户快速加入官方频道获取最新资讯。
+            -   **布局优化**: 调整了关于页面的卡片网格布局，适配了 5 列显示，确保界面整洁美观。
+    *   **v4.1.16 (2026-02-12)**:
+        -   **[核心修复] 修复 Claude 协议 (Thinking 模型) 400 错误 (V4 方案)**:
+            -   **协议对齐**: 彻底修复了 Claude 3.7/4.5 Thinking 等模型在通过代理调用时因参数结构不匹配导致的 `400 Invalid Argument` 错误。
+            -   **统一注入**: 废弃了导致冲突的根目录 `thinking` 字段注入，现在统一使用 Google 原生协议推荐的 `generationConfig.thinkingConfig` 嵌套结构。
+            -   **预算适配**: 为 Claude 模型适配了默认 16k 的思考预算 (Thinking Budget)，并解决了 Rust 借用检查导致的编译与运行时异常。
+        -   **[Bug修复] 修复 OpenAI 流式响应 Usage 重复问题 (Issue #1915)**:
+            -   **Token爆炸修复**: 修复了在流式传输模式下 (stream=true)，`usage` 字段被错误地附加到每一个数据块 (Chunk) 中，导致客户端 (如 Cline/Roo Code) 统计的 Token 用量呈指数级虚高的问题。
+        -   **[核心优化] 开启 Linux 平台原生自动更新支持 (PR #1891)**:
+            -   **全平台覆盖**: 在 `updater.json` 中增加了对 `linux-x86_64` 和 `linux-aarch64` 平台的支持，使 Linux AppImage 用户现在也能正常收到自动更新通知。
+            -   **发布流优化**: 自动匹配并读取 Linux 版本的 `.AppImage.sig` 签名文件，实现了 macOS、Windows 与 Linux 三大主流平台的自动更新能力闭环。
+        -   **[新增功能] 跨平台一行命令安装脚本支持 (PR #1892)**:
+            -   **安装体验升级**: 新增 `install.sh` (Linux/macOS) 和 `install.ps1` (Windows) 脚本，支持通过极简的 `curl` 或 `irm` 命令实现全自动下载、安装与环境配置。
+            -   **智能适配**: 脚本支持自动识别操作系统、架构、包管理器（DEB/RPM/AppImage/DMG/NSIS），并提供版本锁定与 Dry-Run 预览模式。
+        -   **[核心优化] OpenCode 配置与本地二进制解耦及自定义网络支持 (Issue #1869)**:
+            -   **环境解耦**: 后端不再强制校验 `opencode` 二进制是否存在，允许在 Docker 等隔离环境下仅通过配置文件管理同步状态。
+            -   **自定义 BaseURL**: 前端新增 "Custom Manager BaseURL" 设置，支持手动指定 Manager 访问地址，完美解决 Docker Compose 容器互联与自定义反代场景下的连接问题。
+            -   **完全本地化**: 为新功能补全了中、英双语 I18n 支持，并修复了 OpenCode 同步弹窗的 JSX 渲染异常。
+        -   **[UI 修复] 修复 API 代理模板生成的 Python 代码缩进不一致问题 (PR #1879)**:
+            -   **显示优化**: 移除了 Python 集成示例代码块中多余的行首空格，确保从界面复制的代码可以直接运行，无需手动调整缩进。
+        -   **[核心修复] 解决 Gemini 图像生成因关键词匹配导致的 effortLevel 冲突 (PR #1873)**:
+            -   **逻辑冲突修复**: 彻底修复了 `gemini-3-pro-image` 及其 4k/2k 变体因包含 `gemini-3-pro` 关键词，被系统错误判定为支持 Adaptive Thinking 从而误注入 `effortLevel` 导致的 HTTP 400 错误。
+        -   **[文档更新] 发布 Gemini 3 Pro (Imagen 3) 图像生成全功能调用指南**:
+            -   **深度指南**: 新增 [Gemini 3 Pro 图像模型调用指南](docs/gemini-3-image-guide.md)，详细说明了宽高比自动映射、画质等级对应关系图表，以及新增的图生图 (Image-to-Image) 与后缀魔法用法。
+        -   **[安装优化] 官方 Homebrew Cask 维护与更新**:
+            -   **版本同步**: 更新 `antigravity-tools.rb` Cask 配置至 v4.1.16，确保 macOS 与 Linux 用户通过 `brew install` 始终获取最新稳定版本。
+            -   **参数清洗**: 在代理请求层增加了对图像生成模型的特殊过滤，确保不再为非思维链模型注入不兼容的生成参数。
+    *   **v4.1.15 (2026-02-11)**:
+        -   **[核心功能] 开启 macOS 与 Windows 原生自动更新支持 (PR #1850)**:
+            -   **端到端自动更新**: 启用了 Tauri 的原生更新插件，支持在应用内直接检测、下载并安装更新。
+            -   **发布工作流修复**: 彻底修复了 Release 工作流中生成更新元数据 (`updater.json`) 的逻辑。现在系统会自动根据 `.sig` 签名文件构建完整的更新索引，支持 darwin-aarch64, darwin-x86_64 以及 windows-x86_64 架构。
+            -   **体验打通**: 配合前端已有的更新提醒组件，实现了从发布到安装的全自动化闭环。
+        -   **[核心修复] 解决切换账号时由于空 Project ID 导致的 400 错误 (PR #1852)**:
+            -   **空值过滤**: 在 Proxy 层增加了对 `project_id` 的空字符串过滤逻辑。
+            -   **自动纠错**: 当检测到账号数据中的 `project_id` 为空时，现在会触发自动重新获取流程，有效解决了 Issue #1846 和 #1851 中提到的 "Invalid project resource name projects/" 错误。
+        -   **[故障排查] 针对 HTTP 404 "Resource projects/... not found" 的解决建议 (Issue #1858)**:
+            -   **验证项目 ID**: 登录 [Google Cloud Console](https://console.cloud.google.com/)，在项目选择器中搜索报错提到的 ID（如 `bold-spark-xxx`）。若项目不存在，请创建新项目并启用所需的 Vertex AI API。
+            -   **重置账户会话**: 尝试在 Antigravity 应用中“删除账户”并“重新添加”，以清除旧的会话残留。
+            -   **CLI 辅助验证**: 建议使用 Gemini CLI (`gcloud auth login`) 重新进行身份验证，并确保 `gcloud config set project` 指向了正确的有效项目。
+        -   **[故障排查] 针对 HTTP 403 "Forbidden" 错误的解决建议 (Issue #1834)**:
+            -   **检查验证链接**: 请检查 API 响应中是否包含提示 "To continue, verify your account at..." 的链接。若有，请点击该链接并按照 Google 提示完成验证。
+            -   **确认计划资格**: 访问 [FAQ 页面](https://antigravity.google/docs/faq#why-am-i-ineligible-for-a-google-one-ai-plan) 确认您的账号是否符合 Google One AI 计划或 Gemini Code Assist 的使用要求。
+            -   **自动恢复**: 部分 403 错误（如触发风险控制或配额调整）可能会在等待一段时间后自动恢复正常。
+    *   **v4.1.15 (2026-02-11)**:
+        -   **[核心修复] Cloudflared 公网访问设置持久化 (Issue #1805)**:
+            -   **设置记忆**: 修复了 Cloudflared (CF Tunnel) 的 Token、隧道模式及 HTTP/2 设置在应用重启后丢失的问题。
+            -   **热更新同步**: 实现了设置的实时持久化。现在切换隧道模式、修改 Token (失焦同步) 或切换 HTTP/2 选项时，配置都会立即保存，确保重启后恢复如初。
+        -   **[核心修复] 修复 Warmup 过程中的 403 禁用标记 (PR #1803)**:
+            -   **禁用识别**: 修复了账号在 Warmup (预热) 过程中返回 403 错误时未被标记为 `is_forbidden` 的问题。
+            -   **自动跳过**: 现在 Warmup 过程中检测到 403 将立即标记并持久化账号禁用状态，并在后续的调度、预热和配额检查中自动跳过该账号，避免无效请求。
+        -   **[UI 优化] 迷你视图 (Mini View) 状态显示与交互增强 (PR #1816)**:
+            -   **状态指示点**: 在迷你视图底部新增了请求状态圆点。成功 (200-399) 显示为绿色，失败显示为红色，直观反馈最近一次请求结果。
+            -   **模型名称回退**: 优化了模型名称显示逻辑。当 `mapped_model` 为空时，自动回退显示原始模型 ID 而非 "Unknown"，提升信息透明度。
+            -   **刷新动画优化**: 改进了刷新按钮的动画效果，使旋转动画仅作用于 `RefreshCw` 图标本身，交互更加细腻。
+        -   **[核心功能] Claude 4.6 Adaptive Thinking 模式支持**:
+            -   **Dynamic Effort**: 全面支持 `effort` 参数 (low/medium/high)，允许用户动态调整模型的思考深度与预算。
+            -   **Token 限制自适应**: 修复了 Adaptive 模式下 `maxOutputTokens` 未能正确感知 Budget 导致被截断的问题，确保长思维链不被腰斩。
+        -   **[文档更新] 新增 Adaptive 模式测试用例**:
+            -   提供了 `docs/adaptive_mode_test_examples.md`，涵盖多轮对话、复杂任务场景及 Budget 模式切换的完整验证指南。
+        -   **[核心功能] 图片生成 imageSize 参数支持**:
+            -   **直接参数支持**: 新增对 Gemini 原生 `imageSize` 参数的直接支持,可在所有协议(OpenAI/Claude/Gemini)中使用。
+            -   **参数优先级**: 实现了清晰的参数优先级逻辑:`imageSize` 参数 > `quality` 参数推断 > 模型后缀推断。
+            -   **全协议兼容**: OpenAI Chat API、Claude Messages API 和 Gemini 原生协议均支持通过 `imageSize` 字段直接指定分辨率("1K"/"2K"/"4K")。
+            -   **向后兼容**: 完全兼容现有的 `quality` 参数和模型后缀方式,不影响现有代码。
+        -   **[核心功能] Opencode 提供商隔离与清理工作流 (PR #1820)**:
+            -   **隔离同步逻辑**: 实现 Opencode 提供商的独立同步机制,防止状态污染,确保数据纯净。
+            -   **清理工作流**: 新增资源清理工作流,优化资源管理,提升系统运行效率。
+            -   **稳定性增强**: 增强了同步过程的稳定性和可靠性。
+    *   **v4.1.15 (2026-02-11)**:
+        -   **[核心功能] Homebrew Cask 安装检测与支持 (PR #1673)**:
+            -   **应用升级**: 新增了对 Homebrew Cask 安装的检测逻辑。如果应用是通过 Cask 安装的，现在可以直接在应用内触发 `brew upgrade --cask` 流程，实现无缝升级体验。
+        -   **[核心修复] Gemini 图像生成配额保护 (PR #1764)**:
+            -   **保护生效**: 修复了配额保护机制可能会错误统计文本请求的问题，并确保在绘图配额耗尽时能正确拦截 `gemini-3-pro-image` 的请求。
+        -   **[UI 优化] 修复导航栏边界与显示问题 (PR #1636)**:
+            -   **边界修复**: 修复了导航栏右侧菜单在特定窗口宽度下可能超出边界或显示不全的问题。
+            -   **兼容性**: 此次合并保留了主分支上的 Mini View 等新特性，只应用了必要的样式修正。
+        -   **[UI 优化] 修复英文模式下的布局溢出与水平滚动 (Issue #1783)**:
+            -   **全局限制**: 在全局样式中封锁了水平轴溢出，杜绝了因文字过长导致的页面横向抖动。
+            -   **响应式增强**: 优化了导航栏断点，将文字胶囊的显示阈值提高至 1120px，确保长英文标签在窄窗口下自动切换为图标模式，保持布局整洁。
+        -   **[核心修复] 修复处理复杂 JSON Schema 时可能发生的栈溢出问题 (Issue #1781)**:
+            -   **安全加固**: 为 `flatten_refs` 等深度递归逻辑引入了 `MAX_RECURSION_DEPTH` (10) 限制，有效防止了由循环引用或过深嵌套导致的程序崩溃。
+        -   **[核心修复] 修复流式输出下多个工具调用被错误拼接的问题 (Issue #1786)**:
+            -   **索引校正**: 修正了 `create_openai_sse_stream` 中 `tool_calls` 的索引分配逻辑，确保同一个 chunk 中的多个工具调用拥有独立且连续的 `index`，避免了参数被错误拼接导致解析失败的现象。
+        -   **[核心修复] 修复 Claude Thinking 模型多轮对话时的签名错误 (Issue #1790)**:
+            -   **签名注入与降级**: 在 OpenAI 协议转换层中增加了对历史消息思考块签名的自动注入逻辑。当无法获取有效签名时，自动将其降级为普通文本块，从而解决了 Claude-opus-thinking 等模型在多轮对话中因签名缺失导致的 HTTP 400 错误。
+        -   **[核心修复] 修复 Google Cloud 项目 ID 获取失败导致的 503 错误 (Issue #1794)**:
+            -   **增加兜底**: 修复了由于账号权限导致无法获取官方项目 ID 时会跳过该账号的 Bug。现在系统会自动回退到经验证稳定的通用 Project ID (`bamboo-precept-lgxtn`)，确保 API 请求的连续性。
+        -   **[i18n] 完善 Settings 与 ApiProxy 国际化支持 (PR #1789)**:
+            -   **重构**: 将 `Settings.tsx` 和 `ApiProxy.tsx` 中硬编码的中文字符串替换为 `t()` 国际化调用。
+            -   **翻译补全**: 同步更新了韩语、缅甸语、葡萄牙语、俄语、土耳其语、越南语、繁体中文和简体中文的本地化词条。
+        -   **[核心修复] 修复 IP 白名单删除失败问题 (Issue #1797)**:
+            -   **参数规范化**: 修复了由于前端与后端参数命名风格 (snake_case vs camelCase) 不一致导致无法删除白名单 IP 的问题。同时统一了黑名单管理与 IP 访问日志的相关参数，确保全系统参数传递的一致性。
+    *   **v4.1.12 (2026-02-10)**:
+        -   **[核心功能] OpenCode CLI 深度集成 (PR #1739)**:
+            -   **自动探测**: 新增了对 OpenCode CLI 的自动检测与环境变量配置同步支持。
+            -   **一键同步**: 支持通过“外部 Providers”卡片将 Antigravity 的配置无缝注入到 OpenCode CLI 环境，实现零配置接入。
+        -   **[核心修复] Claude Opus 思考预算自动注入 (PR #1747)**:
+            -   **预算修正**: 修复了 Opus 模型在自动启用思考模式时，未能正确注入默认思考预算 (Thinking Budget) 的问题，防止因预算缺失导致的上游错误。
+        -   **[核心优化] Claude Opus 4.6 Thinking 全面升级 (Issue #1741, #1742, #1743)**:
+            -   **模型迭代**: 正式引入 `claude-opus-4-6-thinking` 支持，提供更强大的推理能力。
+            -   **无感迁移**: 实现了从 `claude-opus-4.5` / `claude-opus-4` 到 `4.6` 的自动重定向，旧版配置无需修改即可直接享受新模型。
+        -   **[核心修复] 账户索引自动修复机制 (PR #1755)**:
+            -   **容错增强**: 修复了在部分极端情况下（如文件损坏）账户索引无法自动重建的问题。现在系统会在检测到索引异常时自动触发自我修复流程，确保账号数据安全可用。
+        -   **[核心修复] 修复 IP 黑名单删除与时区问题 (PR #1748)**:
+            -   **参数修正**: 修复了 IP 黑名单删除接口因参数命名风格 (snake_case vs camelCase) 不匹配导致的删除失败问题。
+            -   **逻辑修复**: 修正了清除黑名单时传递了错误参数 (ip_pattern 而非 id) 的问题。
+            -   **时区校准**: 修复了宵禁时间 (Curfew) 判断逻辑，强制使用北京时间 (UTC+8)，解决了服务器本地时区非 UTC+8 时的判断偏差。
+            -   **拒绝对齐**: 优化了令牌拒绝响应，返回 403 状态码及 JSON 错误详情，对齐了统一错误响应标准。
+        -   **[核心功能] 新增迷你视图模式 (Mini View Mode) (PR #1750)**:
+            -   **便捷访问**: 新增迷你窗口模式，支持双向切换。该模式常驻桌面顶层，提供精简的快捷操作入口，方便用户即时查看状态与监控信息。
+        -   **[核心修复] Gemini 协议 400 错误自愈 (PR #1756)**:
+            -   **Token 补全**: 修复了在 Gemini 原生协议下调用持续思考模型（如 Claude Opus 4.6 Thinking）时，因 `maxOutputTokens` 小于 `thinkingBudget` 导致的 400 报错。现在系统会自动补全并对齐 Token 限制，确保请求合规。
+        -   **[核心修复] 修复 macOS 下 bun 全局安装的路径识别 (PR #1765)**:
+            -   **路径增强**: 新增对 `~/.bun/bin` 及全局安装路径的探测，解决了 bun 用户无法自动同步 Claude CLI 配置的问题。
+        -   **[核心优化] 修复 Logo 文本在小容器下的换行与显示 (PR #1766)**:
+            -   **显示优化**: 使用 Tailwind CSS 容器查询逻辑优化了 Logo 文本的显示与隐藏切换，防止在容器空间不足时发生文字换行。
+        -   **[核心修复] Google Cloud Code API 404 重试与账号轮换 (PR #1775)**:
+            -   **智能重试**: 针对 Google Cloud Code API 返回的 404 错误（常见于分阶段发布或权限差异场景），新增自动重试与账号轮换机制。系统将以 300ms 短延迟进行重试，并自动切换到下一个可用账号。
+            -   **短周期避让**: 对 404 错误实施 5 秒软锁定（区别于其他服务端错误的 8 秒），在保护账号的同时最大程度减少用户等待时间。
+    *   **v4.1.11 (2026-02-09)**:
+        -   **[核心优化] 重构 Token 轮询逻辑 (High-End Model Routing Optimization)**:
+            -   **能力硬门槛**: 针对 `claude-opus-4-6` 等高端模型实施了严格的 Capability Filtering。系统现在会检查账号实际持有的 `model_quotas`，只有明确拥有目标模型配额的账号才能参与轮询，彻底解决了 Pro/Free 账号因 "Soft Priority" 而被错误选中的问题。
+            -   **严格层级优先**: 确立了 `Ultra > Pro > Free` 的绝对优先级排序策略。只要 Ultra 账号可用，系统将始终优先调度 Ultra 账号，防止降级到 Pro 账号，确保了高端模型的服务质量。
+            -   **[配置警告]**: 请检查 `设置 -> 自定义模型映射` 或 `gui_config.json`，确保**没有**配置 `"claude-opus-4-*": "claude-opus-4-5-thinking"` 这样的通配符，否则会导致 `claude-opus-4-6-thinking` 被错误映射到 `claude-opus-4-5-thinking`。建议为 `claude-opus-4-6-thinking` 添加明确的精确映射。
+        -   **[核心修复] 修复配置热重载失效问题 (PR #1713)**:
+            -   **即时生效**: 修复了在 WebUI 或 Docker 环境下保存配置时，内存中的代理池配置未同步更新的问题。现在修改配置后无需重启即可立即生效。
+        -   **[Docker 优化] 新增本地绑定限制选项**:
+            -   **网络安全**: 新增 `ABV_BIND_LOCAL_ONLY` 环境变量。当设置为 `true` 时，Docker/Headless 模式将仅绑定 `127.0.0.1`，不再默认向 `0.0.0.0` 暴露服务，满足特定安全网络需求。
+        -   **[核心功能] 用户 Token 支持自定义过期时间 (PR #1722)**:
+            -   **灵活控制**: 创建用户 Token 时现在支持选择精确到分钟的自定义过期时间，不再局限于预设的固定时长。
+        -   **[核心修复] Token 编辑数据同步与参数封装 (PR #1720, #1722)**:
+            -   **数据同步**: 修复了编辑 Token 时部分字段数据未正确回显的问题。
+            -   **代码重构**: 优化了 Token 创建与更新的参数传递结构，提升了代码的可维护性。
+        -   **[核心修复] 修复代理认证信息持久化失效问题 (Issue #1738)**:
+            -   **魔术前缀机制**: 引入 `ag_enc_` 前缀来明确标识已加密的密码字段。
+            -   **双重加密防护**: 彻底解决了后端无法区分“用户输入的明文”与“已加密的密文”，导致在多次保存或导入导出时发生双重加密（Double Encryption）的问题。
+            -   **兼容性**: 完美兼容旧版配置（无前缀），并在下次保存时自动迁移到新格式。同时增强了批量导入功能的健壮性。
+        -   **[核心修复] 解决用户创建/加载失败问题 (Issue #1719)**:
+            -   **数据清洗**: 在数据库初始化阶段增加了针对旧数据的清洗逻辑，自动将 NULL 值重置为默认值，修复了因字段缺失导致的列表接口崩溃。
+            -   **鲁棒性增强**: 优化了后端数据读取逻辑，为关键字段增加了防御性默认值处理。
+        -   **[前端修复] 修复用户 Token 续期功能失效**:
+            -   **参数修正**: 修正了续期接口调用时的参数命名风格 (snake_case -> camelCase)，解决了 "missing required key" 报错。
+        -   **[核心修复] 彻底解决 Google Cloud 项目 404 错误 (Issue #1736)**:
+            -   **移除无效 Mock 逻辑**: 彻底删除了随机生成 Project ID 的失效逻辑（如 `useful-flow-g3dts`），此类 ID 目前会被 Google API 拦截并返回 404。
+            -   **智能兜底策略**: 现在当账号无法自动获取项目 ID 时，系统会安全回退到经验证长期有效的稳定 Project ID `bamboo-precept-lgxtn`，确保 API 请求的连续性与稳定性。
+        -   **[核心修复] 增强网络环境下的流式传输稳定性 (Issue #1732)**:
+            -   **强制缓冲区冲刷 (Flush)**: 解决了在不稳定网络环境下，SSE 流因缺少末尾换行符而导致的对话挂起及 "IO 为 0" 问题。
+            -   **超时容错增强**: 将流式响应超时时间延长至 60s，有效对抗高延迟网络引发的异常中断。
+            -   **Session ID 稳定性优化**: 改进了会话标识生成算法，防止网络重连后的 ID 漂移及其引发的思维模型签名失效。
+    *   **v4.1.10 (2026-02-08)**:
+        -   **[核心功能] 扩展 CLI 探测路径以支持 Volta (PR #1695)**:
+            -   **路径增强**：在 `cli_sync` 和 `opencode_sync` 中新增了对 `.volta/bin` 及其内部二进制文件的自动探测支持，确保 Volta 用户在同步 CLI 配置时能够获得“零配置”的顺滑体验。
+        -   **[核心修复] 图像生成分辨率智能保护 (Issue #1694)**:
+            -   **逻辑保护**：重构了图像配置合并算法，优先保留模型名后缀（如 `-4k`, `-2k`）或显式参数（`quality: "hd"`）指定的高分辨率设置，防止由于请求体中的默认值导致的分辨率降级。
+            -   **能力增强**：支持在生成高分辨率图像的同时，完整保留并回显思维链（Thinking）内容。
+        -   **[核心功能] 高级思维与全局配置深度优化**:
+            -   **图像思维开关**：新增全局“图像思维模式”选项。启用时可获得双图（草图+终稿）及思维链；禁用时系统显式强制注入 `includeThoughts: false`，优先保证单图生成质量。
+            -   **UI 重构**：对“高级思维”模块进行了空间压缩，采用行式布局和紧凑控件，将垂直空间占用减少了 50%，极大提升了配置效率。
+            -   **全局提示词优化**：增强了输入框体验，添加了实时字符计数与超长警告。
+        -   **[i18n] 全球 10+ 语言同步更新**:
+            -   **多语言补全**：为高级思维模块补全了繁体中文、日语、韩语、阿拉伯语、西班牙语、俄语、越南语、土耳其语、葡萄牙语和缅甸语的完整翻译，确保全球体验一致。
+        -   **[核心修复] 全协议接口兼容性补全**:
+            -   **全渠道覆盖**：图像思维控制逻辑已同步覆盖 Gemini 原生协议、OpenAI 兼容协议以及 Claude (Anthropic) 协议。
+            -   **测试稳定性**：修复了后端单元测试中的全局状态竞争问题，并更新了 GitHub Release CI 脚本以支持发布覆盖。
+        -   **[核心修复] 账号代理绑定持久化与配额保护可靠性提升 (Issue #1700)**:
+            -   **绑定持久化**：修复了前端设置保存时因类型定义缺失导致 `account_bindings` 被覆盖的问题，确保绑定关系跨重启有效。
+            -   **保护增强**：增强了模型名归一化引擎以识别实际 API 模型名，并完善了触发保护后的内存同步与调度过滤逻辑，彻底消除保护逃逸。
+        -   **[核心功能] 优化全球上游代理 I18n 与样式 (Issue #1701)**:
+            -   **I18n 同步**：补全了全部 12 种支持语言的代理配置词条，解决 `zh.json` 内容缺失及各语言翻译不统一问题。
+            -   **样式优化**：重构了全球代理配置卡片，引入渐变背景与微动画，使其在视觉上与代理池设置保持一致。
+            -   **SOCKS5H 支持**：在界面增加了 `socks5h://` 协议建议提示，并统一了后端代理 URL 标准化逻辑，显著增强了远程 DNS 解析的引导。
+    *   **v4.1.9 (2026-02-08)**:
+        -   **[核心功能] 扩展 CLI 配置快速同步支持 (PR #1680, #1685)**:
+            -   **更多工具集成**: 现已支持同步配置到 **Claude Code**, **Gemini CLI**, **Codex AI**, **OpenCode** 以及 **Droid**。
+            -   **模型选择定制**: 为单模型 CLI (Claude, Codex, Gemini) 增加了模型选择下拉框，支持同步自定义模型 ID；为多模型 CLI (OpenCode, Droid) 实现了拖拽式模型列表管理。
+            -   **逻辑校准**: 深度适配了各 CLI 的预设逻辑（如 Claude 根节点的 `model` 字段及镜像环境清理），确保同步后的兼容性。
+            -   **交互优化**: 同步面板现支持默认折叠并适配平滑动画，同时优化了同步前后的 UI 状态反馈。
+            -   **备份安全性**: 同步前自动生成 `.antigravity.bak` 备份，支持一键还原。
+        -   **[核心功能] 新增全局系统提示词 (Global System Prompt) 支持 (PR #1669)**:
+            -   **统一指令注入**: 在“系统设置”中新增全局系统提示词配置，支持将自定义指令自动注入到所有 OpenAI、Claude 和 Gemini 协议请求中。
+            -   **前端界面**: 新增 `GlobalSystemPrompt` 组件，支持一键启用及多行内容编辑。
+        -   **[核心修复] 修复浮点数序列化精度丢失问题 (PR #1669)**:
+            -   **精度升级**: 将后端 `temperature` 和 `top_p` 的数据类型从 `f32` 升级为 `f64`。
+            -   **逻辑校准**: 解决了请求参数在反代过程中因浮点转换导致的微小偏差（如 `0.95` 变成 `0.949999...`），显著提升了上游调用的稳定性。
+        -   **[核心重构] 实现应用名称国际化 (PR #1662)**:
+            -   **UI 升级**: 移除了 `NavLogo` 和 `Settings` 页面中硬编码的 "Antigravity Tools"，全面采用 `app_name` 翻译键，确保 UI 语言切换的一致性。
+        -   **[核心修复] 修正 gemini-3-pro-image 因关键词匹配被误判定为思维模型的问题 (Issue #1675)**:
+            -   **问题根源**: `gemini-3-pro-image` 及其 4k/2k 变体因包含 `gemini-3-pro` 关键词，被系统错误判定为“思维模型”（Thinking Model）。
+            -   **冲突修复**: 修正了误注入 `thinkingConfig` 与图像生成 `imageConfig` 发生的冲突，解决了导致后端分辨率降级（降至 1k）的问题。
+            -   **Token 优化**: 解决了因思维模型逻辑注入占位符或特定限制而触发的“Token 超限（131072）” 400 错误。
+        -   **[国际化] 日语翻译实现 100% 同步 (PR #1662)**:
+            -   **翻译补全**: 同步了 `en.json` 中的所有缺失键值，涵盖了 Cloudflared、断路器、OpenCode 同步等新功能。
+        -   **[核心重构] 重构 UpstreamClient 响应处理逻辑**:
+            -   **结构化响应**: 引入 `UpstreamCallResult` 统一管理上游请求结果，优化了流式与非流式响应的处理路径。
+    *   **v4.1.8 (2026-02-07)**:
+        -   **[核心功能] 集成 Claude Opus 4.6 Thinking 模型支持 (PR #1641)**:
+            -   **混合模式架构**: 实现了“静态配置 + 动态获取”的双模架构。模型列表通过 Antigravity API 动态拉取，而 Thinking 模式等高级元数据则由本地注册表静态补充，完美平衡了灵活性与稳定性。
+            -   **零配置接入**: `claude-opus-4-6` 系列模型自动启用 Thinking 模式并预设 Budget，无需用户手动干预即可享受最新推理能力。
+            -   **前沿模型映射**: 新增 `claude-opus-4-6-thinking` 及其别名 (`claude-opus-4-6`, `20260201`) 的支持，并将其归入 `claude-sonnet-4.5` 配额组进行统筹管理。
+        -   **[核心优化] 优化 OpenCode CLI 检测逻辑 (PR #1649)**:
+            -   **路径扩展**: 增加了对 Windows 环境下常见全局安装路径（如 `npm`, `pnpm`, `Yarn`, `NVM`, `FNM` 等）的自动扫描。
+            -   **稳定性增强**: 修复了在 `PATH` 环境不完整时可能导致检测失败的问题，并增强了对 `.cmd` 和 `.bat` 文件的支持。
+        -   **[核心修复] 修复监控日志缺失流式工具调用内容的问题**:
+            -   **多协议支持**: 重构了 SSE 解析逻辑，全面支持 OpenAI `tool_calls` 和 Claude `tool_use`。
+            -   **增量累积**: 实现了工具参数片段的流式累积，确保长参数工具调用能被完整记录并显示在监控面板中。
+        -   **[UI 优化] 导航栏与链接交互优化 (PR #1648)**:
+            -   **禁止拖拽**: 为导航栏及 Logo 等所有链接和图片添加了 `draggable="false"`，防止用户在意外拖拽时触发浏览器的默认行为，提升交互稳定性。
+            -   **SmartWarmup 悬停增强**: 优化了智能预热组件图标在未激活状态下的悬停颜色切换逻辑，使界面反馈更加细腻一致。
+        -   **[核心功能] 账号自定义标签支持扩展 (PR #1620)**:
+            -   **长度限制**: 将标签长度限制从 20 字符优化为 15 字符，在前后端同步生效。
+            -   **后端验证**: 增强了后端 Rust 命令的验证逻辑，支持 Unicode 字符计数，并优化了错误处理。
+            -   **前端对齐**: 账户列表和卡片视图的编辑框均已同步 15 字符的最大长度。
+        -   **[核心修复] 修复 UserToken 页面剪贴板错误 (PR #1639)**:
+            -   **逻辑修复**: 修复了在 UserToken 页面尝试访问或写入剪贴板时可能触发的异常。
+            -   **体验优化**: 提高了剪贴板交互的鲁棒性，确保在各种环境下都能正常工作。
+        -   **[核心优化] 优化 Token 排序性能并减少磁盘 I/O (PR #1627)**:
+            -   **内存配额缓存**: 将模型配额信息引入内存，在 `get_token` 排序 hot path 中直接使用缓存。
+            -   **性能提升**: 消除了排序过程中由于频繁读取磁盘文件（`std::fs::read_to_string`）导致的同步 I/O 阻塞，显著降低了高并发下的请求推迟与延迟。
+        -   **[国际化] 修复自定义标签功能缺失的翻译 (PR #1630)**:
+            -   **翻译补全**: 补全了繁体中文等语种中“编辑标签”、“自定义标签占位符”以及“标签更新成功”提示的国际化翻译。
+        -   **[UI 修复] 修复 SmartWarmup 图标悬停效果缺失 (PR #1568)**:
+            -   **增加交互**: 为未启用状态的图标添加了悬停变色效果，与其他设置项保持一致。
+        -   **[核心修复] 修复 OpenAI 协议下 Vertex AI 思考模型签名缺失问题 (Issue #1650)**:
+            -   **Sentinel 注入**: 移除了对 Vertex AI (`projects/...`) 模型的哨兵签名注入限制。现在即使缺少真实签名，系统也会自动注入 `skip_thought_signature_validator`，从而避免 `Field required for thinking signature` 错误。
+    *   **v4.1.7 (2026-02-06)**:
+        -   **[核心修复] 修复图像生成 API (429/500/503) 自动切换账号问题 (Issue #1622)**:
+            -   **自动重试**: 为 `images/generations` 和 `images/edits` 引入了与 Chat API 一致的自动重试与账号轮换机制。
+            -   **体验一致性**: 确保在某个账号配额耗尽或服务不可用时，请求能自动故障转移到下一个可用账号，不再直接失败。
+        -   **[核心功能] 新增账户自定义标签支持 (PR #1620)**:
+            -   **标签管理**: 支持为每个账户设置个性化标签，方便在多账户环境下快速识别。
+            -   **交互优化**: 账户列表和卡片视图均支持直接查看和内联编辑标签。
+            -   **多语言支持**: 完整适配中、英双语显示。
+        -   **[核心修复] 修复数据库为空时 `get_stats` 返回 NULL 导致崩溃的问题 (PR #1578)**:
+            -   **NULL 值处理**: 在 SQL 查询中使用 `COALESCE(SUM(...), 0)` 确保在没有日志记录时依然返回数值，解决了 `rusqlite` 无法将 `NULL` 转换为 `u64` 的问题。
+            -   **性能保留**: 保留了本地分支中通过单次查询获取多项统计数据的性能优化逻辑。
+
+        -   **[核心修复] Claude 403 错误处理与账号轮换优化 (PR #1616)**:
+            -   **403 状态映射**: 将 403 (Forbidden) 错误映射为 503 (Service Unavailable)，防止客户端（如 Claude Code）因检测到 403 而自动登出。
+            -   **自动禁用逻辑**: 检测到 403 错误时自动将账号标记为 `is_forbidden` 并从活跃池中移除，避免该账号在接下来的请求中被继续选中。
+            -   **临时风控识别**: 识别 `VALIDATION_REQUIRED` 错误，并对相关账号执行 10 分钟的临时阻断。
+            -   **轮换稳定性**: 修复了在账号额度耗尽 (QUOTA_EXHAUSTED) 时的过早返回问题，确保系统能正确尝试轮换到下一个可用账号。
+        -   **[核心功能] OpenCode CLI 配置同步集成 (PR #1614)**:
+            -   **一键同步**: 自动生成 `~/.config/opencode/opencode.json`，支持 Anthropic 和 Google 双 Provider 自动配置。
+            -   **账号导出**: 可选同步账号列表至 `antigravity-accounts.json`，供 OpenCode 插件直接导入。
+            -   **备份与还原**: 同步前自动备份原有配置，支持一键还原。
+            -   **跨平台支持**: 统一适配 Windows、macOS 和 Linux 环境。
+            -   **体验优化**: 修复了 RPC 参数包装问题，补全了多语言翻译，并优化了配置文件不存在时的视图状态。
+        -   **[核心功能] 允许隐藏未使用的菜单项 (PR #1610)**:
+            -   **可见性控制**: 在设置页面新增“菜单项显示设置”，允许用户自定义侧边栏显示的导航项。
+            -   **界面美化**: 为极简用户提供更清爽的界面，隐藏不常用的功能入口。
+
+        -   **[核心修复] Gemini 原生协议图像生成完全修复 (Issue #1573, #1625)**:
+            -   **400 错误修复**: 修复了 Gemini 原生协议生成图片时，因请求体 `contents` 数组缺失 `role: "user"` 字段导致的 `INVALID_ARGUMENT` 错误。
+            -   **参数透传支持**: 确保 `generationConfig.imageConfig` (如 `aspectRatio`, `imageSize`) 能正确透传给上游，不再被错误过滤。
+            -   **错误码优化**: 优化了图像生成服务的错误映射，确保 429/503 等状态码能正确触发客户端的重试机制。
+        -   **[核心增强] 自定义映射支持手动输入任意模型 ID**:
+            -   **灵活输入**: 在自定义映射的目标模型选择器中新增手动输入功能，用户现在可以在下拉菜单底部直接输入任意模型 ID。
+            -   **未发布模型体验**: 支持体验 Antigravity 尚未正式发布的模型，例如 `claude-opus-4-6`。用户可以通过自定义映射将请求路由到这些实验性模型。
+            -   **重要提示**: 并非所有账号都支持调用未发布的模型。如果您的账号无权访问某个模型，请求可能会返回错误。建议先在少量请求中测试，确认账号权限后再大规模使用。
+            -   **快捷操作**: 支持 Enter 键快速提交自定义模型 ID，提升输入效率。
+    *   **v4.1.6 (2026-02-06)**:
+        -   **[核心修复] 深度重构 Claude/Gemini 思考模型中断与工具循环自愈逻辑 (#1575)**:
+            -   **思考异常恢复**: 引入了 `thinking_recovery` 机制。当检测到历史消息中包含陈旧思考块或陷入状态循环时，自动进行剥离与引导，提升了在复杂工具调用场景下的稳定性。
+            -   **解决签名绑定错误**: 修正了误将缓存签名注入客户端自定义思考内容的逻辑。由于签名与文本强绑定，此举解决了会话中断或重置后常见的 `Invalid signature` (HTTP 400) 报错。
+            -   **会话级完全隔离**: 删除了全局签名单例，确保所有思维签名严格在 Session 级别隔离，杜绝了多账号、多会话并发时的签名污染。
+        -   **[修复] 解决 Gemini 系列由于 `thinking_budget` 越界导致的 HTTP 400 错误 (#1592, #1602)**:
+            -   **全协议路径硬截断**: 修复了 OpenAI 和 Claude 协议映射器在「自定义模式」下缺失限额保护的问题。现在无论选择何种模式（自动/自定义/透传），只要目标模型为 Gemini，后端都会强制执行 24576 的物理上限保护。
+            -   **自动适配与前端同步**: 重构了协议转换逻辑，使其基于最终映射的模型型号进行动态限额；同步更新了设置界面的提示文案，明确了 Gemini 协议的物理限制。
+        -   **[核心修复] Web Mode 登录验证修复 & 登出按钮 (PR #1603)**:
+            -   **登录验证**: 修复了 Web 模式下登录验证逻辑的异常，确保用户身份验证的稳定性。
+            -   **登出功能**: 在界面中新增/修复了登出按钮，完善了 Web 模式下的账户管理闭环。
+    <details>
+    <summary>显示旧版本日志 (v4.1.5 及更早)</summary>
+
+    *   **v4.1.5 (2026-02-05)**:
+        -   **[安全修复] 前端 API Key 存储迁移 (LocalStorage -> SessionStorage)**:
+            -   **存储机制升级**: 将 Admin API Key 的存储位置从持久化的 `localStorage` 迁移至会话级的 `sessionStorage`，显著降低了在公共设备上的安全风险。
+            -   **自动无感迁移**: 实现了自动检测与迁移逻辑。系统会识别旧的 `localStorage` 密钥，将其自动转移到 `sessionStorage` 并彻底清除旧数据，确保现有用户无缝过渡且消除安全隐患。
+        -   **[核心修复] 修复 Docker 环境下添加账号失败问题 (Issue #1583)**:
+            -   **账号上下文修复**: 修复了在添加新账号时 `account_id` 为 `None` 导致代理选择异常的问题。现在系统会为新账号生成临时 UUID,确保所有 OAuth 请求都有明确的账号上下文。
+            -   **日志增强**: 优化了 `refresh_access_token` 和 `get_effective_client` 的日志记录,提供更详细的代理选择信息,帮助诊断 Docker 环境下的网络问题。
+            -   **影响范围**: 修复了 Docker 部署环境下通过 Refresh Token 添加账号时可能出现的长时间挂起或失败问题。
+        -   **[核心修复] Web Mode 兼容性修复 & 403 账号轮换优化 (PR #1585)**:
+            -   **Security API Web Mode 兼容性修复 (Issue: 400/422 错误)**:
+                -   为 `IpAccessLogQuery` 添加 `page` 和 `page_size` 的默认值,解决 `/api/security/logs` 返回 400 Bad Request 的问题
+                -   移除 `AddBlacklistWrapper` 和 `AddWhitelistWrapper` 结构体,解决 `/api/security/blacklist` 和 `/api/security/whitelist` POST 返回 422 Unprocessable Content 的问题
+                -   前端组件参数名修正:`ipPattern` → `ip_pattern`,确保与后端 API 参数一致
+            -   **403 账号轮换优化 (Issue: 403 后未正确跳过账号)**:
+                -   在 `token_manager.rs` 中添加 `set_forbidden` 方法,支持标记账号为禁用状态
+                -   账号选择时检查 `quota.is_forbidden` 状态,自动跳过被禁用的账号
+                -   403 时清除该账号的 sticky session 绑定,确保立即切换到其他可用账号
+            -   **Web Mode 请求处理优化**:
+                -   `request.ts` 修复路径参数替换后从 body 中移除已使用的参数,避免重复传参
+                -   支持 PATCH 方法的 body 处理,补全 HTTP 方法支持
+                -   自动解包 `request` 字段,简化请求结构
+            -   **Debug Console Web Mode 支持**:
+                -   `useDebugConsole.ts` 添加 `isTauri` 环境检测,区分 Tauri 和 Web 环境
+                -   Web 模式下使用 `request()` 替代 `invoke()`,确保 Web 环境下的正常调用
+                -   添加轮询机制,Web 模式下每 2 秒自动刷新日志
+            -   **Docker 构建优化**:
+                -   添加 `--legacy-peer-deps` 标志,解决前端依赖冲突
+                -   启用 BuildKit 缓存加速 Cargo 构建,提升构建速度
+                -   补全 `@lobehub/icons` peer dependencies,修复前端依赖缺失导致的构建失败
+            -   **影响范围**: 此更新显著提升了 Docker/Web 模式下的稳定性和可用性,解决了 Security API 报错、403 账号轮换失效、Debug Console 不可用等问题,同时优化了 Docker 构建流程。
+        -   **[核心修复] 修复 Web/Docker 模式下调试控制台崩溃与日志同步问题 (Issue #1574)**:
+            -   **Web 兼容性**: 修复了在非 Tauri 环境下直接调用原生 `invoke` API 导致的 `TypeError` 崩溃。现在通过兼容性请求层进行后端通信。
+            -   **指纹绑定修复**: 修复了生成指纹并绑定时,由于前后端参数结构不匹配导致的 `HTTP Error 422` 报错。通过调整后端包装类,使其兼容前端嵌套的 `profile` 对象。
+            -   **日志轮询机制**: 为 Web 模式引入了自动日志轮询功能(2秒/次),解决了浏览器端无法接收 Rust 后端事件推送导致调试日志为空的问题。
+        -   **[核心优化] 补全 Tauri 命令的 HTTP API 映射**:
+            -   **全量适配**: 对齐了 30+ 个原生 Tauri 命令,为缓存管理(清理日志/应用缓存)、系统路径获取、代理池配置、用户令牌管理等核心功能补全了 HTTP 映射,确保 Web/Docker 版本的功能完整性。
+        -   **[安全修复] 任意文件读写漏洞加固**:
+            -   **API 安全层**: 彻底移除了高危接口 `/api/system/save-file` 及其关联函数,并在数据库导入接口中增加了路径遍历防范 (`..` 校验)。
+            -   **Tauri 安全增强**: 为 `save_text_file` 和 `read_text_file` 命令引入了统一的路径校验器,严禁目录遍历并封堵了系统敏感目录的访问权限。
+    *   **v4.1.4 (2026-02-05)**:
+        -   **[核心功能] 代理池持久化与账号筛选优化 (PR #1565)**:
+            -   **持久化增强**: 修复了代理池绑定在反代服务重启或重载时无法正确恢复的问题，确保绑定关系严格持久化。
+            -   **智能筛选**: 优化了 `TokenManager` 的账号获取逻辑,在全量加载、同步以及调度路径中增加了对 `disabled` 和 `proxy_disabled` 状态的深度校验，彻底杜绝已禁用账号被误选的问题。
+            -   **验证阻止支持**: 引入了 `validation_blocked` 字段体系，专门处理 Google 的 `VALIDATION_REQUIRED` (403 临时风控) 场景，实现了基于截止时间的智能自动绕过。
+            -   **状态清理加固**: 账号失效时同步清理内存令牌、限流记录、会话绑定及优先账号标志，保证内部状态机的一致性。
+        -   **[核心修复] 修复 Web/Docker 模式下的关键兼容性问题 (Issue #1574)**:
+            -   **调试模式修复**: 修正了前端调试控制台 URL 映射错误（移除多余的 `/proxy` 路径），解决了 Web 模式下调试模式无法开启的问题。
+            -   **指纹绑定修复**: 为 `admin_bind_device_profile_with_profile` 接口增加了 `BindDeviceProfileWrapper` 结构，修复了前端发送嵌套参数导致的 HTTP 422 错误。
+            -   **向后兼容性**: 使用 `serde alias` 功能在 API 层同时支持 camelCase（前端）和 snake_case（后端文件），确保旧账号文件正常加载。
+        -   **[代码优化] 简化 API 处理结构**:
+            -   移除了多个管理 API 路由（如 IP 黑白名单管理、安全设置更新等）中的冗余包装层 (`Wrapper`)，直接解构业务模型，提升了代码的简洁性与开发效率。
+        -   **[核心修复] 解决 OpenCode 调用 Thinking 模型中断问题 (Issue #1575)**:
+            -   **finish_reason 强制修正**: 修复了工具调用时 `finish_reason` 被错误设置为 `stop` 导致 OpenAI 客户端提前终止对话的问题。现在系统会强制将有工具调用的响应 `finish_reason` 设置为 `tool_calls`，确保工具循环正常运行。
+            -   **工具参数标准化**: 实现了 shell 工具参数名称的自动标准化，将 Gemini 可能生成的 `cmd`/`code`/`script` 等非标准参数名统一转换为 `command`，提升了工具调用的兼容性。
+            -   **影响范围**: 修复了 OpenAI 协议下 Thinking 模型（如 `claude-sonnet-4-5-thinking`）的工具调用流程，解决了 OpenCode 等客户端的中断问题。
+
+    *   **v4.1.3 (2026-02-05)**:
+        -   **[核心修复] 解决 Web/Docker 模式下安全配置与 IP 管理失效问题 (Issue #1560)**:
+            -   **协议对齐**: 修复了后端 Axum 接口无法解析前端 `invoke` 封装的嵌套参数格式（如 `{"config": ...}`）的问题，确保安全配置能正确持久化。
+            -   **参数规范化**: 为 IP 管理相关接口添加了 `camelCase` 重命名支持，解决了 Web 端 Query 参数大小写不匹配导致的添加失败与删除失效。
+        -   **[核心修复] 恢复 Gemini Pro 思考块输出 (Issue #1557)**:
+            -   **跨协议对齐**: 修复了自 v4.1.0 以来 `gemini-3-pro` 等模型在 OpenAI、Claude 和 Gemini 原生协议下思考块缺失的问题。
+            -   **智能注入逻辑**: 实现了 `thinkingConfig` 的自动注入与默认开启机制，确保即使客户端未发送配置，模型也能正确激活思考能力。
+            -   **鲁棒性增强**: 优化了 `wrapper.rs` 内部类型处理，解析并解决了高并发场景下的配置冲突。
+    *   **v4.1.2 (2026-02-05)**:
+        -   **[核心功能] 多协议客户端适配器 (ClientAdapter Framework) (Issue #1522)**:
+            -   **架构重构**: 引入 `ClientAdapter` 框架并应用 `Arc` 引用计数，实现了 Handler 层与下游客户端逻辑的完全解耦，支持更安全的跨线程共享。
+            -   **全协议兼容**: 针对 `opencode` 等第三方客户端，实现了 **4 种协议**（Claude/OpenAI/Gemini/OA-Compatible）的无缝接入，彻底解决了 `AI_TypeValidationError` 报错。
+            -   **智能策略**: 实现了 FIFO 签名缓存策略与 `let_it_crash` 快速失败机制，显著提升了高并发场景下的稳定性和错误反馈速度。
+            -   **标准化错误响应**: 强制统一所有协议的错误返回格式（流式 SSE `event: error` / 非流式 JSON），确保客户端能正确解析上游异常。
+        -   **[核心修复] 统一账号禁用状态检查逻辑 (Issue #1512)**:
+            -   **逻辑对齐**: 修复了批量刷新配额及自动预热逻辑中遗漏手动禁用状态 (`proxy_disabled`) 的问题。
+            -   **后台降噪**: 确保标记为“禁用”或“禁用代理”的账号不再触发任何后台网络请求，提升了系统的隐私性与资源效率。
+        -   **[核心修复] 解决 OpenAI 协议路径下 Invalid signature 导致的 400 错误 (Issue #1506)**:
+            -   **Session 级签名隔离**: 引入了 `SignatureCache` 机制，通过 `session_id` 物理隔离不同会话的思维签名存储，彻底杜绝多轮对话或并发请求导致的签名污染。
+            -   **鲁棒性增强**: 增加了对思维链占位符（如 `[undefined]`）的识别与自动清洗逻辑，提升了对不同客户端（如 Cherry Studio）的兼容性。
+            -   **全路径透传**: 重构了请求转换与流式处理链路，确保 Session 上下文在非流式和流式请求中均能精准传导。
+        -   **[UI 增强] 新增模型图标支持与自动排序功能 (PR #1535)**:
+            -   **视觉呈现**: 引入 `@lobehub/icons` 图标库，在账号卡片、表格及详情页中展示不同模型的 brand 图标，视觉体验更佳。
+            -   **智能排序**: 实现了基于权重的模型自动排序逻辑（系列 > 级别 > 后缀），优先展示最常用的高级模型（如 Gemini 3 Pro）。
+            -   **配置中心化**: 构建了统一的模型元数据配置系统，将模型标签、短名称、图标与权重解耦，提升系统扩展性。
+            -   **国际化同步**: 同步补全了 13 种常用语言的模型显示名称。
+        -   **[核心修复] 增强账号禁用状态与磁盘状态实时校验 (PR #1546)**:
+            -   **磁盘深度校验**: 引入了 `get_account_state_on_disk` 机制，在获取 Token 的关键路径增加磁盘状态二次确认，彻底解决内存缓存延迟导致的禁用账号误选问题。
+            -   **固定账号智能同步**: 优化了 `toggle_proxy_status` 指令，禁用账号时会自动检查并关闭对应的固定账号模式，并立即触发代理池重载。
+            -   **授权失效自愈**: 当后端检测到 `invalid_grant` 错误并自动禁用账号时，现在会物理清理内存中的 Token、限流记录和会话绑定，确保故障账号即刻下线。
+            -   **全链路过滤适配**: 补全了预热逻辑 (`Warmup`) 与定时调度器 (`Scheduler`) 的禁用状态检查，大幅减少无效的后台网络请求。
+        -   **[核心优化] 代理池健康检查并发化 (PR #1547)**:
+            -   **性能提升**: 引入了基于 `futures` 流的并发执行机制，将顺序检查重构为并发处理（并发上限 20）。
+            -   **效率增强**: 显著缩短了大型代理池的健康检查总时长，提升了系统对代理状态变更的响应速度。
+        -   **[核心修复] 解决 Docker/HTTP 环境下 crypto.randomUUID 兼容性问题 (Issue #1548)**:
+            -   **问题修复**: 修复了在非安全上下文（如 HTTP 或部分 Docker 环境）中，因浏览器禁用 `crypto.randomUUID` API 导致的应用崩溃（"Unexpected Application Error"）及批量导入失败问题。
+            -   **兼容性增强**: 引入了全平台兼容的 UUID 生成回退机制，确保在任何部署环境下 ID 生成的稳定性。
+    *   **v4.1.1 (2026-02-04)**:
+        -   **[核心修复] 解决 User Tokens 页面在 Web/Docker 环境下加载失败问题 (Issue #1525)**:
+            -   **API 同步**: 补全了前端 `request.ts` 的命令映射，并新增对 `PATCH` 方法的支持，解决了 Web 端因映射缺失导致的 API 调用错误。
+            -   **后端路由补全**: 在 Axum 管理服务器中新增了 User Token 的全量管理接口（List/Create/Update/Renew/Delete），确保 Headless 模式功能完整。
+        -   **[核心优化] 数据库迁移增强与幂等性改进**:
+            -   **自动列迁移**: 完善了 `UserToken` 数据库初始化逻辑，支持从旧版本自动通过 `ALTER TABLE` 补全缺失列（如 `expires_type`, `max_ips`, `curfew_*` 等），极大提升了版本升级的稳定性。
+        -   **[Docker 优化] 新增 ABV_DATA_DIR 环境变量支持**:
+            -   **灵活挂载**: 允许用户通过环境变量显式指定数据存储目录。现在 Docker 用户可以更方便地挂载外部卷至自定义路径（如 `-e ABV_DATA_DIR=/app/data`），解决了默认隐藏目录权限及可见性问题。
+        -   **[核心功能] 更新检查器增强 (Update Checker 2.0) (PR #1494)**:
+            -   **代理支持**: 更新检查器现在完全遵循全局上游代理配置，解决了在受限网络环境下无法获取更新的问题。
+            -   **多级降级策略**: 实现了 `GitHub API -> GitHub Raw -> jsDelivr` 的三层回退机制，极大提升了版本检测的成功率。
+            -   **来源可观测**: 更新提示中现在会显示检测源信息，方便排查连接问题。
+        -   **[核心优化] Antigravity 数据库格式兼容性改进 (>= 1.16.5)**:
+            -   **智能版本检测**: 新增跨平台版本检测模块，支持自动识别 Antigravity 客户端版本（macOS/Windows/Linux）。
+            -   **新旧格式适配**: 适配了 1.16.5+ 版本的 `antigravityUnifiedStateSync.oauthToken` 新格式，并保持对旧版格式的向下兼容。
+            -   **注入策略增强**: 实现基于版本的智能注入策略，并在检测失败时提供双重格式注入的容错机制，确保账号切换成功。
+        -   **[核心修复] 解决 react-router SSR XSS 漏洞 (CVE-2026-21884) (PR #1500)**:
+            -   **安全修复**: 升级 `react-router` 依赖至安全版本，修复了 `ScrollRestoration` 组件在服务端渲染 (SSR) 时可能造成的跨站脚本攻击 (XSS) 风险。
+        -   **[国际化] 完善日语翻译支持 (PR #1524)**:
+            -   **改进**: 补全了代理池、流错误消息、User-Agent 等重要模块的日语本地化。
+    *   **v4.1.0 (2026-02-04)**:
+        -   **[重大更新] 代理池 2.0 (Proxy Pool) 完全体与稳定性修复**:
+            -   **账号级专属 IP 隔离**: 实现账号与代理的强绑定逻辑。一旦账号绑定专属代理，该 IP 将自动从公共池隔离，杜绝跨账号关联风险。
+            -   **协议自动补全与兼容性**: 后端支持自动识别简写输入（如 `ip:port`），自动补全 `http://` 方案。
+            -   **智能健康检查加固**: 引入浏览器 User-Agent 伪装，解决 `google.com` 拦截问题；更换保底检查 URL 至 `cloudflare.com`。
+            -   **响应式状态同步**: 修复“先睡眠后检查”逻辑，实现启动即更新状态，消除 UI 显示超时的同步延迟。
+            -   **持久化 Bug 修复**: 彻底解决在高频率轮询下，后端旧状态可能回滚前端新增代理的竞态问题。
+        -   **代理池 2.0 运行机制解析**:
+            -   **场景 1：账号全链路锁定** — 系统识别到账号 A 与 Node-01 的绑定关系后，其 Token 刷新、额度同步、AI 推理将全量强制走 Node-01。Google 侧始终捕获到该账号在单一稳定 IP 上操作。
+            -   **场景 2：公用池自动隔离** — 账号 B 无绑定。系统在扫描代理池时，会自动发现 Node-01 已被 A 专属占用并将其剔除，仅从剩余节点中轮询。确保不同账号 IP 绝不混用，零关联风险。
+            -   **场景 3：故障自愈与保底** — 若 Node-01 宕机且开启了“故障重试”，账号 A 会临时借用公共池节点完成 Token 刷新等紧急任务，并记录日志，确保服务不中断。
+        -   **[新功能] UserToken 页面导航与监控增强 (PR #1475)**:
+            -   **页面导航**: 新增 UserToken 独立管理页面，支持更细粒度的用户令牌管理。
+            -   **监控增强**: 完善了系统监控和路由功能的集成，提升了系统的可观测性。
+        -   **[核心修复] Warmup 接口字段丢失修复**:
+            -   **编译修复**: 修复了 `ProxyRequestLog` 初始化时缺失 `username` 字段导致的编译错误。
+        -   **[核心修复] Docker Warmup 401/502 错误修复 (PR #1479)**:
+            -   **网络优化**: 在 Docker 环境下的 Warmup 请求中，使用了带 `.no_proxy()` 的客户端，防止 localhost 请求被错误路由到外部代理导致 502/401 错误。
+            -   **鉴权变更**: 豁免了 `/internal/*` 路径的鉴权，确保内部预热请求不会被拦截。
+        -   **[核心修复] Docker/Headless 环境调试与绑定问题修复**:
+            -   **调试控制台**: 修复了 Docker 模式下日志模块未初始化的问题，并新增 HTTP API 映射，支持 Web 前端获取实时日志。
+            -   **指纹绑定**: 优化了设备指纹绑定逻辑，确保其在 Docker 容器环境下的兼容性并支持通过 API 完整调用。
+        -   **[核心修复] 账号删除缓存同步修复 (Issue #1477)**:
+            -   **同步机制**: 引入了全局删除信号同步队列，确保账号在磁盘删除后即刻从内存缓存中剔除。
+            -   **清理**: TokenManager 现在会同步清理已删除账号的令牌、健康分数、限流记录以及会话绑定，解决“已删除账号仍被调度”的问题。
+        -   **[UI 优化] 更新通知本地化 (PR #1484)**:
+            -   **国际化适配**: 移除了更新提示框中的硬编码字符串，实现了对所有 12 种语言的完整支持。
+        -   **[UI 优化] 导航栏重构与响应式适配 (PR #1493)**:
+            -   **组件解构**: 将单体 Navbar 拆分为更细粒度的模块化组件，提升代码可维护性。
+            -   **响应式增强**: 优化了布局断点及“刷新配额”按钮的响应式行为。
+    *   **v4.0.15 (2026-02-03)**:
+        -   **[核心优化] 预热功能增强与误报修复 (PR #1466)**:
+            -   **模式优化**: 移除硬编码模型白名单，支持对所有达到 100% 配额的模型自动触发预热。
+            -   **准确性修复**: 修复了预热状态的误报问题，确保仅在预热真正成功时记录历史。
+            -   **功能扩展**: 优化了预热请求的流量日志记录，并跳过不支持预热的 2.5 系列模型。
+        -   **[核心优化] 思考预算 (Thinking Budget) 全面国际化与优化**:
+            -   **多语言适配**: 补全并优化了中、英、日、韩、俄、西、繁体、阿等多国语言的翻译，确保全球用户体验一致。
+            -   **UI 细节增强**: 优化了设置项的提示语（Auto Hint / Passthrough Warning），帮助用户更准确地配置模型思考深度。
+    *   **v4.0.14 (2026-02-02)**:
+        -   **[核心修复] 解决 Web/Docker 部署下 API Key 随机变更问题 (Issue #1460)**:
+            -   **问题修复**: 修复了在没有配置文件的情况下，每次刷新页面都会重新生成 API Key 的 Bug。
+            -   **逻辑优化**: 优化了配置加载流程，确保首次生成的随机 Key 被正确持久化；同时也确保了 Headless 模式下环境变量（如 `ABV_API_KEY`）的覆盖能够被前端正确获取。
+        -   **[核心功能] 可配置思考预算 (Thinking Budget) (PR #1456)**:
+            -   **预算控制**: 在系统设置中新增了“思考预算”配置项。
+            -   **智能适配**: 支持为 Claude 4.6+ 和 Gemini 2.0 Flash Thinking 等模型自定义最大思考 token 限制。
+            -   **默认优化**: 默认值设置为智能适配模式，确保在大多数场景下不仅能获得完整思考过程，又能避免触发上游 budget 限制。
+    *   **v4.0.13 (2026-02-02)**:
+        -   **[核心优化] 负载均衡算法升级 (P2C Algorithm) (PR #1433)**:
+            -   **算法升级**: 将原有的 Round-Robin (轮询) 算法升级为 P2C (Power of Two Choices) 负载均衡算法。
+            -   **性能提升**: 在高并发场景下显著减少了请求等待时间，并优化了后端实例的负载分布，避免了单点过载。
+        -   **[UI 升级] 响应式导航栏与布局优化 (Responsive Navbar) (PR #1429)**:
+            -   **移动端适配**: 全新设计的响应式导航栏，完美适配移动设备与小屏幕窗口。
+            -   **视觉增强**: 为导航项添加了直观的图标，提升了整体视觉体验与操作便捷性。
+        -   **[新功能] 账号配额可视化增强 (Show All Quotas) (PR #1429)**:
+            -   **显示所有配额**: 在账号列表页新增“显示所有配额”开关。开启后可一览 Ultra/Pro/Free/Image 等所有维度的实时配额信息，不再仅显示首要配额。
+        -   **[国际化] 全面多语言支持完善 (Full i18n Update)**:
+            -   **覆盖率提升**: 补全了繁体中文、日语、韩语、西班牙语、阿拉伯语等 10 种语言的缺失翻译键值。
+            -   **细节优化**: 修复了“显示所有配额”及 OAuth 授权流程中的提示语翻译缺失问题。
+        -   **[国际化] 后台任务翻译补全 (Translate Background Tasks) (PR #1421)**:
+            -   **翻译修复**: 修复了后台任务（如标题生成）的相关文本缺少翻译的问题，现在支持所有语言的本地化显示。
+            - **归因**: 修复了合并代码时引入的 `ref` 冲突导致移动端/桌面端点击判定异常。
+            - **结果**: 语言切换菜单现在可以正常打开和交互。
+        -   **[Docker/Web 修复] Web 端支持 IP 管理 (IP Security for Web)**:
+            - **功能补全**: 修复了在 Docker 或 Web 模式下，IP 安全管理功能（日志、黑白名单）因后端路由缺失而无法使用的问题。
+            - **API 实现**: 实现了完整的 RESTful 管理接口，确保 Web 前端能正常调用底层安全模块。
+            - **体验强化**: 优化了删除操作的参数传递逻辑，解决了部分浏览器下删除黑白名单失灵的问题。
+    *   **v4.0.12 (2026-02-01)**:
+        -   **[代码重构] 连接器服务优化 (Refactor Connector Service)**:
+            -   **深度优化**: 重写了连接器服务 (`connector.rs`) 的核心逻辑，消除了历史遗留的低效代码。
+            -   **性能提升**: 优化了连接建立与处理流程，提升了系统的整体稳定性与响应速度。
+    *   **v4.0.11 (2026-01-31)**:
+        -   **[核心修复] 调整 API 端点顺序与自动阻断 (Fix 403 VALIDATION_REQUIRED)**:
+            -   **端点顺序优化**: 将 Google API 的请求顺序调整为 `Sandbox -> Daily -> Prod`。优先使用宽松环境，从源头减少 403 错误的发生。
+            -   **智能阻断机制**: 当检测到 `VALIDATION_REQUIRED` (403) 错误时，系统会自动将该账号标记为“临时阻断”状态并持续 10 分钟。期间请求会自动跳过该账号，避免无效重试导致账号被进一步风控。
+            -   **自动恢复**: 阻断期过后，系统会自动尝试恢复该账号的使用。
+        -   **[核心修复] 账号状态热重载 (Account Hot-Reload)**:
+            -   **架构统一**: 消除了系统中并存的多个 `TokenManager` 实例，实现了管理后台与反代服务共享单例账号管理器。
+            -   **实时生效**: 修复了手动启用/禁用账号、账号重排序及批量操作后需要重启应用才能生效的问题。现在所有账号变更都会立即同步至内存账号池。
+        -   **[核心修复] 配额保护逻辑优化 (PR #1344 补丁)**:
+            -   进一步优化了配额保护逻辑中对“已禁用”状态与“配额保护”状态的区分逻辑，确保日志记录准确且状态同步实时。
+        -   **[核心修复] 恢复健康检查接口 (PR #1364)**:
+            -   **路由恢复**: 修复了在 4.0.0 架构迁移中遗失的 `/health` 和 `/healthz` 路由。
+            -   **响应增强**: 接口现在会返回包含 `"status": "ok"` 和当前应用版本号的 JSON，方便监控系统进行版本匹配和存活检查。
+        -   **[核心修复] 修复 Gemini Flash 模型思考预算超限 (Fix PR #1355)**:
+            -   **自动限额**: 修复了在 Gemini Flash 思考模型（如 `gemini-2.0-flash-thinking`）中，默认或上游传入的 `thinking_budget` (例如 32k) 超过模型上限 (24k) 导致 API 报错 `400 Bad Request` 的问题。
+            -   **多协议覆盖**: 此防护已扩展至 **OpenAI、Claude 和原生 Gemini 协议**，全方位拦截不安全的预算配置。
+            -   **智能截断**: 系统现在会自动检测 Flash 系列模型，并强制将思考预预算限制在安全范围内 (**24,576**)，确保请求始终成功，无需用户手动调整客户端配置。
+        -   **[核心功能] IP 安全与风控系统 (IP Security & Management) (PR #1369 by @大黄)**:
+            -   **可视化工单管理**: 全新的“安全监控”模块，支持图形化管理 IP 黑名单与白名单。
+            -   **智能封禁策略**: 实现了基于 CIDR 的网段封禁、自动释放时间设置及封禁原因备注功能。
+            -   **实时访问日志**: 集成了 IP 维度的实时访问日志审计，支持按 IP、时间范围筛选，方便快速定位异常流量。
+        -   **[UI 优化] 极致的视觉体验**:
+            -   **弹窗美化**: 全面升级了 IP 安全模块的所有弹窗按钮样式，采用实心色块与阴影设计，操作引导更清晰。
+            -   **布局即兴**: 修复了安全配置页面的滚动条异常与布局错位，优化了标签页切换体验。
+        -   **[核心功能] 调试控制台 (Debug Console) (PR #1385)**:
+            -   **实时日志流**: 引入了全功能的调试控制台，支持实时捕获并展示后端业务日志。
+            -   **过滤与搜索**: 支持按日志级别（Info, Debug, Warn, Error）过滤及关键词全局搜索。
+            -   **交互优化**: 支持一键清空日志、自动滚动开关，并完整适配深色/浅色主题。
+            -   **后端桥接**: 实现了高性能的日志桥接器，确保日志捕获不影响反代性能。
+    *   **v4.0.9 (2026-01-30)**:
+        -   **[核心功能] User-Agent 自定义与版本欺骗 (PR #1325)**:
+            - **动态覆盖**: 支持在“服务配置”中自定义上游请求的 `User-Agent` 头部。这允许用户模拟任意客户端版本（如 Cheat 模式），有效绕过部分地区的版本封锁或风控限制。
+            - **智能回退**: 实现了“远程抓取 -> Cargo 版本 -> 硬编码”的三级版本号获取机制。当主版本 API 不可用时，系统会自动解析官网 Changelog 页面获取最新版本号，确保 UA 始终伪装成最新版客户端。
+            - **热更新支持**: 修改 UA 配置后即刻生效，无需重启服务。
+        -   **[核心修复] 解决配额保护状态同步缺陷 (Issue #1344)**:
+            - **状态实时同步**: 修复了 `check_and_protect_quota()` 函数在处理禁用账号时提前退出的逻辑缺陷。现在即便账号被禁用，系统仍会扫描并实时更新其 `protected_models`（模型级保护列表），确保配额不足的账号在重新启用后不会绕过保护机制继续被使用。
+            - **日志路径分离**: 将手动禁用检查从配额保护函数中剥离至调用方，根据不同的跳过原因（手动禁用/配额保护）记录准确的日志，消除用户困惑。
+        -   **[核心功能] 缓存管理与一键清理 (PR #1346)**:
+            - **后端集成**: 新增了 `src-tauri/src/modules/cache.rs` 模块，用于计算和管理应用运行期间产生的各类临时文件分布（如翻译缓存、日志指纹等）。
+            - **UI 实现**: 在“系统设置”页面新增了“清理缓存”功能。用户可以实时查看缓存占用的空间大小，并支持一键清理，有效解决长期使用后的磁盘占用问题。
+        -   **[国际化] 新增语言支持 (PR #1346)**:
+            - 新增了 **西班牙语 (es)** 和 **马来语 (my)** 的完整翻译支持，进一步扩大了应用的全球适用范围。
+        -   **[国际化] 全语言覆盖**:
+            - 为新功能补全了 En, Zh, Zh-TW, Ar, Ja, Ko, Pt, Ru, Tr, Vi 等 10 种语言的完整翻译支持。
+        -   **[国际化] 完善 UI 字符串本地化 (PR #1350)**:
+            - **全面覆盖**: 补充了 UI 中剩余的硬编码字符串及未翻译项，实现了界面字符串的完全本地化。
+            - **清理冗余**: 删除了代码中所有的英文回退 (English fallbacks)，强制所有组件通过 i18n 键调用语言包。
+            - **语言增强**: 显著提升了日语 (ja) 等语言的翻译准确度，并确保了新 UI 组件在多语言环境下的显示一致性。
+    *   **v4.0.8 (2026-01-30)**:
+        -   **[核心功能] 记忆窗口位置与大小 (PR #1322)**: 自动恢复上次关闭时的窗口坐标与尺寸，提升使用体验。
+        -   **[核心修复] 优雅关闭 Admin Server (PR #1323)**: 修复了 Windows 环境下退出后再次启动时，端口 8045 占用导致的绑定失败问题。
+        -   **[核心功能] 实现全链路调试日志功能 (PR #1308)**:
+            - **后端集成**: 引入了 `debug_logger.rs`，支持捕获并记录 OpenAI、Claude 及 Gemini 处理器的原始请求、转换后报文及完整流式响应。
+            - **动态配置**: 支持热加载日志配置，无需重启服务即可启用/禁用或修改输出目录。
+            - **前端交互**: 在“高级设置”中新增“调试日志”开关及自定义输出目录选择器，方便开发者排查协议转换与上游通信问题。
+        -   **[UI 优化] 优化图表工具提示 (Tooltip) 浮动显示逻辑 (Issue #1263, PR #1307)**:
+            - **溢出防御**: 优化了 `TokenStats.tsx` 中的 Tooltip 定位算法，确保在小窗口或高缩放比例下，悬浮提示信息始终在可视区域内显示，防止被窗口边界遮挡。
+        -   **[核心优化] 鲁棒性增强：动态 User-Agent 版本获取及多级回退 (PR #1316)**:
+            - **动态版本获取**: 支持从远程端点实时拉取版本号，确保 UA 信息的实时性与准确性。
+            - **稳延回退链**: 引入“远程端点 -> Cargo.toml -> 硬编码”的三级版本回退机制，极大提升了初始化阶段的鲁棒性。
+            - **预编译优化**: 使用 `LazyLock` 预编译正则表达式解析版本号，提升运行效率并降低内存抖动。
+            - **可观测性提升**: 添加了结构化日志记录及 VersionSource 枚举，方便开发者追踪版本来源及潜在的获取故障。
+        -   **[核心修复] 解决 Gemini CLI "Response stopped due to malformed function call." 错误 (PR #1312)**:
+            - **参数字段对齐**: 将工具声明中的 `parametersJsonSchema` 重命名为 `parameters`，确保与 Gemini 最新 API 规范完全对齐。
+            - **参数对齐引擎增强**: 移除了多余的参数包装层，使参数传递更加透明和直接。
+            - **容错校验**: 增强了对工具调用响应的鲁棒性，有效防止因参数结构不匹配导致的输出中断。
+        -   **[核心修复] 解决 Docker/Headless 模式下端口显示为 'undefined' 的问题 (Issue #1305)**: 修复了管理 API `/api/proxy/status` 缺少 `port` 字段且 `base_url` 构造错误的问题，确保前端能正确显示监听地址。
+        -   **[核心修复] 解决 Docker/Headless 模式下 Web 密码绕过问题 (Issue #1309)**:
+            - **默认鉴权增强**: 将 `auth_mode` 默认值改为 `auto`。在 Docker 或允许局域网访问的环境下，系统现在会自动激活身份验证，确保 `WEB_PASSWORD` 生效。
+            - **环境变量支持**: 新增 `ABV_AUTH_MODE` 和 `AUTH_MODE` 环境变量，允许用户在启动时显式覆盖鉴权模式（支持 `off`, `strict`, `all_except_health`, `auto`）。
+    *   **v4.0.7 (2026-01-29)**:
+        -   **[性能优化] 优化 Docker 构建流程 (Fix Issue #1271)**:
+            - **原生架构构建**: 将 AMD64 和 ARM64 的构建任务拆分为独立 Job 并行执行，并移除 QEMU 模拟层，转而使用各架构原生的 GitHub Runner。此举将跨平台构建耗时从 3 小时大幅缩减至 10 分钟以内。
+
+        -   **[性能优化] 解决 Docker 版本在大数据量下的卡顿与崩溃问题 (Fix Issue #1269)**:
+            - **异步数据库操作**: 将流量日志、Token 统计等所有耗时数据库查询迁移至后台阻塞线程池 (`spawn_blocking`)，彻底解决了在查看大型日志文件（800MB+）时可能导致的 UI 卡死及反代服务不可用的问题。
+            - **监控逻辑平滑化**: 优化了监控状态切换逻辑，移除冗余的重复启动记录，提升了 Docker 环境下的运行稳定性。
+        -   **[核心修复] 解决 OpenAI 协议 400 Invalid Argument 错误 (Fix Issue #1267)**:
+            - **移除激进默认值**: 回滚了 v4.0.6 中为 OpenAI/Claude 协议引入的默认 `maxOutputTokens: 81920` 设置。该值超过了许多旧模型（如 `gemini-3-pro-preview` 或原生 Claude 3.5）的硬性限制，导致请求被直接拒绝。
+            - **智能思维配置**: 优化了思维模型检测逻辑，仅对以 `-thinking` 结尾的模型自动注入 `thinkingConfig`，避免了对不支持该参数的标准模型（如 `gemini-3-pro`）产生副作用。
+        -   **[兼容性修复] 修复 OpenAI Codex (v0.92.0) 调用错误 (Fix Issue #1278)**:
+            - **字段清洗**: 自动过滤 Codex 客户端在工具定义中注入的非标准 `external_web_access` 字段，消除了 Gemini API 返回的 400 Invalid Argument 错误.
+            - **容错增强**: 增加了对工具 `name` 字段的强制校验。当客户端发送缺失名称的无效工具定义时，代理层现在会自动跳过并记录警告，而不是直接让请求失败。
+        -   **[核心功能] 自适应熔断器 (Adaptive Circuit Breaker)**:
+            - **模型级隔离**: 实现了基于 `account_id:model` 的复合 Key 限流追踪，确保单一模型的配额耗尽不会导致整个账号被锁定。
+            - **动态退避策略**: 支持用户自定义 `[60, 300, 1800, 7200]` 等多级退避阶梯，自动根据失败次数增加锁定时间。
+            - **配置热更新**: 配合 `TokenManager` 内存缓存，实现配置修改后反代服务即刻生效，无需重启。
+            - **管理 UI 集成**: 在 API 反代页面新增了完整的控制面板，支持一键开关及手动清除限流记录。
+        -   **[核心优化] 完善日志清理与冗余压制 (Fix Issue #1280)**:
+            - **自动空间回收**: 引入基于体积的清理机制，当日志目录超过 1GB 时自动触发清理，并将占用降至 512MB 以内。相比原有的按天清理，能从根本上防止因日志爆发导致的磁盘撑爆问题。
+            - **高频日志瘦身**: 将 OpenAI 处理器报文详情、TokenManager 账号池轮询等高频产生的日志级别从 INFO 降级为 DEBUG。现在 INFO 级别仅保留简洁的请求摘要。
+    *   **v4.0.6 (2026-01-28)**:
+        -   **[核心修复] 彻底解决 Google OAuth "Account already exists" 错误**:
+            - **持久化升级**: 将授权成功后的保存逻辑从“仅新增”升级为 `upsert` (更新或新增) 模式。现在重新授权已存在的账号会平滑更新其 Token 和项目信息，不再弹出报错。
+        -   **[核心修复] 修复 Docker/Web 模式下手动回填授权码失效问题**:
+            - **Flow 状态预初始化**: 在 Web 模式生成授权链接时，后端会同步初始化 OAuth Flow 状态。这确保了在 Docker 等无法自动跳转的环境下，手动复制回填授权码或 URL 能够被后端正确识别并处理。
+        -   **[体验优化] 统一 Web 与桌面端的 OAuth 持久化路径**: 重构了 `TokenManager`，确保所有平台共用同一套健壮的账号核验与存储逻辑。
+        -   **[性能优化] 优化限流恢复机制 (PR #1247)**:
+            - **自动清理频率**: 将限流记录的后台自动清理间隔从 60 秒缩短至 15 秒，大幅提升了触发 429 或 503 错误后的业务恢复速度。
+            - **智能同步清理**: 优化了单个或全部账号刷新逻辑，确保刷新账号的同时即刻清除本地限流锁定，使最新配额能立即投入使用。
+            - **渐进式容量退避**: 针对 `ModelCapacityExhausted` 错误（如 503），将原有的固定 15 秒重试等待优化为 `[5s, 10s, 15s]` 阶梯式策略，显著减少了偶发性容量波动的等待时间。
+        -   **[核心修复] 窗口标题栏深色模式适配 (PR #1253)**: 修复了在系统切换为深色模式时，应用标题栏（Titlebar）未能同步切换配色，导致视觉不统一的问题。
+        -   **[核心修复] 提升 Opus 4.5 默认输出上限 (Fix Issue #1244)**:
+            -   **突破限制**: 将 Claude 和 OpenAI 协议的默认 `max_tokens` 从 16k 提升至 **81,920** (80k)。
+            -   **解决截断**: 彻底解决了 Opus 4.5 等模型在开启思维模式时，因默认 Budget 限制导致输出被锁定在 48k 左右的截断问题。现在无需任何配置即可享受完整的长文本输出能力。
+        -   **[核心修复] 修复账号删除后的幽灵数据问题 (Ghost Account Fix)**:
+            -   **同步重载**: 修复了账号文件被删除后，反代服务的内存缓存未同步更新，导致已删账号仍参与轮询的严重 Bug。
+            -   **即时生效**: 现在单删或批量删除账号后，会强制触发反代服务重载，确保内存中的账号列表与磁盘实时一致。
+        -   **[核心修复] Cloudflared 隧道启动问题修复 (Fix PR #1238)**:
+            -   **启动崩溃修复**: 移除了不支持的命令行参数 (`--no-autoupdate` / `--loglevel`)，解决了 cloudflared 进程启动即退出的问题。
+            -   **URL 解析修正**: 修正了命名隧道 URL 提取时的字符串偏移量错误，确保生成的访问链接格式正确。
+            -   **Windows 体验优化**: 为 Windows 平台添加了 `DETACHED_PROCESS` 标志，实现了隧道的完全静默后台运行，消除了弹窗干扰。
+    *   **v4.0.5 (2026-01-28)**:
+        -   **[核心修复] 彻底解决 Docker/Web 模式 Google OAuth 400 错误 (Google OAuth Fix)**:
+            - **协议对齐**: 强制所有模式（包括 Docker/Web）使用 `localhost` 作为 OAuth 重定向 URI，绕过了 Google 对私网 IP 和非 HTTPS 环境的拦截策略。
+            - **流程优化**: 配合已有的“手动授权码回填”功能，确保即使在远程服务器部署环境下，用户也能顺利完成 Google 账号的授权与添加。
+        -   **[功能增强] 新增阿拉伯语支持与 RTL 布局适配 (PR #1220)**:
+            - **国际化拓展**: 新增完整的阿拉伯语 (`ar`) 翻译支持。
+            - **RTL 布局**: 实现了自动检测并适配从右向左 (Right-to-Left) 的 UI 布局。
+            - **排版优化**: 引入了 Effra 字体家族，显著提升了阿拉伯语文本的可读性与美观度。
+        -   **[功能增强] 手动清除限流记录 (Clear Rate Limit Records)**:
+            - **管理 UI 集成**: 在“代理设置 -> 账号轮换与会话调度”区域新增了“清除限流记录”按钮，支持桌面端与 Web 端调用，允许用户手动清除所有账号的本地限流锁（429/503 记录）。
+            - **账号列表联动**: 实现了配额与限流的智能同步。现在刷新账号额度（单个或全部）时，会自动清除本地限流状态，确保最新的额度信息能立即生效。
+            - **后端核心逻辑**: 在 `RateLimitTracker` 和 `TokenManager` 中底层实现了手动与自动触发的清除逻辑，确保高并发下的状态一致性。
+            - **API 支持**: 新增了对应的 Tauri 命令与 Admin API (`DELETE /api/proxy/rate-limits`)，方便开发者进行编程化管理与集成。
+            - **强制重试**: 配合清除操作，可强制下一次请求忽略之前的退避时间，直接尝试连接上游，帮助在网络恢复后快速恢复业务。
+    *   **v4.0.4 (2026-01-27)**:
+        -   **[功能增强] 深度集成 Gemini 图像生成与多协议支持 (PR #1203)**:
+            - **OpenAI 兼容性增强**: 支持通过标准 OpenAI Images API (`/v1/images/generate`) 调用 Gemini 3 图像模型，支持 `size`、`quality` 等参数。
+            - **多协议集成**: 增强了 Claude 和 OpenAI Chat 接口，支持直接传递图片生成参数，并实现了自动宽高比计算与 4K/2K 质量映射。
+            - **文档补全**: 新增 `docs/gemini-3-image-guide.md`，提供完整的 Gemini 图像生成集成指南。
+            - **稳定性优化**: 优化了通用工具函数 (`common_utils.rs`) 和 Gemini/OpenAI 映射逻辑，确保大尺寸 Payload 传输稳定。
+        -   **[核心修复] 对齐 OpenAI 重试与限流逻辑 (PR #1204)**:
+            - **逻辑对齐**: 重构了 OpenAI 处理器的重试、限流及账号轮换逻辑，使其与 Claude 处理器保持一致，显著提升了高并发下的稳定性。
+            - **热重载优化**: 确保 OpenAI 请求在触发 429 或 503 错误时能精准执行退避策略并自动切换可用账号。
+        -   **[核心修复] 修复 Web OAuth 账号持久化问题 (Web Persistence Fix)**:
+            - **索引修复**: 解决了在 Web 管理界面通过 OAuth 添加的账号虽然文件已生成，但未同步更新到全局账号索引 (`accounts.json`)，导致重启后或桌面端无法识别的问题。
+            - **锁机制统一**: 重构了 `TokenManager` 的保存逻辑，复用了 `modules::account` 的核心方法，确保了文件锁与索引更新的原子性。
+        -   **[核心修复] 解决 Google OAuth 非 Localhost 回调限制 (Fix Issue #1186)**:
+            -   **问题背景**: Google 不支持在 OAuth 流程中使用非 localhost 私网 IP 作为回调地址，即便注入 `device_id` 也会报“不安全的应用版本”警告。
+            -   **解决方案**: 引入了标准化的“手动 OAuth 提交”流程。当浏览器无法自动回调至本地（如远程部署或非 Localhost 环境）时，用户可直接复制回调链接或授权码至应用内完成授权。
+            - **体验增强**: 重构了手动提交界面，集成了全语言国际化支持（9 国语言）与 UI 优化，确保在任何网络环境下都能顺利添加账号。
+        -   **[核心修复] 解决 Google Cloud Code API 429 错误 (Fix Issue #1176)**:
+            - **智能降级**: 默认将 API 流量迁移至更稳定的 Daily/Sandbox 环境，避开生产环境 (`cloudcode-pa.googleapis.com`) 当前频繁的 429 错误。
+            - **稳健性提升**: 实现了 Sandbox -> Daily -> Prod 的三级降级策略，确保主业务流程在极端网络环境下的高可用性。
+        -   **[核心优化] 账号调度算法升级 (Algorithm Upgrade)**:
+            - **健康评分系统 (Health Score)**: 引入了 0.0 到 1.0 的实时健康分机制。请求失败（如 429/5xx）将显著扣分，使受损账号自动降级；成功请求则逐步回升，实现账号状态的智能自愈。
+            - **三级智能排序**: 调度优先级重构为 `订阅等级 > 剩余配额 > 健康分`。确保在同等级、同配额情况下，始终优先通过历史表现最稳定的账号。
+            - **微延迟 (Throttle Delay)**: 针对极端限流场景，当所有账号均被封锁且有账号在 2 秒内即将恢复时，系统将自动执行毫秒级挂起等待而非直接报错。极大提升了高并发下的成功率，并增强了会话粘性。
+            - **全量接口适配**: 重构了 `TokenManager` 核心接口，并完成了全量处理器（Claude, Gemini, OpenAI, Audio, Warmup）的同步适配，确保调度层变更对业务层透明。
+        -   **[核心修复] 固定账号模式持久化 (PR #1209)**:
+            -   **问题背景**: 之前版本在重启服务后，固定账号模式（Fixed Account Mode）的开关状态会被重置。
+            -   **修复内容**: 实现了设置的持久化存储，确保用户偏好在重启后依然生效。
+        -   **[核心修复] 速率限制毫秒级解析 (PR #1210)**:
+            -   **问题背景**: 部分上游服务返回的 `Retry-After` 或速率限制头部包含带小数点的毫秒值，导致解析失败。
+            -   **修复内容**: 增强了时间解析逻辑，支持兼容浮点数格式的时间字段，提高了对非标准上游的兼容性。
+    *   **v4.0.3 (2026-01-27)**:
+        -   **[功能增强] 提高请求体限制以支持大体积图片 Payload (PR #1167)**:
+            - 将默认请求体大小限制从 2MB 提升至 **100MB**，解决多图并发传输时的 413 (Payload Too Large) 错误。
+            - 新增环境变量 `ABV_MAX_BODY_SIZE`，支持用户根据需求动态调整最大限制。
+            - 服务启动时自动输出当前生效的 Body Limit 日志，便于排查。
+        -   **[核心修复] 解决 Google OAuth 'state' 参数缺失导致的授权失败 (Issue #1168)**:
+            - 修复了添加 Google 账号时可能出现的 "Agent execution terminated" 错误。
+            - 实现了随机 `state` 参数的生成与回调验证，增强了 OAuth 流程的安全性和兼容性。
+            - 确保在桌面端和 Web 模式下的授权流程均符合 OAuth 2.0 标准。
+        -   **[核心修复] 解决 Docker/Web 模式下代理开关及账号变动需重启生效的问题 (Issue #1166)**:
+            - 实现了代理开关状态的持久化存储，确保容器重启后状态保持一致。
+            - 在账号增删、切换、重排及导入后自动触发 Token 管理器热加载，使变更立即在反代服务中生效。
+            - 优化了账号切换逻辑，自动清除旧会话绑定，确保请求立即路由到新账号。
+    *   **v4.0.2 (2026-01-26)**:
+        -   **[核心修复] 解决开启“访问授权”导致的重复认证与 401 循环 (Fix Issue #1163)**:
+            - 修正了后端鉴权中间件逻辑，确保在鉴权关闭模式（Off/Auto）下管理接口不再强制拦截。
+            - 增强了健康检查路径 (`/api/health`) 的免鉴权豁免，避免 UI 加载初期因状态检测失败触发登录。
+            - 在前端请求层引入了 401 异常频率限制（防抖锁），彻底解决了大批量请求失败导致的 UI 弹窗抖动。
+        -   **[核心修复] 解决切换账号后会话无法持久化保存 (Fix Issue #1159)**:
+            - 增强了数据库注入逻辑，在切换账号时同步更新身份标识（Email）并清除旧的 UserID 缓存。
+            - 解决了因 Token 与身份标识不匹配导致客户端无法正确关联或保存新会话的问题。
+        -   **[核心修复] Docker/Web 模式下模型映射持久化 (Fix Issue #1149)**:
+            - 修复了在 Docker 或 Web 部署模式下，管理员通过 API 修改的模型映射配置（Model Mapping）无法保存到硬盘的问题。
+            - 确保 `admin_update_model_mapping` 接口正确调用持久化逻辑，配置在重启容器后依然生效。
+        -   **[架构优化] MCP 工具支持架构全面升级 (Schema Cleaning & Tool Adapters)**:
+            - **约束语义回填 (Constraint Hints)**:
+                - 实现了智能约束迁移机制，在删除 Gemini 不支持的约束字段(`minLength`, `pattern`, `format` 等)前，自动将其转化为描述提示。
+                - 新增 `CONSTRAINT_FIELDS` 常量和 `move_constraints_to_description` 函数，确保模型能通过描述理解原始约束。
+                - 示例: `{"minLength": 5}` → `{"description": "[Constraint: minLen: 5]"}`
+            - **anyOf/oneOf 智能扁平化增强**:
+                - 重写 `extract_best_schema_from_union` 函数，使用评分机制选择最佳类型(object > array > scalar)。
+                - 在合并后自动添加 `"Accepts: type1 | type2"` 提示到描述中，保留所有可能类型的信息。
+                - 新增 `get_schema_type_name` 函数，支持显式类型和结构推断。
+            - **插件化工具适配器层 (Tool Adapter System)**:
+                - 创建 `ToolAdapter` trait，为不同 MCP 工具提供定制化 Schema 处理能力。
+                - 实现 `PencilAdapter`，自动为 Pencil 绘图工具的视觉属性(`cornerRadius`, `strokeWidth`)和路径参数添加说明。
+                - 建立全局适配器注册表，支持通过 `clean_json_schema_for_tool` 函数应用工具特定优化。
+            - **高性能缓存层 (Schema Cache)**:
+                - 实现基于 SHA-256 哈希的 Schema 缓存机制，避免重复清洗相同的 Schema。
+                - 采用 LRU 淘汰策略，最大缓存 1000 条，内存占用 < 10MB。
+                - 提供 `clean_json_schema_cached` 函数和缓存统计功能，预计性能提升 60%+。
+            - **影响范围**: 
+                - ✅ 显著提升 MCP 工具(如 Pencil)的 Schema 兼容性和模型理解能力
+                - ✅ 为未来添加更多 MCP 工具(filesystem, database 等)奠定了插件化基础
+                - ✅ 完全向后兼容，所有 25 项测试通过
+        -   **[安全增强] Web UI 管理后台密码与 API Key 分离 (Fix Issue #1139)**:
+            - **独立密码配置**: 支持通过 `ABV_WEB_PASSWORD` 或 `WEB_PASSWORD` 环境变量设置独立的管理后台登录密码。
+            - **智能鉴权逻辑**: 
+                - 管理接口优先验证独立密码，未设置时自动回退验证 `API_KEY`（确保向后兼容）。
+                - AI 代理接口严格仅允许使用 `API_KEY` 进行认证，实现权限隔离。
+            - **配置 UI 支持**: 在“仪表盘-服务配置”中新增管理密码编辑项，支持一键找回或修改。
+            - **日志引导**: Headless 模式启动时会清晰打印 API Key 与 Web UI Password 的状态及查看方式。
     *   **v4.0.1 (2026-01-26)**:
         -   **[UX 优化] 主题与语言切换平滑度**:
             - 解决了主题和语言切换时的 UI 卡顿问题，将配置持久化逻辑与状态更新解耦。
@@ -614,7 +1650,7 @@ response = client.chat.completions.create(
             -   **僵尸进程清理**: 优化了 `start.sh` 中的 cleanup 逻辑，改用 `pkill` 精准查杀 Xtigervnc 和 websockify 进程，并清理 `/tmp/.X11-unix` 锁文件，解决了重启后 VNC 无法连接的各种边缘情况。
             -   **健康检查升级**: 将 Healthcheck 检查项扩展到 websockify 和主程序，确保容器状态更真实地反映服务可用性。
             -   **重大修复**: 修复了 OpenAI 协议请求返回 404 的问题，并解决了 Codex (`/v1/responses`) 接收复杂对象数组 `input` 或 `apply_patch` 等自定义工具（缺失 Schema）时导致上游返回 400 (`INVALID_ARGUMENT`) 的兼容性缺陷。
-            -   **思维模型优化**: 解决了 Claude 3.7 Thinking 模型在历史消息缺失思维链时强制报错的问题，实现了智能协议降级与占位块注入。
+            -   **思维模型优化**: 解决了 Claude 4.6 Thinking 模型在历史消息缺失思维链时强制报错的问题，实现了智能协议降级与占位块注入。
             -   **协议补全**: 补全了 OpenAI Legacy 接口的 Token 统计响应与 Header 注入，支持 `input_text` 类型内容块，并将 `developer` 角色适配为系统指令。
             -   **requestId 统一**: 统一所有 OpenAI 路径下的 `requestId` 前缀为 `agent-`，解决部分客户端的 ID 识别问题。
         -   **[核心修复] JSON Schema 数组递归清理修复 (解决 Gemini API 400 错误)**:
@@ -1037,8 +2073,7 @@ response = client.chat.completions.create(
             - **SSE 错误事件**: 实现了标准的 SSE 错误事件传播,前端可捕获并优雅展示错误,包含详细的解决建议(如检查网络、代理等)。
             - **多语言错误消息 (i18n)**: 错误消息已集成 i18n 系统,支持所有 6 种语言(zh, en, zh-TW, ja, tr, vi)。非浏览器客户端自动回退到英文提示。
         - **影响范围**: 此更新显著提升了 Claude 4.5 Opus、Gemini 3 Pro 等 thinking 模型的多轮对话稳定性,特别是在使用 MCP 工具和长会话场景下。
-    <details>
-    <summary>显示旧版本日志 (v3.3.24 及更早)</summary>
+
 
     *   **v3.3.24 (2026-01-12)**:
         - **UI 交互改进 (UI Interaction Improvements)**:
@@ -1769,6 +2804,7 @@ response = client.chat.completions.create(
 *   [antigravity-claude-proxy](https://github.com/badrisnarayanan/antigravity-claude-proxy)
 *   [aistudio-gemini-proxy](https://github.com/zhongruichen/aistudio-gemini-proxy)
 *   [gcli2api](https://github.com/su-kaka/gcli2api)
+*   [agent-vibes](https://github.com/funny-vibes/agent-vibes)
 
 *   **版权许可**: 基于 **CC BY-NC-SA 4.0** 许可，**严禁任何形式的商业行为**。
 *   **安全声明**: 本应用所有账号数据加密存储于本地 SQLite 数据库，除非开启同步功能，否则数据绝不离开您的设备。

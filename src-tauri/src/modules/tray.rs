@@ -68,6 +68,18 @@ pub fn create_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
                     }
                 }
                 "quit" => {
+                    // 先停止 Admin Server，避免僵尸 socket
+                    let state = app.state::<crate::commands::proxy::ProxyServiceState>();
+                    let admin_server = state.admin_server.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let mut lock = admin_server.write().await;
+                        if let Some(admin) = lock.take() {
+                            admin.axum_server.stop();
+                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        }
+                    });
+                    // 給一點時間讓 socket 關閉
+                    std::thread::sleep(std::time::Duration::from_millis(200));
                     app.exit(0);
                 }
                 "refresh_curr" => {
@@ -190,9 +202,9 @@ pub fn update_tray_menus(app: &tauri::AppHandle) {
                          // Use strict matching, consistent with frontend
                          for m in q.models {
                              let name = m.name.to_lowercase();
-                             if name == "gemini-3-pro-high" { gemini_high = m.percentage; }
+                             if name == "gemini-3.1-pro-high" || name == "gemini-3-pro-high" { gemini_high = m.percentage; }
                              if name == "gemini-3-pro-image" { gemini_image = m.percentage; }
-                             if name == "claude-sonnet-4-5" { claude = m.percentage; }
+                             if name == "claude-sonnet-4-6" || name == "claude-sonnet-4-5" { claude = m.percentage; }
                          }
                          
                          menu_lines.push(format!("Gemini High: {}%", gemini_high));

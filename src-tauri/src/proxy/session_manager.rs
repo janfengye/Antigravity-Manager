@@ -49,11 +49,12 @@ impl SessionManager {
             };
 
             let clean_text = text.trim();
-            // 跳过过短的消息 (可能是 CLI 的探测消息) 或含有系统标签的消息
-            if clean_text.len() > 10 && !clean_text.contains("<system-reminder>") {
+            // [FIX #1732] 降低准入门槛 (10 -> 3)，确保即使是短消息也会生成稳定的会话锚点
+            // 同时排除包含系统标志的消息，防止因为协议注入导致的 ID 漂移
+            if clean_text.len() >= 3 && !clean_text.contains("<system-reminder>") && !clean_text.contains("[System") {
                 hasher.update(clean_text.as_bytes());
                 content_found = true;
-                break; // 只取第一条关键消息作为锚点
+                break; // 始终锚定第一条有效用户消息
             }
         }
 

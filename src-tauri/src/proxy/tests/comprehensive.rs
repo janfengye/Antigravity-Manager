@@ -33,6 +33,7 @@ mod tests {
             thinking: Some(ThinkingConfig {
                 type_: "enabled".to_string(),
                 budget_tokens: Some(1024),
+                effort: None,
             }),
             metadata: None,
             output_config: None,
@@ -42,7 +43,7 @@ mod tests {
 
         // 2. 执行转换
         // 如果修复生效，这里应该成功返回，且 thinkingConfig 被保留
-        let result = transform_claude_request_in(&req, "test-project", false);
+        let result = transform_claude_request_in(&req, "test-project", false, None, "test_session", None);
         assert!(result.is_ok(), "First thinking request should be allowed");
 
         let body = result.unwrap();

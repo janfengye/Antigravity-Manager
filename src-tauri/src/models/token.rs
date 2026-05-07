@@ -1,5 +1,9 @@
 use serde::{Deserialize, Serialize};
 
+fn default_is_gcp_tos() -> bool {
+    false
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenData {
     pub access_token: String,
@@ -11,8 +15,15 @@ pub struct TokenData {
     /// Google Cloud 项目ID，用于 API 请求标识
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project_id: Option<String>,
+    /// OAuth client key used to obtain/refresh this token
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth_client_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,  // 新增：Antigravity sessionId
+    #[serde(default = "default_is_gcp_tos")]
+    pub is_gcp_tos: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id_token: Option<String>,
 }
 
 impl TokenData {
@@ -23,6 +34,8 @@ impl TokenData {
         email: Option<String>,
         project_id: Option<String>,
         session_id: Option<String>,
+        is_gcp_tos: bool,
+        id_token: Option<String>,
     ) -> Self {
         let expiry_timestamp = chrono::Utc::now().timestamp() + expires_in;
         Self {
@@ -33,7 +46,15 @@ impl TokenData {
             token_type: "Bearer".to_string(),
             email,
             project_id,
+            oauth_client_key: None,
             session_id,
+            is_gcp_tos,
+            id_token,
         }
+    }
+
+    pub fn with_oauth_client_key(mut self, oauth_client_key: Option<String>) -> Self {
+        self.oauth_client_key = oauth_client_key;
+        self
     }
 }

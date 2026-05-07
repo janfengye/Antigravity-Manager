@@ -1,6 +1,6 @@
 [package]
 name = "antigravity_tools"
-version = "4.0.1"
+version = "4.1.33"
 description = "A Tauri App"
 authors = ["you"]
 license = "CC-BY-NC-SA-4.0"
@@ -16,17 +16,17 @@ name = "antigravity_tools_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "^2.2.5", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri = { version = "^2.2.5", features = ["tray-icon", "image-png"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
 uuid = { version = "1.10", features = ["v4", "serde"] }
 chrono = "0.4"
 dirs = "5.0"
-reqwest = { version = "0.12", features = ["json", "stream", "socks"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "socks", "blocking", "rustls-tls"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "time"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
@@ -45,7 +45,7 @@ tokio-stream = { version = "0.1.17", features = ["sync"] }
 
 hyper = { version = "1", features = ["full"] }
 hyper-util = { version = "0.1", features = ["full"] }
-tower = "0.4"
+tower = { version = "0.4", features = ["util"] }
 tower-http = { version = "0.5", features = ["cors", "trace", "fs"] }
 eventsource-stream = "0.2"
 dashmap = "6.1"
@@ -67,6 +67,18 @@ tauri-plugin-process = "2"
 sha2 = "0.10"
 toml = "0.8"
 toml_edit = "0.22"
+tauri-plugin-window-state = "2"
+parking_lot = "0.12.5"
+tokio-util = "0.7.18"
+aes-gcm = "0.10.3"
+machine-uid = "0.5.4"
+plist = "1.7"
+rquest = { version = "5.1.0", features = ["json", "stream", "socks", "cookies"] }
+rquest-util = "2.2.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
