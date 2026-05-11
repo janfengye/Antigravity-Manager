@@ -43,6 +43,7 @@
 | <img src="docs/images/packycode_logo.png" width="200" alt="PackyCode Logo"> | 感谢 **PackyCode** 对本项目的赞助！PackyCode 是一家可靠高效的 API 中转服务商，提供 Claude Code、Codex、Gemini 等多种服务的中转。PackyCode 为本项目的用户提供了特别优惠：使用[此链接](https://www.packyapi.com/register?aff=Ctrler)注册，并在充值时输入 **“Ctrler”** 优惠码即可享受 **九折优惠**。 |
 | <img src="docs/images/AICodeMirror.jpg" width="200" alt="AICodeMirror Logo"> | 感谢 AICodeMirror 赞助了本项目！AICodeMirror 提供 Claude Code / Codex / Gemini CLI 官方高稳定中转服务，支持企业级高并发、极速开票、7×24 专属技术支持。 Claude Code / Codex / Gemini 官方渠道低至 3.8 / 0.2 / 0.9 折，充值更有折上折！AICodeMirror 为 Antigravity-Manager 的用户提供了特别福利，通过[此链接](https://www.aicodemirror.com/register?invitecode=MV5XUM)注册的用户，可享受首充8折，企业客户最高可享 7.5 折！ |
 | <img src="https://coder.visioncoder.cn/logo.png" width="200" alt="VisionCoder Logo"> | 感谢 VisionCoder 对本项目的支持。[VisionCoder 开发平台](https://coder.visioncoder.cn) 是一个可靠高效性 API 中继服务提供商，提供 Claude Code、Codex、Gemini 等主流 AI 模型，帮助开发者和团队更轻松地集成 AI 功能，提升工作效率。VisionCoder 为本站用户提供了专属福利：通过[此链接](https://coder.visioncoder.cn)注册并购买 [Token Plan](https://coder.visioncoder.cn) 限时活动，可享受“买 1 个月赠 1 个月”优惠。 |
+| <img src="docs/images/hvoy.png" width="200" alt="hvoy.ai Logo"> | 感谢 **hvoy.ai** 赞助了本项目！[hvoy.ai](https://hvoy.ai/?source=am) 是一站式 AI API 服务免费检测与中转站收录导航平台，凭借全面的收录与实时数据探测，已成为众多技术团队与企业在选型时的的首选工具。平台已收录覆盖数百家中转站、持续探测几十家站点的性能及各纬度评测，为用户提供客观、透明的中转服务选型依据，助力高效避坑。需要使用AI API服务的用户可以前往 [hvoy.ai](https://hvoy.ai/?source=am) 体验使用。 |
 
 
 
