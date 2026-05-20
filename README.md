@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> 专业级 AI 账号管理与协议代理系统 (v4.2.0)
+> 专业级 AI 账号管理与协议代理系统 (v4.2.1)
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
 
@@ -8,7 +8,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.2.0-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.2.1-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -131,7 +131,7 @@ graph TD
 
 **Linux / macOS:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.2.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.2.1/install.sh | bash
 ```
 
 **Windows (PowerShell):**
@@ -141,7 +141,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **支持的格式**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **高级用法**: 安装指定版本 `curl -fsSL ... | bash -s -- --version 4.2.0`，预览模式 `curl -fsSL ... | bash -s -- --dry-run`
+> **高级用法**: 安装指定版本 `curl -fsSL ... | bash -s -- --version 4.2.1`，预览模式 `curl -fsSL ... | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 如果您已安装 [Homebrew](https://brew.sh/)，也可以通过以下命令安装：
@@ -441,6 +441,11 @@ response = client.chat.completions.create(
 ## 📝 开发者与社区
 
 *   **版本演进 (Changelog)**:
+    *   **v4.2.1 (2026-05-20)**:
+        -   **[核心修复] Windows 进程隔离与进程查杀优化 (Windows Process Segregation)**:
+            -   **问题修复**: 解决了在 Windows 平台切换 Antigravity 与 Antigravity IDE 时导致双方进程意外互相误杀的问题。
+            -   **严格路径过滤**: 引入了基于可执行文件绝对路径 (`canonicalize()`) 的严格匹配机制。当用户在配置中显式指定路径后，系统将仅管理与该路径匹配的进程，避免由于模糊匹配引发意外查杀。
+            -   **⚠️ 重要提示**: Windows 用户务必在“设置 -> 高级”中，分别配置**经典版自定义路径 (antigravity_executable)** 和 **IDE 自定义路径 (antigravity_ide_executable)**，以激活严格的路径隔离机制。若未配置路径，系统将回退至模糊的进程名称匹配，这可能会在切换账号时导致意外关闭。
     *   **v4.2.0 (2026-05-20)**:
         -   **[核心功能] 新增 Antigravity IDE 账号一键切换与独立的双切换按钮**:
             -   **双通道一键切换**: 在账号管理的操作面板中，针对经典版（Classic）与新版（IDE）分别提供了**独立的账号切换按钮**，支持用户在同一界面直接控制两个版本的账号状态。

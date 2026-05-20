@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> Professional AI Account Management & Protocol Proxy System (v4.2.0)
+> Professional AI Account Management & Protocol Proxy System (v4.2.1)
 
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
@@ -9,7 +9,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.2.0-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.2.1-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -132,7 +132,7 @@ Automatically detects your OS, architecture, and package manager — one command
 
 **Linux / macOS:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.2.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.2.1/install.sh | bash
 ```
 
 **Windows (PowerShell):**
@@ -142,7 +142,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **Supported formats**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **Advanced usage**: Install a specific version `curl -fsSL ... | bash -s -- --version 4.2.0`，dry-run mode `curl -fsSL ... | bash -s -- --dry-run`
+> **Advanced usage**: Install a specific version `curl -fsSL ... | bash -s -- --version 4.2.1`，dry-run mode `curl -fsSL ... | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 If you have [Homebrew](https://brew.sh/) installed, you can also install via:
@@ -293,6 +293,11 @@ print(response.choices[0].message.content)
 ## 📝 Developer & Community
 
 *   **Changelog**:
+    *   **v4.2.1 (2026-05-20)**:
+        -   **[Core Fix] Windows Process Segregation & Precision Termination (Windows Process Segregation)**:
+            -   **Bug Fix**: Resolved an issue on Windows where switching accounts or closing applications resulted in accidental process termination of both Antigravity Classic and Antigravity IDE due to fuzzy process name matching.
+            -   **Strict Path Matching**: Introduced a strict filtering mechanism based on the absolute path of the executable (`canonicalize()`). When custom paths are configured, the system executes targeted process control matching the path rather than relying on process names.
+            -   **⚠️ Important Note**: Windows users are **strongly advised** to configure custom executable paths for both Classic (`antigravity_executable`) and IDE (`antigravity_ide_executable`) versions under **Settings -> Advanced Settings**. Without these settings, the system will fall back to fuzzy process name matching, which may cause unexpected program closures when switching accounts.
     *   **v4.2.0 (2026-05-20)**:
         -   **[Core Feature] Brand New Antigravity IDE Account Switching & Independent Dual Switching Buttons**:
             -   **Dual-Channel One-Click Switch**: Added a dedicated, **independent switching button** for the new IDE version in the Account Management actions panel, alongside the existing Classic switch, allowing direct, parallel account switching from a single dashboard.

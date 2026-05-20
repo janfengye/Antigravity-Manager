@@ -1,6 +1,7 @@
-use crate::modules::process;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::fs;
 use std::path::PathBuf;
+use crate::modules::process;
 
 /// Antigravity 版本信息
 #[derive(Debug, Clone)]
@@ -35,9 +36,9 @@ fn extract_semver(raw: &str) -> Option<String> {
 }
 
 /// 检测 Antigravity 版本（跨平台）
-pub fn get_antigravity_version() -> Result<AntigravityVersion, String> {
+pub fn get_antigravity_version(target_ide: Option<&str>) -> Result<AntigravityVersion, String> {
     // 1. 获取 Antigravity 可执行文件路径（复用现有功能）
-    let exe_path = process::get_antigravity_executable_path(None)
+    let exe_path = process::get_antigravity_executable_path(target_ide)
         .ok_or("Unable to locate Antigravity executable")?;
     
     // 2. 根据平台读取版本信息

@@ -74,6 +74,7 @@ pub fn inject_token(
     project_id: Option<&str>,
     id_token: Option<&str>,
     oauth_client_key: Option<&str>,
+    target_ide: Option<&str>,
 ) -> Result<String, String> {
     crate::modules::logger::log_info("Starting Token injection...");
     
@@ -89,7 +90,7 @@ pub fn inject_token(
     }
     
     // 1. Detect Antigravity version
-    let version_result = crate::modules::version::get_antigravity_version();
+    let version_result = crate::modules::version::get_antigravity_version(target_ide);
     
     match version_result {
         Ok(ver) => {

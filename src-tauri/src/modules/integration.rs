@@ -34,7 +34,7 @@ impl SystemIntegration for DesktopIntegration {
 
         if !is_ide {
             // 经典原生版：自动探测版本号
-            match version::get_antigravity_version() {
+            match version::get_antigravity_version(target_ide) {
                 Ok(ver) => {
                     // 如果版本号 >= 2.0.0
                     if version::compare_version(&ver.short_version, "2.0.0") != std::cmp::Ordering::Less {
@@ -99,6 +99,7 @@ impl SystemIntegration for DesktopIntegration {
                 account.token.project_id.as_deref(),
                 account.token.id_token.as_deref(),
                 account.token.oauth_client_key.as_deref(),
+                target_ide,
             )?;
             
             // 2.4 同步 Service Machine ID 到数据库
@@ -157,10 +158,6 @@ fn write_to_system_keyring(account: &crate::models::Account) -> Result<(), Strin
         auth_method: "consumer".to_string(),
     }).map_err(|e| format!("Failed to serialize keyring JSON: {}", e))?;
 
-    use base64::{Engine as _, engine::general_purpose::STANDARD};
-    let encoded_payload = STANDARD.encode(payload_json);
-    let full_keyring_value = format!("go-keyring-base64:{}", encoded_payload);
-
     crate::modules::logger::log_info(&format!(
         "[Desktop] Writing token to system credential store for: {}",
         account.email
@@ -169,6 +166,10 @@ fn write_to_system_keyring(account: &crate::models::Account) -> Result<(), Strin
     // 2. 跨平台凭据注入
     #[cfg(target_os = "macos")]
     {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        let encoded_payload = STANDARD.encode(&payload_json);
+        let full_keyring_value = format!("go-keyring-base64:{}", encoded_payload);
+
         // 2.1 macOS Keychain Access
         // 删除旧的
         let _ = Command::new("security")
@@ -189,25 +190,76 @@ fn write_to_system_keyring(account: &crate::models::Account) -> Result<(), Strin
 
     #[cfg(target_os = "windows")]
     {
-        // 2.2 Windows Credential Manager
-        use std::os::windows::process::CommandExt;
-        
-        // 删除旧的
-        let _ = Command::new("cmdkey")
-            .args(["/delete:gemini"])
-            .creation_flags(0x08000000) // CREATE_NO_WINDOW
-            .output();
+        // 2.2 Windows Credential Manager direct Win32 API calls to write raw UTF-8 bytes
+        use std::ptr;
+        use std::os::windows::ffi::OsStrExt;
 
-        // 写入新的
-        let output = Command::new("cmdkey")
-            .args(["/generic:gemini", "/user:antigravity", &format!("/pass:{}", full_keyring_value)])
-            .creation_flags(0x08000000) // CREATE_NO_WINDOW
-            .output()
-            .map_err(|e| format!("Failed to execute cmdkey: {}", e))?;
+        #[repr(C)]
+        struct FILETIME {
+            dw_low_date_time: u32,
+            dw_high_date_time: u32,
+        }
 
-        if !output.status.success() {
-            let err_msg = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("Windows cmdkey failed: {}", err_msg.trim()));
+        #[repr(C)]
+        struct CREDENTIALW {
+            flags: u32,
+            cred_type: u32,
+            target_name: *const u16,
+            comment: *const u16,
+            last_written: FILETIME,
+            credential_blob_size: u32,
+            credential_blob: *const u8,
+            persist: u32,
+            attribute_count: u32,
+            attributes: *const std::ffi::c_void,
+            target_alias: *const u16,
+            user_name: *const u16,
+        }
+
+        #[link(name = "advapi32")]
+        extern "system" {
+            fn CredWriteW(credential: *const CREDENTIALW, flags: u32) -> i32;
+            fn CredDeleteW(target_name: *const u16, type_: u32, flags: u32) -> i32;
+        }
+
+        let target = "gemini:antigravity";
+        let user = "antigravity";
+        let secret = payload_json.as_bytes();
+
+        let target_wide: Vec<u16> = std::ffi::OsStr::new(target)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+
+        let user_wide: Vec<u16> = std::ffi::OsStr::new(user)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+
+        let cred = CREDENTIALW {
+            flags: 0,
+            cred_type: 1, // CRED_TYPE_GENERIC
+            target_name: target_wide.as_ptr(),
+            comment: ptr::null(),
+            last_written: FILETIME { dw_low_date_time: 0, dw_high_date_time: 0 },
+            credential_blob_size: secret.len() as u32,
+            credential_blob: secret.as_ptr(),
+            persist: 2, // CRED_PERSIST_LOCAL_MACHINE
+            attribute_count: 0,
+            attributes: ptr::null(),
+            target_alias: ptr::null(),
+            user_name: user_wide.as_ptr(),
+        };
+
+        unsafe {
+            // Delete first to ensure we write clean
+            let _ = CredDeleteW(target_wide.as_ptr(), 1, 0);
+
+            let res = CredWriteW(&cred, 0);
+            if res == 0 {
+                let err = std::io::Error::last_os_error();
+                return Err(format!("Windows CredWriteW failed: {}", err));
+            }
         }
     }
 
@@ -224,7 +276,7 @@ fn write_to_system_keyring(account: &crate::models::Account) -> Result<(), Strin
             .map_err(|e| format!("Failed to spawn secret-tool: {}", e))?;
 
         if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(full_keyring_value.as_bytes())
+            stdin.write_all(payload_json.as_bytes())
                 .map_err(|e| format!("Failed to write to secret-tool stdin: {}", e))?;
         }
 
