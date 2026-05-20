@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> Professional AI Account Management & Protocol Proxy System (v4.1.33)
+> Professional AI Account Management & Protocol Proxy System (v4.2.0)
 
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
@@ -9,7 +9,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.1.33-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.2.0-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -132,7 +132,7 @@ Automatically detects your OS, architecture, and package manager — one command
 
 **Linux / macOS:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.1.33/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.2.0/install.sh | bash
 ```
 
 **Windows (PowerShell):**
@@ -142,7 +142,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **Supported formats**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **Advanced usage**: Install a specific version `curl -fsSL ... | bash -s -- --version 4.1.33`，dry-run mode `curl -fsSL ... | bash -s -- --dry-run`
+> **Advanced usage**: Install a specific version `curl -fsSL ... | bash -s -- --version 4.2.0`，dry-run mode `curl -fsSL ... | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 If you have [Homebrew](https://brew.sh/) installed, you can also install via:
@@ -293,6 +293,21 @@ print(response.choices[0].message.content)
 ## 📝 Developer & Community
 
 *   **Changelog**:
+    *   **v4.2.0 (2026-05-20)**:
+        -   **[Core Feature] Brand New Antigravity IDE Account Switching & Independent Dual Switching Buttons**:
+            -   **Dual-Channel One-Click Switch**: Added a dedicated, **independent switching button** for the new IDE version in the Account Management actions panel, alongside the existing Classic switch, allowing direct, parallel account switching from a single dashboard.
+            -   **Physical Isolation & Multi-Version Coexistence**: Achieved strict physical path isolation for runtime data, `state.vscdb` databases, and configuration settings, ensuring Classic and IDE settings coexist harmoniously and conflict-free.
+            -   **Intelligent Process Evading**: Refactored the Rust process supervisor to precisely terminate and control processes matching the targeted version, completely preventing the IDE module from mistakenly interrupting active Classic backend processes.
+        -   **[Multi-Version Compatibility Refactor] Intelligent Multi-Version Account Switcher & OS Keychain/Keyring Credentials Manager Integration**:
+            -   **Native 2.0.0+ Client Keychain Injection**: Implemented secure OAuth credential serialization into the OS credentials store (Keychain on macOS) formatted as raw Base64 JSON payloads required by the official Go-based >= 2.0.0 client, bypassing old `storage.json` dependencies and completely eliminating previous switching-lock blockings.
+            -   **Cross-Platform Silent Credential Injection**: Outfitted macOS with silent `security` CLI injection backed by `-A` flag authorization, ensuring fully automatic password-less token access; fully supported quiet `cmdkey` scripts for Windows and native Secret Service `secret-tool` utilities for Linux desktops.
+            -   **Version-Aware Detection & Seamless Fallback**: Introduced automatic installed version detection. Gracefully falls back to legacy SQLite injection & service machine ID synchronization paths on detected < 2.0.0 clients to ensure backward compatibility, while keeping the customized Antigravity IDE SQLite pipeline strictly untouched for robust architectural partition.
+        -   **[UX & Animation Upgrade] Distinctive Switching Icons & Silky Clockwise Spin Effects**:
+            -   **Differentiated Brand Icons**: Outfitted the new IDE switcher with a modern geometric **`Repeat2`** vector icon to stand distinct from Classic's `ArrowRightLeft` arrow icon, dramatically enhancing UI visual hierarchy.
+            -   **Silky Spin Animation**: Upgraded the toggling state (isSwitching) transition from standard `animate-pulse` breathing to a snappy, clockwise **`animate-spin`** loop micro-animation for an premium tactile interaction.
+        -   **[i18n Bug Fix] 12-Language Alignment & Fixed Tooltip Hover Fallback**:
+            -   **Translation Alignment**: Fixed a bug where the hover tooltips on the switching buttons fell back to default Chinese under non-Chinese system locales.
+            -   **Full Localizations Coverage**: Added and aligned `accounts.switch_to_classic` and `accounts.switch_to_ide` translation keys across all **12 localization packages** (including `en.json`, `zh.json`, `zh-TW.json`, `ja.json`, `ko.json`, etc.), ensuring accurate globally-localized tooltips.
     *   **v4.1.33 (2026-05-01)**:
         -   **[Core Fix] Resolve Antigravity IDE  OAuth Token refresh failure and invalid_grant error.**
         -   **[Core Fix] Resolve 403 Forbidden errors caused by Project ID conflicts and implement automatic retry/downgrade for enterprise/personal quotas.**

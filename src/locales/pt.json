@@ -156,6 +156,8 @@
         "last_used": "Último Uso",
         "reset_time": "Tempo de Reset",
         "switch_to": "Alternar para esta conta",
+        "switch_to_classic": "Alternar para Antigravity (Clássico)",
+        "switch_to_ide": "Alternar para Antigravity IDE",
         "actions": "Ações",
         "device_fingerprint": "Impressão Digital do Dispositivo",
         "show_all_quotas": "Mostrar todas as cotas",

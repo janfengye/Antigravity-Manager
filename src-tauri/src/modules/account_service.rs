@@ -89,8 +89,8 @@ impl AccountService {
     }
 
     /// 切换账号逻辑
-    pub async fn switch_account(&self, account_id: &str) -> Result<(), String> {
-        modules::account::switch_account(account_id, &self.integration).await
+    pub async fn switch_account(&self, account_id: &str, target_ide: Option<&str>) -> Result<(), String> {
+        modules::account::switch_account(account_id, target_ide, &self.integration).await
     }
 
     /// 列表获取

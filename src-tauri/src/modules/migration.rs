@@ -266,7 +266,7 @@ pub async fn import_from_custom_db_path(path_str: String) -> Result<Account, Str
 
 /// Import current logged-in account from default IDE database
 pub async fn import_from_db() -> Result<Account, String> {
-    let db_path = db::get_db_path()?;
+    let db_path = db::get_db_path(None)?;
     import_from_custom_db_path(db_path.to_string_lossy().to_string()).await
 }
 
@@ -395,6 +395,6 @@ fn extract_oauth_state_from_file(db_path: &PathBuf) -> Result<ImportedOAuthState
 
 /// Get current Refresh Token from default database (backwards compatibility)
 pub fn get_refresh_token_from_db() -> Result<String, String> {
-    let db_path = db::get_db_path()?;
+    let db_path = db::get_db_path(None)?;
     extract_refresh_token_from_file(&db_path)
 }

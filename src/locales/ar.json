@@ -162,6 +162,8 @@
         "last_used": "آخر استخدام",
         "reset_time": "وقت إعادة التعيين",
         "switch_to": "التبديل لهذا الحساب",
+        "switch_to_classic": "التبديل إلى Antigravity (الكلاسيكي)",
+        "switch_to_ide": "التبديل إلى Antigravity IDE",
         "actions": "إجراءات",
         "device_fingerprint": "بصمة الجهاز",
         "show_all_quotas": "إظهار جميع الحصص",

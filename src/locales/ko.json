@@ -163,6 +163,8 @@
         "last_used": "최근 사용",
         "reset_time": "초기화 시간",
         "switch_to": "이 계정으로 전환",
+        "switch_to_classic": "Antigravity (클래식 버전)으로 전환",
+        "switch_to_ide": "Antigravity IDE로 전환",
         "actions": "작업",
         "device_fingerprint": "디바이스 지문",
         "show_all_quotas": "모든 할당량 표시",

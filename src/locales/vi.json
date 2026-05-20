@@ -158,6 +158,8 @@
         "last_used": "Dùng lần cuối",
         "reset_time": "Thời gian reset",
         "switch_to": "Chuyển sang tài khoản này",
+        "switch_to_classic": "Chuyển sang Antigravity (Cổ điển)",
+        "switch_to_ide": "Chuyển sang Antigravity IDE",
         "actions": "Thao tác",
         "device_fingerprint": "Vân Tay Thiết Bị",
         "show_all_quotas": "Hiển thị tất cả hạn ngạch",

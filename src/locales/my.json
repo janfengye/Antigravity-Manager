@@ -160,6 +160,8 @@
         "last_used": "Terakhir Digunakan",
         "reset_time": "Masa Reset",
         "switch_to": "Tukar ke akaun ini",
+        "switch_to_classic": "Tukar ke Antigravity (Klasik)",
+        "switch_to_ide": "Tukar ke Antigravity IDE",
         "actions": "Tindakan",
         "device_fingerprint": "Cap Jari Peranti",
         "show_all_quotas": "Tunjukkan semua kuota",

@@ -192,6 +192,8 @@
         "last_used": "Last Used",
         "reset_time": "Reset Time",
         "switch_to": "Switch to this account",
+        "switch_to_classic": "Switch to Antigravity (Classic)",
+        "switch_to_ide": "Switch to Antigravity IDE",
         "actions": "Actions",
         "device_fingerprint": "Device Fingerprint",
         "show_all_quotas": "Show All Quotas",

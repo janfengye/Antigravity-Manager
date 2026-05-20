@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> 专业级 AI 账号管理与协议代理系统 (v4.1.33)
+> 专业级 AI 账号管理与协议代理系统 (v4.2.0)
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
 
@@ -8,7 +8,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.1.33-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.2.0-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -131,7 +131,7 @@ graph TD
 
 **Linux / macOS:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.1.33/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.2.0/install.sh | bash
 ```
 
 **Windows (PowerShell):**
@@ -141,7 +141,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **支持的格式**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **高级用法**: 安装指定版本 `curl -fsSL ... | bash -s -- --version 4.1.33`，预览模式 `curl -fsSL ... | bash -s -- --dry-run`
+> **高级用法**: 安装指定版本 `curl -fsSL ... | bash -s -- --version 4.2.0`，预览模式 `curl -fsSL ... | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 如果您已安装 [Homebrew](https://brew.sh/)，也可以通过以下命令安装：
@@ -441,6 +441,21 @@ response = client.chat.completions.create(
 ## 📝 开发者与社区
 
 *   **版本演进 (Changelog)**:
+    *   **v4.2.0 (2026-05-20)**:
+        -   **[核心功能] 新增 Antigravity IDE 账号一键切换与独立的双切换按钮**:
+            -   **双通道一键切换**: 在账号管理的操作面板中，针对经典版（Classic）与新版（IDE）分别提供了**独立的账号切换按钮**，支持用户在同一界面直接控制两个版本的账号状态。
+            -   **物理隔离与多版本共存**: 实现了经典版与 IDE 版底层数据、`state.vscdb` 数据库及配置文件路径的完全物理隔离，保障两版本配置与凭证互不干扰、完美共存。
+            -   **进程智能避让控制**: 重构了 Rust 后端的进程管理逻辑，确保在进行 IDE 切换或关闭操作时，能够精准定位对应进程，绝不误伤或错误关闭 Classic 版本的后台运行状态。
+        -   **[多版本兼容性重构] 智能多版本切换与 OS Keychain 系统凭据管理器支持**:
+            -   **原生 2.0.0+ 客户端 Keychain 注入**: 针对 >= 2.0.0 以上的原生客户端，实现了将 OAuth 凭据以特定 JSON Base64 格式写入系统凭据管理器的功能，免除了对 `storage.json` 的强依赖，彻底解决因文件缺失导致的切换中断问题。
+            -   **跨平台无感静默写入**: 针对 macOS 提供 `security` 命令行配合 `-A` 彻底打通本地应用免密读取权限，实现零弹窗无感切换；同时完美实现 Windows (`cmdkey` 静默命令) 与 Linux (`secret-tool`) 平台的原生 Keychain/Keyring 凭据极速注入。
+            -   **版本自动检测与平滑降级**: 引入智能版本探测机制。检测到原生应用版本 < 2.0.0 时自动采用原有的 SQLite 数据库和机器指纹注入分支以向下兼容；若检测到版本 >= 2.0.0 则优雅执行 Keychain 注入；针对 Antigravity IDE 版则强制保持原有的 SQLite 注入机制绝对不变，达成完美的逻辑隔离。
+        -   **[前端交互与动效升级] 独立的个性化切换图标与顺滑旋转微动效**:
+            -   **差异化专属图标**: 为新版 IDE 设计了独立且极具折角循环几何感的全新 **`Repeat2`** 切换图标，与 Classic 版的 `ArrowRightLeft` 箭头形成清晰直观的差异化，提升交互辨识度。
+            -   **旋转微动效升级**: 将切换状态 (isSwitching) 下的动画从温和的 `animate-pulse` 升级为顺时针匀速旋转的 **`animate-spin`** 微动画，使得切换过程在视觉反馈上更具流畅度和动感质感。
+        -   **[国际化缺陷修复] 全系统 12 国语言无缝对齐，彻底解决 Tooltip 汉字回退**:
+            -   **多语言翻译对齐**: 修复了此前非中文环境下，经典版和新版切换按钮悬停提示 Tooltip 回退为默认中文的缺陷。
+            -   **全语系包覆盖**: 在 `en.json`, `zh.json`, `zh-TW.json`, `ja.json`, `ko.json` 等全部 **12 个多语言翻译包** 中精准补充并对齐了 `accounts.switch_to_classic` 与 `accounts.switch_to_ide` 翻译键，实现全球多语言悬停精准提示。
     *   **v4.1.33 (2026-05-01)**:
         -   **[核心修复] 解决 Antigravity IDE  OAuth Token 刷新失效及 invalid_grant 报错问题。**
         -   **[核心修复] 解决由于项目 ID 冲突导致的 403 报错，并实现企业/个人配额的自动重试降级。**

@@ -160,6 +160,8 @@
         "last_used": "Último Uso",
         "reset_time": "Tiempo de Reinicio",
         "switch_to": "Cambiar a esta cuenta",
+        "switch_to_classic": "Cambiar a Antigravity (Clásico)",
+        "switch_to_ide": "Cambiar a Antigravity IDE",
         "actions": "Acciones",
         "device_fingerprint": "Huella Digital del Dispositivo",
         "show_all_quotas": "Mostrar todas las cuotas",

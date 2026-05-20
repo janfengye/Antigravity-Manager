@@ -158,6 +158,8 @@
         "last_used": "Последнее использование",
         "reset_time": "Время сброса",
         "switch_to": "Переключить на этот аккаунт",
+        "switch_to_classic": "Переключить на Antigravity (Классическая)",
+        "switch_to_ide": "Переключить на Antigravity IDE",
         "actions": "Действия",
         "device_fingerprint": "Отпечаток Устройства",
         "show_all_quotas": "Показать все квоты",

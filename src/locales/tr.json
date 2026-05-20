@@ -156,6 +156,8 @@
         "last_used": "Son Kullanım",
         "reset_time": "Sıfırlama Zamanı",
         "switch_to": "Bu hesaba geç",
+        "switch_to_classic": "Antigravity (Klasik) sürümüne geç",
+        "switch_to_ide": "Antigravity IDE sürümüne geç",
         "actions": "İşlemler",
         "device_fingerprint": "Cihaz Parmak İzi",
         "show_all_quotas": "Tüm kotaları göster",
