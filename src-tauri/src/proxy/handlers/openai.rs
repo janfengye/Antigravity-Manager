@@ -19,11 +19,11 @@ const MAX_RETRY_ATTEMPTS: usize = 3;
 use super::common::{
     apply_retry_strategy, determine_retry_strategy, should_rotate_account, RetryStrategy,
 };
+use crate::modules::account;
 use crate::proxy::common::client_adapter::CLIENT_ADAPTERS; // [NEW] Adapter Registry
 use crate::proxy::session_manager::SessionManager;
 use axum::http::HeaderMap;
 use tokio::time::Duration;
-use crate::modules::account;
 
 pub async fn handle_chat_completions(
     State(state): State<AppState>,
@@ -31,9 +31,19 @@ pub async fn handle_chat_completions(
     Json(mut body): Json<Value>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     // [NEW] Check for Image Model Redirection
-    let model_name = body.get("model").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
-    if model_name.contains("image") || model_name.contains("dall-e") || model_name.contains("midjourney") {
-        tracing::info!("[ChatRedirection] Redirecting model {} to image generations", model_name);
+    let model_name = body
+        .get("model")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_lowercase();
+    if model_name.contains("image")
+        || model_name.contains("dall-e")
+        || model_name.contains("midjourney")
+    {
+        tracing::info!(
+            "[ChatRedirection] Redirecting model {} to image generations",
+            model_name
+        );
         return intercept_chat_to_image(state, body, &model_name).await;
     }
 
@@ -215,8 +225,12 @@ pub async fn handle_chat_completions(
         info!("✓ Using account: {} (type: {})", email, config.request_type);
 
         // 4. 转换请求 (返回内容包含 session_id 和 message_count)
-        let (gemini_body, session_id, message_count) =
-            transform_openai_request(&openai_req, &project_id, &mapped_model, proxy_token.as_ref());
+        let (gemini_body, session_id, message_count) = transform_openai_request(
+            &openai_req,
+            &project_id,
+            &mapped_model,
+            proxy_token.as_ref(),
+        );
 
         if debug_logger::is_enabled(&debug_cfg) {
             let payload = json!({
@@ -420,9 +434,7 @@ pub async fn handle_chat_completions(
                             break;
                         }
                         Err(_) => {
-                            tracing::warn!(
-                                "[OpenAI] First chunk timeout after 300s, retrying..."
-                            );
+                            tracing::warn!("[OpenAI] First chunk timeout after 300s, retrying...");
                             last_error = "First chunk timeout".to_string();
                             retry_this_account = true;
                             break;
@@ -592,7 +604,15 @@ pub async fn handle_chat_completions(
         }
 
         // 执行退避
-        if apply_retry_strategy(strategy.clone(), attempt, max_attempts, status_code, &trace_id).await {
+        if apply_retry_strategy(
+            strategy.clone(),
+            attempt,
+            max_attempts,
+            status_code,
+            &trace_id,
+        )
+        .await
+        {
             // [NEW] Apply Client Adapter "let_it_crash" strategy
             if let Some(adapter) = &client_adapter {
                 if adapter.let_it_crash() && attempt > 0 {
@@ -611,17 +631,17 @@ pub async fn handle_chat_completions(
             }
 
             // 判断是否需要轮换账号
-                // 判断是否需要轮换账号
-                let mut force_rotate = false;
-                if !should_rotate_account(status_code, Some(&strategy)) {
-                    debug!(
-                        "[{}] Keeping same account for status {} (Grace Retry or Server Issue)",
-                        trace_id, status_code
-                    );
-                    force_rotate = false;
-                } else {
-                    force_rotate = true;
-                }
+            // 判断是否需要轮换账号
+            let mut force_rotate = false;
+            if !should_rotate_account(status_code, Some(&strategy)) {
+                debug!(
+                    "[{}] Keeping same account for status {} (Grace Retry or Server Issue)",
+                    trace_id, status_code
+                );
+                force_rotate = false;
+            } else {
+                force_rotate = true;
+            }
 
             // 2. [REMOVED] 不再特殊处理 QUOTA_EXHAUSTED，允许账号轮换
             // if error_text.contains("QUOTA_EXHAUSTED") { ... }
@@ -1235,8 +1255,12 @@ pub async fn handle_completions(
         info!("✓ Using account: {} (type: {})", email, config.request_type);
 
         let proxy_token = token_manager.get_token_by_id(&account_id);
-        let (gemini_body, session_id, message_count) =
-            transform_openai_request(&openai_req, &project_id, &mapped_model, proxy_token.as_ref());
+        let (gemini_body, session_id, message_count) = transform_openai_request(
+            &openai_req,
+            &project_id,
+            &mapped_model,
+            proxy_token.as_ref(),
+        );
 
         // [New] 打印转换后的报文 (Gemini Body) 供调试 (Codex 路径) ———— 缩减为 simple debug
         debug!(
@@ -1582,7 +1606,15 @@ pub async fn handle_completions(
         let strategy = determine_retry_strategy(status_code, &error_text, false);
 
         // 执行退备
-        if apply_retry_strategy(strategy.clone(), attempt, max_attempts, status_code, &trace_id).await {
+        if apply_retry_strategy(
+            strategy.clone(),
+            attempt,
+            max_attempts,
+            status_code,
+            &trace_id,
+        )
+        .await
+        {
             // 继续重试 (loop 会增加 attempt, 导致 force_rotate=true)
             continue;
         } else {
@@ -1666,7 +1698,9 @@ async fn intercept_chat_to_image(
                     } else if let Some(arr) = content.as_array() {
                         for part in arr {
                             if part.get("type").and_then(|v| v.as_str()) == Some("text") {
-                                prompt.push_str(part.get("text").and_then(|v| v.as_str()).unwrap_or(""));
+                                prompt.push_str(
+                                    part.get("text").and_then(|v| v.as_str()).unwrap_or(""),
+                                );
                             }
                         }
                     }
@@ -1679,7 +1713,10 @@ async fn intercept_chat_to_image(
         prompt = "A beautiful painting".to_string(); // fallback
     }
 
-    let is_stream = body.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
+    let is_stream = body
+        .get("stream")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     // 2. Call internal image generator
     let img_req = json!({
@@ -1708,7 +1745,7 @@ async fn intercept_chat_to_image(
             // 3. Construct Chat Completion Response
             if is_stream {
                 use axum::body::Body;
-                
+
                 let chunk = json!({
                     "id": format!("chatcmpl-img-{}", uuid::Uuid::new_v4()),
                     "object": "chat.completion.chunk",
@@ -1723,7 +1760,7 @@ async fn intercept_chat_to_image(
                         "finish_reason": null
                     }]
                 });
-                
+
                 let done_chunk = json!({
                     "id": format!("chatcmpl-img-{}", uuid::Uuid::new_v4()),
                     "object": "chat.completion.chunk",
@@ -1736,8 +1773,12 @@ async fn intercept_chat_to_image(
                     }]
                 });
 
-                let sse_data = format!("data: {}\n\ndata: {}\n\ndata: [DONE]\n\n", chunk.to_string(), done_chunk.to_string());
-                
+                let sse_data = format!(
+                    "data: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
+                    chunk.to_string(),
+                    done_chunk.to_string()
+                );
+
                 let body = Body::from(sse_data);
                 Ok(Response::builder()
                     .header("Content-Type", "text/event-stream")
@@ -1764,14 +1805,13 @@ async fn intercept_chat_to_image(
 
                 Ok((
                     StatusCode::OK,
-                    [
-                        ("X-Account-Email", email.as_str()),
-                    ],
-                    Json(resp)
-                ).into_response())
+                    [("X-Account-Email", email.as_str())],
+                    Json(resp),
+                )
+                    .into_response())
             }
-        },
-        Err(e) => Err(e.into()) // using Err directly is fine since return type handles it
+        }
+        Err(e) => Err(e.into()), // using Err directly is fine since return type handles it
     }
 }
 
@@ -1810,18 +1850,14 @@ pub async fn handle_images_generations_internal(
 
     let n = body.get("n").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
 
-    let size = body
-        .get("size")
-        .and_then(|v| v.as_str());
+    let size = body.get("size").and_then(|v| v.as_str());
 
     let response_format = body
         .get("response_format")
         .and_then(|v| v.as_str())
         .unwrap_or("b64_json");
 
-    let quality = body
-        .get("quality")
-        .and_then(|v| v.as_str());
+    let quality = body.get("quality").and_then(|v| v.as_str());
 
     let image_size = body
         .get("image_size")
@@ -1844,12 +1880,10 @@ pub async fn handle_images_generations_internal(
     );
 
     // 2. 使用 common_utils 解析图片配置（统一逻辑，支持动态计算宽高比和 quality 映射）
-    let (image_config, clean_model_name) = crate::proxy::mappers::common_utils::parse_image_config_with_params(
-        model,
-        size,
-        quality,
-        image_size,
-    );
+    let (image_config, clean_model_name) =
+        crate::proxy::mappers::common_utils::parse_image_config_with_params(
+            model, size, quality, image_size,
+        );
 
     // 3. Prompt Enhancement（保留原有逻辑）
     let mut final_prompt = prompt.to_string();

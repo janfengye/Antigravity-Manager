@@ -48,11 +48,11 @@ pub fn sanitize_error_for_log(error_text: &str) -> String {
     // 抹除常见敏感 key 的值
     let re = regex::Regex::new(r#"(?i)(access_token|refresh_token|id_token|authorization|api_key|secret|password|proxy_url|http_proxy|https_proxy)\s*[:=]\s*[^"'\\\s,}\]]+"#).unwrap();
     let redacted = re.replace_all(error_text, "$1=<redacted>");
-    
+
     // 抹除 Bearer token
     let re_bearer = regex::Regex::new(r#"(?i)(bearer\s+)[^"'\\\s,}\]]+"#).unwrap();
     let redacted = re_bearer.replace_all(&redacted, "$1<redacted>");
-    
+
     // 限制长度防止日志炸弹
     if redacted.len() > 1000 {
         format!("{}... (truncated)", &redacted[..1000])
@@ -322,9 +322,9 @@ impl UpstreamClient {
         // 2. Device & Session Identity
         // Machine ID (Persistent)
         if let Ok(mid) = machine_uid::get() {
-             if let Ok(mid_val) = header::HeaderValue::from_str(&mid) {
-                 headers.insert("x-machine-id", mid_val);
-             }
+            if let Ok(mid_val) = header::HeaderValue::from_str(&mid) {
+                headers.insert("x-machine-id", mid_val);
+            }
         }
         // Session ID (Per App Launch)
         if let Ok(sess_val) = header::HeaderValue::from_str(&crate::constants::SESSION_ID) {
@@ -358,7 +358,7 @@ impl UpstreamClient {
         tracing::debug!(?headers, "Final Upstream Request Headers");
 
         let mut has_triggered_downgrade = false;
-        
+
         // [TEMPORARY FIX #3074] 针对 403 SERVICE_DISABLED 的自动降级重试逻辑
         // 我们包装一层循环，以便在检测到特定错误时移除 Header 并重试
         loop {
@@ -373,18 +373,16 @@ impl UpstreamClient {
 
                 let body_bytes = serde_json::to_vec(&body).map_err(|e| e.to_string())?;
 
-                let mut req_builder = client
-                    .post(&url)
-                    .headers(headers.clone());
+                let mut req_builder = client.post(&url).headers(headers.clone());
 
                 // [FIX] 仅对流式接口 (streamGenerateContent) 使用分块传输仿真
                 // 对其他接口 (如 generateContent, loadCodeAssist) 发送正常的固定长度 Body
                 // 否则图像生成会因为缺少 Content-Length 而被 Google 服务端拒绝或限流 (429)
                 if method == "streamGenerateContent" {
                     let stream_bytes = body_bytes.clone();
-                    req_builder = req_builder.body(rquest::Body::wrap_stream(futures::stream::once(async move { 
-                        Ok::<_, std::io::Error>(stream_bytes) 
-                    })));
+                    req_builder = req_builder.body(rquest::Body::wrap_stream(
+                        futures::stream::once(async move { Ok::<_, std::io::Error>(stream_bytes) }),
+                    ));
                 } else {
                     req_builder = req_builder.body(body_bytes.clone());
                 }
@@ -417,7 +415,10 @@ impl UpstreamClient {
 
                         // [NEW] 检测 403 错误 (Issue #3074)
                         // 只要带有项目 Header 且返回 403，我们就尝试降级重试一次
-                        if status == StatusCode::FORBIDDEN && !has_triggered_downgrade && headers.contains_key("x-goog-user-project") {
+                        if status == StatusCode::FORBIDDEN
+                            && !has_triggered_downgrade
+                            && headers.contains_key("x-goog-user-project")
+                        {
                             tracing::warn!(
                                 "Detected 403 Forbidden with project header, retrying WITHOUT x-goog-user-project header (Account: {:?})",
                                 account_id
@@ -470,7 +471,7 @@ impl UpstreamClient {
                     }
                 }
             }
-            
+
             // 处理降级逻辑
             if should_retry_without_header {
                 headers.remove("x-goog-user-project");

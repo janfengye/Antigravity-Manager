@@ -197,7 +197,7 @@ pub fn filter_invalid_thinking_blocks_with_family(
                             return false;
                         }
                     };
-                    
+
                     // 2. Family compatibility check (Prevents SONNET-Thinking sig being sent to OPUS-Thinking)
                     if let Some(target) = target_family {
                         if let Some(origin_family) = get_signature_family(sig) {
@@ -207,7 +207,7 @@ pub fn filter_invalid_thinking_blocks_with_family(
                                 return false;
                             }
                         } else {
-                            // [CRITICAL] Signature family not found in cache. 
+                            // [CRITICAL] Signature family not found in cache.
                             // This happens after a server restart when memory is cleared.
                             // If we pass this unverified signature to the upstream, it will likely return 400 "Invalid signature".
                             // It is safer to strip the signature and let the upstream regenerate it.

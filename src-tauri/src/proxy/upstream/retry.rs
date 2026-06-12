@@ -1,12 +1,10 @@
 // 429 重试策略
 // Duration 解析
 
-use regex::Regex;
 use once_cell::sync::Lazy;
+use regex::Regex;
 
-static DURATION_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"([\d.]+)\s*(ms|s|m|h)").unwrap()
-});
+static DURATION_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"([\d.]+)\s*(ms|s|m|h)").unwrap());
 
 static RE_QUOTA_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
     vec![
@@ -18,9 +16,18 @@ static RE_QUOTA_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
 
 static RETRY_HINT_KEYS: Lazy<std::collections::HashSet<&'static str>> = Lazy::new(|| {
     [
-        "retryafter", "retry_after", "retrydelay", "retry_delay",
-        "quotaresetdelay", "quota_reset_delay", "backofflimit", "backoff_limit"
-    ].iter().cloned().collect()
+        "retryafter",
+        "retry_after",
+        "retrydelay",
+        "retry_delay",
+        "quotaresetdelay",
+        "quota_reset_delay",
+        "backofflimit",
+        "backoff_limit",
+    ]
+    .iter()
+    .cloned()
+    .collect()
 });
 
 /// 解析 Duration 字符串 (e.g., "1.5s", "200ms", "1h16m0.667s")
@@ -76,7 +83,9 @@ pub fn parse_retry_delay(error_text: &str) -> Option<u64> {
 
 /// 递归提取结构化延迟
 fn extract_structured_delay_recursive(value: &serde_json::Value, depth: usize) -> Option<u64> {
-    if depth > 8 { return None; }
+    if depth > 8 {
+        return None;
+    }
 
     match value {
         serde_json::Value::Object(map) => {
@@ -119,11 +128,17 @@ fn extract_structured_delay_recursive(value: &serde_json::Value, depth: usize) -
 /// 解析强类型的 Duration 对象 (Google 格式: {seconds: 1, nanos: 0})
 fn parse_structured_duration_object(value: &serde_json::Value) -> Option<u64> {
     let obj = value.as_object()?;
-    let seconds = obj.get("seconds").or_else(|| obj.get("Seconds"))
-        .and_then(|v| v.as_f64()).unwrap_or(0.0);
-    let nanos = obj.get("nanos").or_else(|| obj.get("Nanos"))
-        .and_then(|v| v.as_f64()).unwrap_or(0.0);
-    
+    let seconds = obj
+        .get("seconds")
+        .or_else(|| obj.get("Seconds"))
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    let nanos = obj
+        .get("nanos")
+        .or_else(|| obj.get("Nanos"))
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+
     if seconds > 0.0 || nanos > 0.0 {
         let total_ms = (seconds * 1000.0) + (nanos / 1_000_000.0);
         return Some(total_ms.round() as u64);

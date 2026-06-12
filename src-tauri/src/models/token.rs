@@ -19,7 +19,7 @@ pub struct TokenData {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oauth_client_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<String>,  // 新增：Antigravity sessionId
+    pub session_id: Option<String>, // 新增：Antigravity sessionId
     #[serde(default = "default_is_gcp_tos")]
     pub is_gcp_tos: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]

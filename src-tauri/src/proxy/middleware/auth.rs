@@ -1,7 +1,7 @@
 // API Key 认证中间件
 use axum::{
-    extract::State,
     extract::Request,
+    extract::State,
     http::{header, StatusCode},
     middleware::Next,
     response::Response,
@@ -73,10 +73,12 @@ async fn auth_middleware_internal(
                         .get("x-api-key")
                         .and_then(|h| h.to_str().ok())
                 });
-            
+
             if let Some(token) = api_key {
                 // 尝试验证是否为 User Token（不阻止请求，只记录）
-                if let Ok(Some(user_token)) = crate::modules::user_token_db::get_token_by_value(token) {
+                if let Ok(Some(user_token)) =
+                    crate::modules::user_token_db::get_token_by_value(token)
+                {
                     let identity = UserTokenIdentity {
                         token_id: user_token.id,
                         token: user_token.token,
@@ -89,7 +91,7 @@ async fn auth_middleware_internal(
                     return Ok(next.run(request).await);
                 }
             }
-            
+
             return Ok(next.run(request).await);
         }
 
@@ -103,18 +105,12 @@ async fn auth_middleware_internal(
             return Ok(next.run(request).await);
         }
     } else {
-        // 管理接口 (/api/*)
-        // 1. 如果全局鉴权关闭，则管理接口也放行 (除非是强制局域网模式)
-        if matches!(effective_mode, ProxyAuthMode::Off) {
-            return Ok(next.run(request).await);
-        }
-
-        // 2. 健康检查在所有模式下对管理接口放行
+        // Management endpoints always require admin auth; only health checks stay public.
         if is_health_check {
             return Ok(next.run(request).await);
         }
     }
-    
+
     // 从 header 中提取 API key
     let api_key = request
         .headers()
@@ -134,10 +130,13 @@ async fn auth_middleware_internal(
                 .and_then(|h| h.to_str().ok())
         });
 
-    if security.api_key.is_empty() && (security.admin_password.is_none() || security.admin_password.as_ref().unwrap().is_empty()) {
+    if security.api_key.is_empty()
+        && (security.admin_password.is_none()
+            || security.admin_password.as_ref().unwrap().is_empty())
+    {
         if force_strict {
-             tracing::error!("Admin auth is required but both api_key and admin_password are empty; denying request");
-             return Err(StatusCode::UNAUTHORIZED);
+            tracing::error!("Admin auth is required but both api_key and admin_password are empty; denying request");
+            return Err(StatusCode::UNAUTHORIZED);
         }
         tracing::error!("Proxy auth is enabled but api_key is empty; denying request");
         return Err(StatusCode::UNAUTHORIZED);
@@ -147,9 +146,7 @@ async fn auth_middleware_internal(
     let authorized = if force_strict {
         // 管理接口：优先使用独立的 admin_password，如果没有则回退使用 api_key
         match &security.admin_password {
-            Some(pwd) if !pwd.is_empty() => {
-                api_key.map(|k| k == pwd).unwrap_or(false)
-            }
+            Some(pwd) if !pwd.is_empty() => api_key.map(|k| k == pwd).unwrap_or(false),
             _ => {
                 // 回退使用 api_key
                 api_key.map(|k| k == security.api_key).unwrap_or(false)
@@ -165,7 +162,7 @@ async fn auth_middleware_internal(
     } else if !force_strict && api_key.is_some() {
         // 尝试验证 UserToken
         let token = api_key.unwrap();
-        
+
         // 提取 IP (复用逻辑)
         let client_ip = request
             .headers()
@@ -185,13 +182,15 @@ async fn auth_middleware_internal(
         match crate::modules::user_token_db::validate_token(token, &client_ip) {
             Ok((true, _)) => {
                 // Token 有效，查询信息以便传递
-                if let Ok(Some(user_token)) = crate::modules::user_token_db::get_token_by_value(token) {
-                     let identity = UserTokenIdentity {
+                if let Ok(Some(user_token)) =
+                    crate::modules::user_token_db::get_token_by_value(token)
+                {
+                    let identity = UserTokenIdentity {
                         token_id: user_token.id,
                         token: user_token.token,
                         username: user_token.username,
                     };
-                    
+
                     // [FIX] 将身份信息注入到请求 extensions 中，而不是响应
                     // 这样 monitor_middleware 在处理请求时就能获取到 identity
                     // 因为中间件执行顺序：auth (外层) -> monitor (内层) -> handler
@@ -200,10 +199,10 @@ async fn auth_middleware_internal(
                     let (mut parts, body) = request.into_parts();
                     parts.extensions.insert(identity);
                     let request = Request::from_parts(parts, body);
-                    
+
                     // 执行请求
                     let response = next.run(request).await;
-                    
+
                     Ok(response)
                 } else {
                     Err(StatusCode::UNAUTHORIZED)
@@ -222,7 +221,9 @@ async fn auth_middleware_internal(
                 let response = axum::response::Response::builder()
                     .status(StatusCode::FORBIDDEN)
                     .header("Content-Type", "application/json")
-                    .body(axum::body::Body::from(serde_json::to_string(&body).unwrap()))
+                    .body(axum::body::Body::from(
+                        serde_json::to_string(&body).unwrap(),
+                    ))
                     .unwrap();
                 Ok(response)
             }
@@ -267,7 +268,7 @@ mod tests {
             .uri("/admin/stats")
             .body(axum::body::Body::empty())
             .unwrap();
-        
+
         // 此测试由于涉及 Next 中间件调用比较复杂,主要验证核心逻辑
         // 我们在 auth_middleware_internal 基础上做了逻辑校验即可
     }

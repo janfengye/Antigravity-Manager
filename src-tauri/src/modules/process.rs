@@ -37,7 +37,7 @@ fn get_ide_exe_paths(system: &System) -> std::collections::HashSet<String> {
             .map(|arg| arg.to_string_lossy().to_lowercase())
             .collect::<Vec<String>>()
             .join(" ");
-        
+
         if args_str.contains("antigravity ide") || args_str.contains("antigravity-ide") {
             if let Some(exe_path) = process.exe().and_then(|p| p.to_str()) {
                 immune_exe_paths.insert(exe_path.to_lowercase());
@@ -58,10 +58,12 @@ pub fn is_antigravity_running(target_ide: Option<&str>) -> bool {
 
     // Load both manual paths from config
     let config = crate::modules::config::load_app_config().ok();
-    let manual_path = config.as_ref()
+    let manual_path = config
+        .as_ref()
         .and_then(|c| c.antigravity_executable.as_ref())
         .and_then(|p| std::path::PathBuf::from(p).canonicalize().ok());
-    let ide_manual_path = config.as_ref()
+    let ide_manual_path = config
+        .as_ref()
         .and_then(|c| c.antigravity_ide_executable.as_ref())
         .and_then(|p| std::path::PathBuf::from(p).canonicalize().ok());
 
@@ -169,7 +171,11 @@ pub fn is_antigravity_running(target_ide: Option<&str>) -> bool {
 
         // Check if the process matches target_ide
         let is_ide_match = if target_ide == Some("ide") {
-            exe_path.contains("antigravity ide") || exe_path.contains("antigravity-ide") || name.contains("antigravity ide") || name.contains("antigravity-ide") || ide_exe_paths.contains(&exe_path)
+            exe_path.contains("antigravity ide")
+                || exe_path.contains("antigravity-ide")
+                || name.contains("antigravity ide")
+                || name.contains("antigravity-ide")
+                || ide_exe_paths.contains(&exe_path)
         } else {
             if ide_exe_paths.contains(&exe_path) {
                 false // Explicitly immune (it is an IDE)
@@ -260,10 +266,12 @@ fn get_antigravity_pids(target_ide: Option<&str>) -> Vec<u32> {
 
     // Load both manual paths from config
     let config = crate::modules::config::load_app_config().ok();
-    let manual_path = config.as_ref()
+    let manual_path = config
+        .as_ref()
         .and_then(|c| c.antigravity_executable.as_ref())
         .and_then(|p| std::path::PathBuf::from(p).canonicalize().ok());
-    let ide_manual_path = config.as_ref()
+    let ide_manual_path = config
+        .as_ref()
         .and_then(|c| c.antigravity_ide_executable.as_ref())
         .and_then(|p| std::path::PathBuf::from(p).canonicalize().ok());
 
@@ -414,7 +422,11 @@ fn get_antigravity_pids(target_ide: Option<&str>) -> Vec<u32> {
 
         // Check if the process matches target_ide
         let is_ide_match = if target_ide == Some("ide") {
-            exe_path.contains("antigravity ide") || exe_path.contains("antigravity-ide") || name.contains("antigravity ide") || name.contains("antigravity-ide") || ide_exe_paths.contains(&exe_path)
+            exe_path.contains("antigravity ide")
+                || exe_path.contains("antigravity-ide")
+                || name.contains("antigravity ide")
+                || name.contains("antigravity-ide")
+                || ide_exe_paths.contains(&exe_path)
         } else {
             if ide_exe_paths.contains(&exe_path) {
                 false // Explicitly immune (it is an IDE)
@@ -726,7 +738,9 @@ pub fn close_antigravity(timeout_secs: u64, target_ide: Option<&str>) -> Result<
 
     // Final check
     if is_antigravity_running(target_ide) {
-        return Err("Unable to close Antigravity process, please close manually and retry".to_string());
+        return Err(
+            "Unable to close Antigravity process, please close manually and retry".to_string(),
+        );
     }
 
     crate::modules::logger::log_info("Antigravity closed successfully");
@@ -741,9 +755,13 @@ pub fn start_antigravity(target_ide: Option<&str>) -> Result<(), String> {
     // Prefer manually specified path and args from configuration
     let config = crate::modules::config::load_app_config().ok();
     let manual_path = if target_ide == Some("ide") {
-        config.as_ref().and_then(|c| c.antigravity_ide_executable.clone())
+        config
+            .as_ref()
+            .and_then(|c| c.antigravity_ide_executable.clone())
     } else {
-        config.as_ref().and_then(|c| c.antigravity_executable.clone())
+        config
+            .as_ref()
+            .and_then(|c| c.antigravity_executable.clone())
     };
     let args = config.and_then(|c| c.antigravity_args.clone());
 
@@ -767,7 +785,10 @@ pub fn start_antigravity(target_ide: Option<&str>) -> Result<(), String> {
         }
 
         if path.exists() {
-            crate::modules::logger::log_info(&format!("Starting with manual configuration path: {}", path_str));
+            crate::modules::logger::log_info(&format!(
+                "Starting with manual configuration path: {}",
+                path_str
+            ));
 
             #[cfg(target_os = "macos")]
             {
@@ -783,7 +804,8 @@ pub fn start_antigravity(target_ide: Option<&str>) -> Result<(), String> {
                         }
                     }
 
-                    cmd.spawn().map_err(|e| format!("Startup failed (open): {}", e))?;
+                    cmd.spawn()
+                        .map_err(|e| format!("Startup failed (open): {}", e))?;
                 } else {
                     let mut cmd = Command::new(&path_str);
 
@@ -830,7 +852,11 @@ pub fn start_antigravity(target_ide: Option<&str>) -> Result<(), String> {
     {
         // Improvement: Use output() to wait for open command completion and capture "app not found" error
         let mut cmd = Command::new("open");
-        let app_name = if target_ide == Some("ide") { "Antigravity IDE" } else { "Antigravity" };
+        let app_name = if target_ide == Some("ide") {
+            "Antigravity IDE"
+        } else {
+            "Antigravity"
+        };
         cmd.args(["-a", app_name]);
 
         // Add startup arguments
@@ -840,7 +866,9 @@ pub fn start_antigravity(target_ide: Option<&str>) -> Result<(), String> {
             }
         }
 
-        let output = cmd.output().map_err(|e| format!("Execute open command failed: {}", e))?;
+        let output = cmd
+            .output()
+            .map_err(|e| format!("Execute open command failed: {}", e))?;
         if !output.status.success() {
             let err_msg = String::from_utf8_lossy(&output.stderr);
             return Err(format!("Startup failed: {}", err_msg.trim()));
@@ -866,8 +894,9 @@ pub fn start_antigravity(target_ide: Option<&str>) -> Result<(), String> {
             #[cfg(target_os = "windows")]
             cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
 
-            cmd.spawn()
-                .map_err(|e| format!("Startup failed (detected path {:?}): {}", detected_path, e))?;
+            cmd.spawn().map_err(|e| {
+                format!("Startup failed (detected path {:?}): {}", detected_path, e)
+            })?;
 
             crate::modules::logger::log_info(&format!(
                 "Antigravity startup command sent (detected path: {:?})",
@@ -940,7 +969,10 @@ fn get_process_info(target_ide: Option<&str>) -> (Option<std::path::PathBuf>, Op
 
             // Is the process a match for target_ide?
             let is_ide_match = if target_ide == Some("ide") {
-                exe_path.contains("antigravity ide") || exe_path.contains("antigravity-ide") || name.contains("antigravity ide") || name.contains("antigravity-ide")
+                exe_path.contains("antigravity ide")
+                    || exe_path.contains("antigravity-ide")
+                    || name.contains("antigravity ide")
+                    || name.contains("antigravity-ide")
             } else {
                 (exe_path.contains("antigravity") || name.contains("antigravity"))
                     && !exe_path.contains("antigravity ide")
@@ -1063,7 +1095,11 @@ pub fn get_antigravity_executable_path(target_ide: Option<&str>) -> Option<std::
 
 /// Check standard installation locations
 fn check_standard_locations(target_ide: Option<&str>) -> Option<std::path::PathBuf> {
-    let folder_name = if target_ide == Some("ide") { "Antigravity IDE" } else { "Antigravity" };
+    let folder_name = if target_ide == Some("ide") {
+        "Antigravity IDE"
+    } else {
+        "Antigravity"
+    };
 
     #[cfg(target_os = "macos")]
     {
@@ -1120,7 +1156,11 @@ fn check_standard_locations(target_ide: Option<&str>) -> Option<std::path::PathB
 
     #[cfg(target_os = "linux")]
     {
-        let exe_name = if target_ide == Some("ide") { "antigravity-ide" } else { "antigravity" };
+        let exe_name = if target_ide == Some("ide") {
+            "antigravity-ide"
+        } else {
+            "antigravity"
+        };
         let possible_paths = vec![
             std::path::PathBuf::from(format!("/usr/bin/{}", exe_name)),
             std::path::PathBuf::from(format!("/opt/{}/{}", folder_name, exe_name)),

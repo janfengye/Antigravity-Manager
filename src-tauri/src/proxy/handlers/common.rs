@@ -1,8 +1,13 @@
+use crate::proxy::server::AppState;
+use axum::{
+    extract::State,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    Json,
+};
+use serde_json::{json, Value};
 use tokio::time::{sleep, Duration};
 use tracing::{debug, info};
-use axum::{http::StatusCode, response::{IntoResponse, Response}, Json, extract::State};
-use serde_json::{json, Value};
-use crate::proxy::server::AppState;
 
 // ===== 统一重试与退避策略 =====
 
@@ -45,10 +50,13 @@ pub fn determine_retry_strategy(
                 // [NEW] 如果延迟在 2s 内，执行 Grace Retry (原地重试)
                 if crate::proxy::upstream::retry::should_grace_retry(delay_ms) {
                     let actual_delay = delay_ms.saturating_add(100); // 增加 100ms 安全缓冲
-                    tracing::info!("Grace Retry Triggered: Delay {}ms is within window, using same account", actual_delay);
+                    tracing::info!(
+                        "Grace Retry Triggered: Delay {}ms is within window, using same account",
+                        actual_delay
+                    );
                     RetryStrategy::GraceRetry(Duration::from_millis(actual_delay))
                 } else {
-                    let actual_delay = delay_ms.saturating_add(200).min(30_000); 
+                    let actual_delay = delay_ms.saturating_add(200).min(30_000);
                     RetryStrategy::FixedDelay(Duration::from_millis(actual_delay))
                 }
             } else {
@@ -94,7 +102,10 @@ pub async fn apply_retry_strategy(
 ) -> bool {
     match strategy {
         RetryStrategy::NoRetry => {
-            debug!("[{}] Non-retryable error {}, stopping", trace_id, status_code);
+            debug!(
+                "[{}] Non-retryable error {}, stopping",
+                trace_id, status_code
+            );
             false
         }
 
@@ -175,7 +186,7 @@ pub async fn handle_detect_model(
     Json(body): Json<Value>,
 ) -> Response {
     let model_name = body.get("model").and_then(|v| v.as_str()).unwrap_or("");
-    
+
     if model_name.is_empty() {
         return (StatusCode::BAD_REQUEST, "Missing 'model' field").into_response();
     }

@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> Professional AI Account Management & Protocol Proxy System (v4.2.1)
+> Professional AI Account Management & Protocol Proxy System (v4.2.2)
 
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
@@ -9,7 +9,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.2.1-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.2.2-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -42,6 +42,7 @@ By leveraging this app, you can transform common Web Sessions (Google/Anthropic)
 | Sponsor | Description |
 | :---: | :--- |
 | <img src="docs/images/packycode_logo.png" width="200" alt="PackyCode Logo"> | Thanks to **PackyCode** for sponsoring this project! PackyCode is a reliable and efficient API relay service provider, offering relays for various services such as Claude Code, Codex, and Gemini. PackyCode provides a special offer for users of this project: Register using [this link](https://www.packyapi.com/register?aff=Ctrler) and enter the **"Ctrler"** coupon code when topping up to enjoy a **10% discount**. |
+| <img src="docs/images/claudeapilogo.png" width="200" alt="Claude API Logo"> | Thanks to **Claude API** for supporting this project! claudeapi.com is a **Claude API** relay station built on **official and AWS channels**, focused exclusively on Claude, delivering high stability and low latency with full support for Claude Code. Exclusive offer: register via this [exclusive link](https://console.claudeapi.com/register?source=antigravity) to get **free trial credits — zero setup, get started instantly**; enjoy an extra **5% off** when you top up（Contact Support). |
 | <img src="docs/images/AICodeMirror.jpg" width="200" alt="AICodeMirror Logo"> | Thanks to **AICodeMirror** for sponsoring this project! AICodeMirror provides official high-stability relay services for Claude Code / Codex / Gemini CLI, supporting enterprise-grade concurrency, fast invoicing, and 24/7 dedicated technical support. Claude Code / Codex / Gemini official channels at 38% / 2% / 9% of original price, with extra discounts on top-ups! AICodeMirror offers special benefits for Antigravity-Manager users: register via [this link](https://www.aicodemirror.com/register?invitecode=MV5XUM) to enjoy 20% off your first top-up, and enterprise customers can get up to 25% off! |
 | <img src="https://coder.visioncoder.cn/logo.png" width="200" alt="VisionCoder Logo"> | Thanks to **VisionCoder** for supporting this project. [VisionCoder Developer Platform](https://coder.visioncoder.cn) is a reliable and efficient API relay service provider, offering access to mainstream AI models such as Claude Code, Codex, and Gemini. It helps developers and teams integrate AI capabilities more easily and improve productivity. **VisionCoder** is offering a limited-time [Token Plan](https://coder.visioncoder.cn) promotion for our users: register via [this link](https://coder.visioncoder.cn) and buy **1 month to get 1 month** free. |
 | <img src="docs/images/APIKEYFUN.png" width="200" alt="APIKEYFUN Logo"> | Thanks to **APIKEY.FUN** for sponsoring this project! APIKEY.FUN is a professional enterprise-grade AI relay station, dedicated to providing stable, efficient, and low-cost AI model API access services for enterprise and individual developers. The platform supports mainstream popular models such as Claude, OpenAI, and Gemini, with prices as low as 7% of the official original price. Register through [this exclusive link](https://apikey.fun/register?aff=Ctrler) for this project to enjoy an exclusive offer of up to **permanent 5% off on top-ups**. |
@@ -132,7 +133,7 @@ Automatically detects your OS, architecture, and package manager — one command
 
 **Linux / macOS:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.2.1/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.2.2/install.sh | bash
 ```
 
 **Windows (PowerShell):**
@@ -142,7 +143,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **Supported formats**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **Advanced usage**: Install a specific version `curl -fsSL ... | bash -s -- --version 4.2.1`，dry-run mode `curl -fsSL ... | bash -s -- --dry-run`
+> **Advanced usage**: Install a specific version `curl -fsSL ... | bash -s -- --version 4.2.2`，dry-run mode `curl -fsSL ... | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 If you have [Homebrew](https://brew.sh/) installed, you can also install via:
@@ -293,7 +294,15 @@ print(response.choices[0].message.content)
 ## 📝 Developer & Community
 
 *   **Changelog**:
-    *   **v4.2.1 (2026-05-20)**:
+    *   **v4.2.2 (2026-06-12)**:
+        -   **[Security & Stability] Security Audit and Bug Fixes**:
+            -   **Core Fix**: Fixed an admin authentication bypass vulnerability when the proxy auth mode was set to `Off` ([PR #3134](https://github.com/lbjlaq/Antigravity-Manager/pull/3134)).
+            -   **Credential Protection**: Prevented plaintext credential logging during Headless mode startup ([PR #3134](https://github.com/lbjlaq/Antigravity-Manager/pull/3134)).
+            -   **Path Isolation**: Fixed path traversal vulnerabilities in text file read/write commands by enforcing strict absolute path resolution ([PR #3134](https://github.com/lbjlaq/Antigravity-Manager/pull/3134)).
+            -   **Encryption Hardening**: Fixed the weak AES-GCM encryption vulnerability by replacing the fixed Nonce with a secure randomized Nonce ([PR #3134](https://github.com/lbjlaq/Antigravity-Manager/pull/3134)).
+            -   **Frontend Security**: Hardened Tauri CSP by removing the unsafe `unsafe-eval` directive to prevent XSS attacks ([PR #3134](https://github.com/lbjlaq/Antigravity-Manager/pull/3134)).
+            -   **Protocol Compatibility**: Fixed a `400 INVALID_ARGUMENT` error when using Codex by removing unsupported `tools` fields from requests ([PR #3148](https://github.com/lbjlaq/Antigravity-Manager/pull/3148)).
+*   **v4.2.1 (2026-05-20)**:
         -   **[Core Fix] Windows Process Segregation & Precision Termination (Windows Process Segregation)**:
             -   **Bug Fix**: Resolved an issue on Windows where switching accounts or closing applications resulted in accidental process termination of both Antigravity Classic and Antigravity IDE due to fuzzy process name matching.
             -   **Strict Path Matching**: Introduced a strict filtering mechanism based on the absolute path of the executable (`canonicalize()`). When custom paths are configured, the system executes targeted process control matching the path rather than relying on process names.
