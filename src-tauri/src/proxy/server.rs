@@ -154,6 +154,8 @@ struct QuotaResponse {
     last_updated: i64,
     subscription_tier: Option<String>,
     is_forbidden: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    quota_groups: Option<Vec<QuotaGroupDto>>,
 }
 
 #[derive(Serialize)]
@@ -161,6 +163,46 @@ struct ModelQuota {
     name: String,
     percentage: i32,
     reset_time: String,
+}
+
+#[derive(Serialize)]
+struct QuotaGroupDto {
+    display_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    buckets: Vec<QuotaBucketDto>,
+}
+
+#[derive(Serialize)]
+struct QuotaBucketDto {
+    bucket_id: String,
+    window: String,
+    remaining_fraction: f64,
+    reset_time: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    display_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+}
+
+/// Map a model-side QuotaGroup to the API DTO.
+fn quota_group_to_dto(g: &crate::models::quota::QuotaGroup) -> QuotaGroupDto {
+    QuotaGroupDto {
+        display_name: g.display_name.clone(),
+        description: g.description.clone(),
+        buckets: g
+            .buckets
+            .iter()
+            .map(|b| QuotaBucketDto {
+                bucket_id: b.bucket_id.clone(),
+                window: b.window.clone(),
+                remaining_fraction: b.remaining_fraction,
+                reset_time: b.reset_time.clone(),
+                display_name: b.display_name.clone(),
+                description: b.description.clone(),
+            })
+            .collect(),
+    }
 }
 
 #[derive(Serialize)]
@@ -198,6 +240,10 @@ fn to_account_response(
             last_updated: q.last_updated,
             subscription_tier: q.subscription_tier.clone(),
             is_forbidden: q.is_forbidden,
+            quota_groups: q
+                .quota_groups
+                .as_ref()
+                .map(|groups| groups.iter().map(quota_group_to_dto).collect()),
         }),
         device_bound: account.device_profile.is_some(),
         last_used: account.last_used,
@@ -237,16 +283,30 @@ impl AxumServer {
 
     /// 更新代理配置
     pub async fn update_proxy(&self, new_config: crate::proxy::config::UpstreamProxyConfig) {
-        let mut proxy = self.proxy_state.write().await;
-        *proxy = new_config;
-        tracing::info!("上游代理配置已热更新");
+        {
+            let mut proxy = self.proxy_state.write().await;
+            *proxy = new_config.clone();
+        }
+        // [HOT-RELOAD] Rebuild default HTTP client with new upstream proxy
+        self.upstream
+            .rebuild_default_client(Some(new_config))
+            .await;
+        // Stale per-proxy clients may also be affected (e.g. fallback path)
+        self.upstream.clear_client_cache();
+        tracing::info!("Upstream proxy config hot-reloaded");
     }
 
     /// 更新代理池配置
     pub async fn update_proxy_pool(&self, new_config: crate::proxy::config::ProxyPoolConfig) {
-        let mut pool = self.proxy_pool_state.write().await;
-        *pool = new_config;
-        tracing::info!("代理池配置已热更新");
+        {
+            let mut pool = self.proxy_pool_state.write().await;
+            *pool = new_config;
+        }
+        // [HOT-RELOAD] Re-sync in-memory account↔proxy bindings from the new config
+        self.proxy_pool_manager.sync_bindings_from_config().await;
+        // [HOT-RELOAD] Drop cached per-proxy HTTP clients so they rebuild with new URLs/credentials
+        self.upstream.clear_client_cache();
+        tracing::info!("Proxy pool config hot-reloaded");
     }
 
     pub async fn update_security(&self, config: &crate::proxy::config::ProxyConfig) {
@@ -874,6 +934,9 @@ async fn admin_list_accounts(
                 last_updated: q.last_updated,
                 subscription_tier: q.subscription_tier,
                 is_forbidden: q.is_forbidden,
+                quota_groups: q
+                    .quota_groups
+                    .map(|groups| groups.iter().map(quota_group_to_dto).collect()),
             });
 
             AccountResponse {
@@ -951,6 +1014,9 @@ async fn admin_get_current_account(
                 last_updated: q.last_updated,
                 subscription_tier: q.subscription_tier,
                 is_forbidden: q.is_forbidden,
+                quota_groups: q
+                    .quota_groups
+                    .map(|groups| groups.iter().map(quota_group_to_dto).collect()),
             });
 
             AccountResponse {
