@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> 专业级 AI 账号管理与协议代理系统 (v4.2.4)
+> 专业级 AI 账号管理与协议代理系统 (v4.2.5)
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
 
@@ -8,7 +8,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.2.4-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.2.5-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -132,7 +132,7 @@ graph TD
 
 **Linux / macOS:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.2.4/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.2.5/install.sh | bash
 ```
 
 **Windows (PowerShell):**
@@ -142,7 +142,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **支持的格式**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **高级用法**: 安装指定版本 `curl -fsSL ... | bash -s -- --version 4.2.4`，预览模式 `curl -fsSL ... | bash -s -- --dry-run`
+> **高级用法**: 安装指定版本 `curl -fsSL ... | bash -s -- --version 4.2.5`，预览模式 `curl -fsSL ... | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 如果您已安装 [Homebrew](https://brew.sh/)，也可以通过以下命令安装：
@@ -438,6 +438,12 @@ response = client.chat.completions.create(
 ## 📝 开发者与社区
 
 *   **版本演进 (Changelog)**:
+    *   **v4.2.5 (2026-06-20)**:
+        -   **[代理修复] 过滤并移除了工具参数中的布尔子 Schema (Strip Boolean Sub-schemas)**:
+            -   **问题修复**: 修复了由于 JSON Schema 规范中允许布尔子 Schema（如 `"someProp": false`），而 Gemini API 的 Schema 协议要求 `properties` 和 `items` 必须是对象，从而导致上游接口直接返回 `HTTP 400` 错误的问题。
+            -   **过滤清理**: 在 Schema 递归清理逻辑 `clean_json_schema_recursive` 中，自动丢弃 `properties` 内的非对象（布尔）字段（并同步从 `required` 中移除），丢弃非对象 `items` 属性，确保请求能够完全兼容 Gemini 的 Schema 协议限制并返回 `200` ([PR #3197](https://github.com/lbjlaq/Antigravity-Manager/pull/3197))。
+        -   **[流式修复] 移除 OpenAI 协议流式接口中的 __cloudCodeMeta 元数据 (Remove __cloudCodeMeta)**:
+            -   **问题修复**: 修复了第三方通用客户端（如 Cherry Studio 等）在调用 `/v1/chat/completions` 时，因代理服务在流头部强制注入非标准 Trace ID（`{"__cloudCodeMeta": {"traceId": ...}}`）导致前端 Zod 类型强校验报错崩溃（`AI_TypeValidationError`）的问题。
     *   **v4.2.4 (2026-06-17)**:
         -   **[核心修复] 修复 IDE 新版协议下切换账号丢失历史会话的 Bug (History Loss Fix)**:
             -   **问题修复**: 修复了由于在写入新的 OAuth 凭证时，暴力覆盖 `antigravityUnifiedStateSync.oauthToken` 导致原本与 Token 存放在同一个 Topic 中的 `authStateWithContextSentinelKey` 等状态被意外抹除的问题。

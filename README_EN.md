@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> Professional AI Account Management & Protocol Proxy System (v4.2.4)
+> Professional AI Account Management & Protocol Proxy System (v4.2.5)
 
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
@@ -9,7 +9,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.2.4-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.2.5-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -133,7 +133,7 @@ Automatically detects your OS, architecture, and package manager — one command
 
 **Linux / macOS:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.2.4/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.2.5/install.sh | bash
 ```
 
 **Windows (PowerShell):**
@@ -143,7 +143,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **Supported formats**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **Advanced usage**: Install a specific version `curl -fsSL ... | bash -s -- --version 4.2.4`，dry-run mode `curl -fsSL ... | bash -s -- --dry-run`
+> **Advanced usage**: Install a specific version `curl -fsSL ... | bash -s -- --version 4.2.5`，dry-run mode `curl -fsSL ... | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 If you have [Homebrew](https://brew.sh/) installed, you can also install via:
@@ -293,6 +293,12 @@ print(response.choices[0].message.content)
 ## 📝 Developer & Community
 
 *   **Changelog**:
+    *   **v4.2.5 (2026-06-20)**:
+        -   **[Proxy Fix] Strip Boolean Sub-schemas from Tool Parameters**:
+            -   **Bug Fix**: Fixed a `400 INVALID_ARGUMENT` error where tool parameters containing nested boolean sub-schemas (e.g., `"someProp": false`) were rejected by Gemini's Schema proto (which requires every property/item value to be an Object).
+            -   **Filtering**: Updated `clean_json_schema_recursive` to drop non-object properties (and remove them from `required`) and non-object `items` values, ensuring complete compatibility with the upstream Gemini API schema requirements and returning `200` ([PR #3197](https://github.com/lbjlaq/Antigravity-Manager/pull/3197)).
+        -   **[Streaming Fix] Remove __cloudCodeMeta Metadata from OpenAI Streaming Response (Remove __cloudCodeMeta)**:
+            -   **Bug Fix**: Fixed a `AI_TypeValidationError` issue where third-party generic clients (e.g., Cherry Studio) crashed due to strict Zod validation on incoming SSE stream chunks when receiving the non-standard `{"__cloudCodeMeta": {"traceId": ...}}` header injected at the start of the stream.
     *   **v4.2.4 (2026-06-17)**:
         -   **[Core Fix] Fixed History Session Loss Bug on IDE Account Switch (History Loss Fix)**:
             -   **Bug Fix**: Fixed an issue where violently overwriting `antigravityUnifiedStateSync.oauthToken` during OAuth credential injection accidentally erased `authStateWithContextSentinelKey` and other vital states stored in the same topic.

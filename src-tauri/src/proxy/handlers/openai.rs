@@ -454,23 +454,10 @@ pub async fn handle_chat_completions(
                     .chain(openai_stream);
 
                 // [NEW] 针对 OpenAI 流增加 300 秒空闲超时保护
-                let tid_for_stream = trace_id.clone();
                 let combined_stream = async_stream::stream! {
                     let mut s = Box::pin(combined_stream);
-                    let mut meta_sent = false;
 
                     loop {
-                        // [NEW] 补全 __cloudCodeMeta 响应元数据透传
-                        if !meta_sent {
-                            let meta_pkg = serde_json::json!({
-                                "__cloudCodeMeta": {
-                                    "traceId": tid_for_stream
-                                }
-                            });
-                            yield Ok::<Bytes, String>(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&meta_pkg).unwrap())));
-                            meta_sent = true;
-                        }
-
                         match tokio::time::timeout(std::time::Duration::from_secs(300), s.next()).await {
                             Ok(Some(item)) => yield item,
                             Ok(None) => break,

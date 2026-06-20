@@ -229,19 +229,35 @@ fn clean_json_schema_recursive(value: &mut Value, is_schema_node: bool, depth: u
             // 1. [CRITICAL] 深度递归处理子项
             // 处理 properties (对象)
             if let Some(Value::Object(props)) = map.get_mut("properties") {
+                // [FIX] Drop boolean / non-object sub-schemas. JSON Schema allows
+                // `prop: true|false`, but Gemini's Schema proto requires every property
+                // value to be an object; a bare boolean triggers an upstream 400
+                // ("Invalid value at '...properties[N].value' ... false").
+                let dropped_keys: Vec<String> = props
+                    .iter()
+                    .filter(|(_, v)| !v.is_object())
+                    .map(|(k, _)| k.clone())
+                    .collect();
+                for k in &dropped_keys {
+                    props.remove(k);
+                }
+
                 let mut nullable_keys = std::collections::HashSet::new();
-                for (k, v) in props {
+                for (k, v) in props.iter_mut() {
                     // properties 的每一个值都必须是一个独立的 Schema 节点
                     if clean_json_schema_recursive(v, true, depth + 1) {
                         nullable_keys.insert(k.clone());
                     }
                 }
 
-                if !nullable_keys.is_empty() {
+                if !nullable_keys.is_empty() || !dropped_keys.is_empty() {
                     if let Some(Value::Array(req_arr)) = map.get_mut("required") {
                         req_arr.retain(|r| {
                             r.as_str()
-                                .map(|s| !nullable_keys.contains(s))
+                                .map(|s| {
+                                    !nullable_keys.contains(s)
+                                        && !dropped_keys.iter().any(|d| d == s)
+                                })
                                 .unwrap_or(true)
                         });
                         if req_arr.is_empty() {
@@ -257,6 +273,11 @@ fn clean_json_schema_recursive(value: &mut Value, is_schema_node: bool, depth: u
             }
 
             // 处理 items (数组)
+            // [FIX] items must be a Schema object; drop bare boolean / invalid items
+            // (JSON Schema allows boolean `items`, Gemini's Schema proto rejects it).
+            if map.get("items").map(|i| !i.is_object()).unwrap_or(false) {
+                map.remove("items");
+            }
             if let Some(items) = map.get_mut("items") {
                 // items 的内容必须是一个独立的 Schema 节点
                 clean_json_schema_recursive(items, true, depth + 1);
@@ -813,6 +834,57 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+
+    #[test]
+    fn test_drops_boolean_subschemas() {
+        // JSON Schema permits boolean sub-schemas (`prop: true|false`), but Gemini's
+        // Schema proto rejects a non-object property value with HTTP 400. They must be
+        // stripped at every depth (including inside `items`).
+        let mut schema = json!({
+            "type": "object",
+            "properties": {
+                "outer": {
+                    "type": "object",
+                    "properties": {
+                        "forbidden": false,
+                        "allowed": { "type": "string" }
+                    },
+                    "required": ["forbidden", "allowed"]
+                },
+                "list": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "nope": false,
+                            "ok": { "type": "number" }
+                        }
+                    }
+                }
+            }
+        });
+        clean_json_schema(&mut schema);
+
+        let outer_props = &schema["properties"]["outer"]["properties"];
+        assert!(
+            outer_props.get("forbidden").is_none(),
+            "boolean sub-schema must be dropped"
+        );
+        assert!(outer_props["allowed"].is_object(), "valid sibling must survive");
+
+        let item_props = &schema["properties"]["list"]["items"]["properties"];
+        assert!(
+            item_props.get("nope").is_none(),
+            "nested boolean sub-schema must be dropped"
+        );
+        assert!(item_props["ok"].is_object());
+
+        let req = schema["properties"]["outer"]["required"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        assert!(req.iter().all(|r| r.as_str() != Some("forbidden")));
+    }
     #[test]
     fn test_clean_json_schema_draft_2020_12() {
         let mut schema = json!({
