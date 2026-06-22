@@ -1053,7 +1053,8 @@ fn build_contents(
                                     let mut part = json!({
                                         "text": thinking,
                                         "thought": true,
-                                        "thoughtSignature": sig
+                                        "thoughtSignature": sig.clone(),
+                                        "thought_signature": sig
                                     });
                                     crate::proxy::common::json_schema::clean_json_schema(&mut part);
                                     parts.push(part);
@@ -1070,7 +1071,8 @@ fn build_contents(
                                         let mut part = json!({
                                             "text": thinking,
                                             "thought": true,
-                                            "thoughtSignature": sig
+                                            "thoughtSignature": sig.clone(),
+                                            "thought_signature": sig
                                         });
                                         crate::proxy::common::json_schema::clean_json_schema(
                                             &mut part,
@@ -1258,6 +1260,7 @@ fn build_contents(
                                     };
                                     if should_use_sig {
                                         part["thoughtSignature"] = json!(sig);
+                                        part["thought_signature"] = json!(sig);
                                     }
                                 }
                             }
@@ -1267,8 +1270,8 @@ fn build_contents(
                             let is_google_cloud = mapped_model.starts_with("projects/");
                             if is_thinking_enabled && !is_google_cloud {
                                 tracing::debug!("[Tool-Signature] Adding GEMINI_SKIP_SIGNATURE for tool_use: {}", id);
-                                part["thoughtSignature"] =
-                                    json!("skip_thought_signature_validator");
+                                part["thoughtSignature"] = json!("skip_thought_signature_validator");
+                                part["thought_signature"] = json!("skip_thought_signature_validator");
                             }
                         }
                         parts.push(part);
@@ -1366,6 +1369,7 @@ fn build_contents(
                         // [FIX] Tool Result 也需要回填签名（如果上下文中有）
                         if let Some(sig) = last_thought_signature.as_ref() {
                             part["thoughtSignature"] = json!(sig);
+                            part["thought_signature"] = json!(sig);
                         }
 
                         parts.push(part);
@@ -1426,6 +1430,7 @@ fn build_contents(
         let has_thought_part = parts.iter().any(|p| {
             p.get("thought").and_then(|v| v.as_bool()).unwrap_or(false)
                 || p.get("thoughtSignature").is_some()
+                || p.get("thought_signature").is_some()
                 || p.get("thought").and_then(|v| v.as_str()).is_some() // 某些情况下可能是 text + thought: true 的组合
         });
 
@@ -1446,7 +1451,7 @@ fn build_contents(
             // [Crucial Check] 即使有 thought 块，也必须保证它位于 parts 的首位 (Index 0)
             // 且必须包含 thought: true 标记
             let first_is_thought = parts.get(0).map_or(false, |p| {
-                (p.get("thought").is_some() || p.get("thoughtSignature").is_some())
+                (p.get("thought").is_some() || p.get("thoughtSignature").is_some() || p.get("thought_signature").is_some())
                     && p.get("text").is_some() // 对于 v1internal，通常 text + thought: true 才是合规的思维块
             });
 
@@ -2030,6 +2035,7 @@ pub fn clean_thinking_fields_recursive(val: &mut Value) {
         Value::Object(map) => {
             map.remove("thought");
             map.remove("thoughtSignature");
+            map.remove("thought_signature");
             for (_, v) in map.iter_mut() {
                 clean_thinking_fields_recursive(v);
             }

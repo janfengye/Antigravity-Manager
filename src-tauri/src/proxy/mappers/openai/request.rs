@@ -221,6 +221,7 @@ pub fn transform_openai_request(
                 // 仅 Gemini 支持哨兵值跳过验证
                 if is_gemini_3_thinking {
                     thought_part["thoughtSignature"] = json!("skip_thought_signature_validator");
+                    thought_part["thought_signature"] = json!("skip_thought_signature_validator");
                 }
 
                 parts.push(thought_part);
@@ -341,12 +342,14 @@ pub fn transform_openai_request(
 
                     if let Some(ref sig) = thought_sig {
                         func_call_part["thoughtSignature"] = json!(sig);
+                        func_call_part["thought_signature"] = json!(sig);
                     } else if is_thinking_model || is_gemini_flash_thinking {
                         // [NEW] Handle missing signature for Gemini thinking models
                         // [FIX #1650] Allow sentinel injection for Vertex AI (projects/...) as well
                         // [FIX #2167] Also applies to gemini-3-flash / gemini-3.1-flash
                         tracing::debug!("[OpenAI-Signature] Adding GEMINI_SKIP_SIGNATURE for tool_use: {}", tc.id);
                         func_call_part["thoughtSignature"] = json!("skip_thought_signature_validator");
+                        func_call_part["thought_signature"] = json!("skip_thought_signature_validator");
                     }
 
                     parts.push(func_call_part);

@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> 专业级 AI 账号管理与协议代理系统 (v4.2.5)
+> 专业级 AI 账号管理与协议代理系统 (v4.2.6)
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
 
@@ -8,7 +8,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.2.5-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.2.6-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -132,7 +132,7 @@ graph TD
 
 **Linux / macOS:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.2.5/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.2.6/install.sh | bash
 ```
 
 **Windows (PowerShell):**
@@ -142,7 +142,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **支持的格式**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **高级用法**: 安装指定版本 `curl -fsSL ... | bash -s -- --version 4.2.5`，预览模式 `curl -fsSL ... | bash -s -- --dry-run`
+> **高级用法**: 安装指定版本 `curl -fsSL ... | bash -s -- --version 4.2.6`，预览模式 `curl -fsSL ... | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 如果您已安装 [Homebrew](https://brew.sh/)，也可以通过以下命令安装：
@@ -438,6 +438,10 @@ response = client.chat.completions.create(
 ## 📝 开发者与社区
 
 *   **版本演进 (Changelog)**:
+    *   **v4.2.6 (2026-06-22)**:
+        -   **[核心修复] 修复了 Gemini 函数调用在多轮对话中缺失 thought_signature 报错 400 的 Bug (Gemini Tool Calling Fix)**:
+            -   **问题修复**: 修复了在使用工具调用（Function Calling）功能时，由于代理在第二轮请求中向 `/v1internal` 接口发送驼峰命名的 `thoughtSignature` 字段，而接口实际校验蛇形命名的 `thought_signature`，导致 API 返回 `400 INVALID_ARGUMENT` 报错（`Function call is missing a thought_signature`）的问题。
+            -   **双重兼容**: 优化了 OpenAI 映射器、Claude 映射器以及 Gemini 包装层，对思维链签名进行双重注入（同时发送 `thoughtSignature` 和 `thought_signature`），并在响应反序列化中添加别名兼容，确保在多轮对话中，工具调用的签名能够被安全地往返传输 ([Issue #3202](https://github.com/lbjlaq/Antigravity-Manager/issues/3202))。
     *   **v4.2.5 (2026-06-20)**:
         -   **[代理修复] 过滤并移除了工具参数中的布尔子 Schema (Strip Boolean Sub-schemas)**:
             -   **问题修复**: 修复了由于 JSON Schema 规范中允许布尔子 Schema（如 `"someProp": false`），而 Gemini API 的 Schema 协议要求 `properties` 和 `items` 必须是对象，从而导致上游接口直接返回 `HTTP 400` 错误的问题。

@@ -87,14 +87,24 @@ pub fn wrap_request(
                             }
                         }
 
-                        // 3. 处理 thoughtSignature
-                        if obj.contains_key("functionCall") && obj.get("thoughtSignature").is_none()
-                        {
-                            if let Some(s_id) = session_id {
+                        // 3. 处理 thoughtSignature / thought_signature
+                        if obj.contains_key("functionCall") {
+                            let sig_opt = obj.get("thoughtSignature")
+                                .or(obj.get("thought_signature"))
+                                .cloned();
+                            if let Some(sig) = sig_opt {
+                                if obj.get("thoughtSignature").is_none() {
+                                    obj.insert("thoughtSignature".to_string(), sig.clone());
+                                }
+                                if obj.get("thought_signature").is_none() {
+                                    obj.insert("thought_signature".to_string(), sig);
+                                }
+                            } else if let Some(s_id) = session_id {
                                 if let Some(sig) = crate::proxy::SignatureCache::global()
                                     .get_session_signature(s_id)
                                 {
                                     obj.insert("thoughtSignature".to_string(), json!(sig));
+                                    obj.insert("thought_signature".to_string(), json!(sig));
                                     tracing::debug!("[Gemini-Wrap] Injected signature (len: {}) for session: {}", sig.len(), s_id);
                                 } else {
                                     // [FIX #2167] Session 缓存为空时对 flash 模型注入哨兵值
@@ -107,6 +117,10 @@ pub fn wrap_request(
                                     if is_flash {
                                         obj.insert(
                                             "thoughtSignature".to_string(),
+                                            json!("skip_thought_signature_validator"),
+                                        );
+                                        obj.insert(
+                                            "thought_signature".to_string(),
                                             json!("skip_thought_signature_validator"),
                                         );
                                         tracing::debug!("[Gemini-Wrap] [FIX #2167] Injected sentinel signature for flash model (no session cache)");
@@ -671,6 +685,28 @@ mod test_fixes {
             .as_str()
             .unwrap();
         assert_eq!(injected_sig, signature);
+    }
+
+    #[test]
+    fn test_wrap_request_with_snake_case_signature() {
+        let body = json!({
+            "model": "gemini-pro",
+            "contents": [{
+                "role": "user",
+                "parts": [{
+                    "functionCall": {
+                        "name": "get_weather",
+                        "args": {"location": "London"}
+                    },
+                    "thought_signature": "client-sent-signature-value-12345"
+                }]
+            }]
+        });
+
+        let result = wrap_request(&body, "proj", "gemini-pro", None, None, None);
+        let part = &result["request"]["contents"][0]["parts"][0];
+        assert_eq!(part["thoughtSignature"].as_str(), Some("client-sent-signature-value-12345"));
+        assert_eq!(part["thought_signature"].as_str(), Some("client-sent-signature-value-12345"));
     }
 }
 
