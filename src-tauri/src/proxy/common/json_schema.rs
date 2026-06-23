@@ -834,7 +834,6 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-
     #[test]
     fn test_drops_boolean_subschemas() {
         // JSON Schema permits boolean sub-schemas (`prop: true|false`), but Gemini's
@@ -870,7 +869,10 @@ mod tests {
             outer_props.get("forbidden").is_none(),
             "boolean sub-schema must be dropped"
         );
-        assert!(outer_props["allowed"].is_object(), "valid sibling must survive");
+        assert!(
+            outer_props["allowed"].is_object(),
+            "valid sibling must survive"
+        );
 
         let item_props = &schema["properties"]["list"]["items"]["properties"];
         assert!(

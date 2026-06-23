@@ -89,7 +89,8 @@ pub fn wrap_request(
 
                         // 3. 处理 thoughtSignature / thought_signature
                         if obj.contains_key("functionCall") {
-                            let sig_opt = obj.get("thoughtSignature")
+                            let sig_opt = obj
+                                .get("thoughtSignature")
                                 .or(obj.get("thought_signature"))
                                 .cloned();
                             if let Some(sig) = sig_opt {
@@ -705,8 +706,14 @@ mod test_fixes {
 
         let result = wrap_request(&body, "proj", "gemini-pro", None, None, None);
         let part = &result["request"]["contents"][0]["parts"][0];
-        assert_eq!(part["thoughtSignature"].as_str(), Some("client-sent-signature-value-12345"));
-        assert_eq!(part["thought_signature"].as_str(), Some("client-sent-signature-value-12345"));
+        assert_eq!(
+            part["thoughtSignature"].as_str(),
+            Some("client-sent-signature-value-12345")
+        );
+        assert_eq!(
+            part["thought_signature"].as_str(),
+            Some("client-sent-signature-value-12345")
+        );
     }
 }
 

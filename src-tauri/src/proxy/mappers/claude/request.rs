@@ -1270,8 +1270,10 @@ fn build_contents(
                             let is_google_cloud = mapped_model.starts_with("projects/");
                             if is_thinking_enabled && !is_google_cloud {
                                 tracing::debug!("[Tool-Signature] Adding GEMINI_SKIP_SIGNATURE for tool_use: {}", id);
-                                part["thoughtSignature"] = json!("skip_thought_signature_validator");
-                                part["thought_signature"] = json!("skip_thought_signature_validator");
+                                part["thoughtSignature"] =
+                                    json!("skip_thought_signature_validator");
+                                part["thought_signature"] =
+                                    json!("skip_thought_signature_validator");
                             }
                         }
                         parts.push(part);
@@ -1451,7 +1453,9 @@ fn build_contents(
             // [Crucial Check] 即使有 thought 块，也必须保证它位于 parts 的首位 (Index 0)
             // 且必须包含 thought: true 标记
             let first_is_thought = parts.get(0).map_or(false, |p| {
-                (p.get("thought").is_some() || p.get("thoughtSignature").is_some() || p.get("thought_signature").is_some())
+                (p.get("thought").is_some()
+                    || p.get("thoughtSignature").is_some()
+                    || p.get("thought_signature").is_some())
                     && p.get("text").is_some() // 对于 v1internal，通常 text + thought: true 才是合规的思维块
             });
 
