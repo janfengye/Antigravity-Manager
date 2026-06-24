@@ -93,6 +93,7 @@ pub async fn handle_generate(
 
     let mut last_error = String::new();
     let mut last_email: Option<String> = None;
+    let mut force_rotate = false;
 
     for attempt in 0..max_attempts {
         // 3. 模型路由解析
@@ -131,11 +132,11 @@ pub async fn handle_generate(
         // 提取 SessionId (粘性指纹)
         let session_id = SessionManager::extract_gemini_session_id(&body, &model_name);
 
-        // 关键：在重试尝试 (attempt > 0) 时强制轮换账号
+        // 关键：根据 force_rotate 标志决定是否轮换账号（支持 Grace Retry 原地重试）
         let (access_token, project_id, email, account_id, _wait_ms) = match token_manager
             .get_token(
                 &config.request_type,
-                attempt > 0,
+                force_rotate,
                 Some(&session_id),
                 &config.final_model,
             )
@@ -628,8 +629,6 @@ pub async fn handle_generate(
             }
 
             // 判断是否需要轮换账号
-            // 判断是否需要轮换账号
-            let mut force_rotate = false;
             if !should_rotate_account(status_code, Some(&strategy)) {
                 debug!(
                 "[{}] Keeping same account for status {} (Gemini server-side issue or Grace Retry)",
@@ -639,6 +638,8 @@ pub async fn handle_generate(
             } else {
                 force_rotate = true;
             }
+            
+            continue;
         }
 
         // [NEW] 处理 400 错误 (Thinking 签名失效)

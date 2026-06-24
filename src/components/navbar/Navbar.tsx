@@ -1,4 +1,4 @@
-import { LayoutDashboard, Users, Network, Activity, BarChart3, Settings, Lock } from 'lucide-react';
+import { LayoutDashboard, Users, Network, Activity, BarChart3, Settings, Lock, KeyRound } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useConfigStore } from '../../stores/useConfigStore';
 import { isTauri, isLinux } from '../../utils/env';
@@ -10,7 +10,7 @@ import type { NavItem } from './constants';
 /**
  * Navbar 主组件
  * 
- * 职责: 只负责布局和状态管理,不处理响应式细节
+ * 职责: 只负责布局 and 状态管理,不处理响应式细节
  * 响应式逻辑由各个子组件独立处理
  */
 function Navbar() {
@@ -22,6 +22,7 @@ function Navbar() {
         { path: '/', label: t('nav.dashboard'), icon: LayoutDashboard, priority: 'high' },
         { path: '/accounts', label: t('nav.accounts'), icon: Users, priority: 'high' },
         { path: '/api-proxy', label: t('nav.proxy'), icon: Network, priority: 'high' },
+        { path: '/apikey-fun', label: t('nav.apikey_fun', '中转站'), icon: KeyRound, priority: 'high' },
         { path: '/monitor', label: t('nav.call_records'), icon: Activity, priority: 'medium' },
         { path: '/token-stats', label: t('nav.token_stats', 'Token 统计'), icon: BarChart3, priority: 'low' },
         { path: '/user-token', label: t('nav.user_token', 'User Tokens'), icon: Users, priority: 'low' },

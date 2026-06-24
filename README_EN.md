@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> Professional AI Account Management & Protocol Proxy System (v4.2.6)
+> Professional AI Account Management & Protocol Proxy System (v4.2.7)
 
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
@@ -9,7 +9,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.2.6-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.2.7-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -134,7 +134,7 @@ Automatically detects your OS, architecture, and package manager — one command
 
 **Linux / macOS:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.2.6/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.2.7/install.sh | bash
 ```
 
 **Windows (PowerShell):**
@@ -144,7 +144,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **Supported formats**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **Advanced usage**: Install a specific version `curl -fsSL ... | bash -s -- --version 4.2.6`，dry-run mode `curl -fsSL ... | bash -s -- --dry-run`
+> **Advanced usage**: Install a specific version `curl -fsSL ... | bash -s -- --version 4.2.7`，dry-run mode `curl -fsSL ... | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 If you have [Homebrew](https://brew.sh/) installed, you can also install via:
@@ -427,7 +427,14 @@ In clients that support OpenAI protocol (e.g., Cherry Studio), you can configure
 ## 📝 Developer & Community
 
 *   **Changelog**:
-    *   **v4.2.6 (2026-06-22)**:
+    *   **v4.2.7 (2026-06-24)**:
+        -   **[New Feature] Introducing APIKEY.FUN Official Hub Partner**:
+            -   **Dedicated Integration Panel**: Brand new built-in APIKEY.FUN hub panel providing reliable and cost-effective access to premium LLM APIs. Supports centralized API key management, auto quota inquiries, and usage tracking.
+            -   **One-Click IDE Sync**: Seamlessly sync your hub API key and custom base URL to local coding environments like Codex or Claude Code with just one click.
+        -   **[Core Fix] Fixed HTTP/429 Exhaustion Polling Interruptions & Quota Display Sync**:
+            -   **Retry Logic Resolution**: Resolved a scoping error with the `force_rotate` state during HTTP 429 error handling. Now, when the proxy encounters a `429 Too Many Requests` or `INSUFFICIENT_G1_CREDITS_BALANCE`, it successfully bypasses useless fallback nodes and instantly forces an account rotation within the global retry loop, eliminating unnecessary blocking waits.
+            -   **Real-time Quota Sync**: Fixed an issue where free accounts (e.g. HK/CN regions) encountering HTTP/429 quota exhaustion still displayed a 100% quota because the Google `v1internal/models` API omits credit limitations. The proxy now seamlessly merges the backend `TokenManager`'s in-memory rate-limiting lock into the frontend quota queries, instantly displaying 0% quota and accurate reset times on the dashboard.
+    *   **v4.2.7 (2026-06-22)**:
         -   **[Core Fix] Resolve 400 Error for Gemini Function Calling due to Missing thought_signature (Gemini Tool Calling Fix)**:
             -   **Bug Fix**: Fixed a `400 INVALID_ARGUMENT` error (specifically `Function call is missing a thought_signature`) during multi-turn tool calling when the proxy sent camelCase `thoughtSignature` to the `/v1internal` endpoint, which strictly requires snake_case `thought_signature`.
             -   **Dual Compatibility**: Updated OpenAI mapper, Claude mapper, and Gemini wrapper to dual-inject both `thoughtSignature` and `thought_signature` fields. Also added a serde alias to safely deserialize both camelCase and snake_case signatures from Gemini backend responses ([Issue #3202](https://github.com/lbjlaq/Antigravity-Manager/issues/3202)).

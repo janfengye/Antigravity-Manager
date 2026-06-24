@@ -609,6 +609,7 @@ pub fn run() {
             commands::user_token::renew_user_token,
             commands::user_token::get_token_ip_bindings,
             commands::user_token::get_user_token_summary,
+            commands::query_transit_info,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

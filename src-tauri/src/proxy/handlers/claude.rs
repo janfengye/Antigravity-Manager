@@ -584,6 +584,7 @@ pub async fn handle_messages(
     let mut last_email: Option<String> = None;
     let mut last_mapped_model: Option<String> = None;
     let mut last_status = StatusCode::SERVICE_UNAVAILABLE; // Default to 503 if no response reached
+    let mut force_rotate = false;
 
     for attempt in 0..max_attempts {
         // 2. 模型路由解析
@@ -616,11 +617,10 @@ pub async fn handle_messages(
             crate::proxy::session_manager::SessionManager::extract_session_id(&request_for_body);
         let session_id = Some(session_id_str.as_str());
 
-        let force_rotate_token = attempt > 0;
         let (access_token, project_id, email, account_id, _wait_ms) = match token_manager
             .get_token(
                 &config.request_type,
-                force_rotate_token,
+                force_rotate,
                 session_id,
                 &config.final_model,
             )
@@ -1562,7 +1562,6 @@ pub async fn handle_messages(
             determine_retry_strategy(status_code, &error_text, retried_without_thinking);
 
         // 执行退避
-        let mut force_rotate = false;
         if apply_retry_strategy(
             retry_strategy.clone(),
             attempt,

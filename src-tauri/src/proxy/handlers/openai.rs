@@ -129,6 +129,9 @@ pub async fn handle_chat_completions(
         openai_req.stream
     );
     let debug_cfg = state.debug_logging.read().await.clone();
+    
+    let mut force_rotate = false;
+
     if debug_logger::is_enabled(&debug_cfg) {
         // [FIX] 使用原始 body 副本记录日志，确保不丢失任何字段
         let original_payload = json!({
@@ -192,11 +195,11 @@ pub async fn handle_chat_completions(
         let session_id = SessionManager::extract_openai_session_id(&openai_req);
 
         // 4. 获取 Token (使用准确的 request_type)
-        // 关键：在重试尝试 (attempt > 0) 时强制轮换账号
+        // 关键：在重试尝试时根据 force_rotate 决定是否轮换账号
         let (access_token, project_id, email, account_id, _wait_ms) = match token_manager
             .get_token(
                 &config.request_type,
-                attempt > 0,
+                force_rotate,
                 Some(&session_id),
                 &mapped_model,
             )
@@ -618,8 +621,6 @@ pub async fn handle_chat_completions(
             }
 
             // 判断是否需要轮换账号
-            // 判断是否需要轮换账号
-            let mut force_rotate = false;
             if !should_rotate_account(status_code, Some(&strategy)) {
                 debug!(
                     "[{}] Keeping same account for status {} (Grace Retry or Server Issue)",
@@ -1188,6 +1189,8 @@ pub async fn handle_completions(
     );
     let trace_id = format!("req_{}", chrono::Utc::now().timestamp_subsec_millis());
 
+    let mut force_rotate = false;
+
     for attempt in 0..max_attempts {
         // 3. 模型配置解析
         // 将 OpenAI 工具转为 Value 数组以便探测联网
@@ -1209,9 +1212,6 @@ pub async fn handle_completions(
         // [New] 使用 TokenManager 内部逻辑提取 session_id，支持粘性调度
         let session_id_str = SessionManager::extract_openai_session_id(&openai_req);
         let session_id = Some(session_id_str.as_str());
-
-        // 重试时强制轮换，除非只是简单的网络抖动但 Claude 逻辑里 attempt > 0 总是 force_rotate
-        let force_rotate = attempt > 0;
 
         let (access_token, project_id, email, account_id, _wait_ms) = match token_manager
             .get_token(
@@ -1905,11 +1905,11 @@ pub async fn handle_images_generations_internal(
 
         tasks.push(tokio::spawn(async move {
             let mut last_error = String::new();
+            let mut force_rotate = false;
 
             for attempt in 0..max_attempts {
-                // 4.1 获取 Token
                 let (access_token, project_id, email, account_id, _wait_ms) = match token_manager
-                    .get_token("image_gen", attempt > 0, None, &model_to_use)
+                    .get_token("image_gen", force_rotate, None, &model_to_use)
                     .await
                 {
                     Ok(t) => t,
@@ -2301,10 +2301,12 @@ pub async fn handle_images_edits(
         tasks.push(tokio::spawn(async move {
             let mut last_error = String::new();
 
+            let mut force_rotate = false;
+            
             for attempt in 0..max_attempts {
                 // 4.1 获取 Token
                 let (access_token, project_id, email, account_id, _wait_ms) = match token_manager
-                    .get_token("image_gen", attempt > 0, None, "gemini-3-pro-image")
+                    .get_token("image_gen", force_rotate, None, "gemini-3-pro-image")
                     .await
                 {
                     Ok(t) => t,

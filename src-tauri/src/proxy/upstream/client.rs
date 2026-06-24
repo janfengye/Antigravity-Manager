@@ -288,8 +288,7 @@ impl UpstreamClient {
 
     /// Determine if we should try next endpoint (fallback logic)
     fn should_try_next_endpoint(status: StatusCode) -> bool {
-        status == StatusCode::TOO_MANY_REQUESTS
-            || status == StatusCode::REQUEST_TIMEOUT
+        status == StatusCode::REQUEST_TIMEOUT
             || status == StatusCode::NOT_FOUND
             || status.is_server_error()
     }

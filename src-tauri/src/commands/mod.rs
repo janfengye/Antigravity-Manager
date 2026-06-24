@@ -19,8 +19,32 @@ pub mod user_token;
 
 /// 列出所有账号
 #[tauri::command]
-pub async fn list_accounts() -> Result<Vec<Account>, String> {
-    modules::list_accounts()
+pub async fn list_accounts(
+    proxy_state: tauri::State<'_, crate::commands::proxy::ProxyServiceState>,
+) -> Result<Vec<Account>, String> {
+    let mut accounts = modules::list_accounts()?;
+    
+    // [FIX] Blend in-memory TokenManager rate limit status into the UI quota display
+    let instance_lock = proxy_state.instance.read().await;
+    if let Some(instance) = instance_lock.as_ref() {
+        for account in &mut accounts {
+            if let Some(reset_secs) = instance.token_manager.get_rate_limit_reset_seconds(&account.id) {
+                if reset_secs > 0 {
+                    if let Some(ref mut quota_data) = account.quota {
+                        for model in &mut quota_data.models {
+                            model.percentage = 0;
+                            model.reset_time = (chrono::Utc::now().timestamp() + reset_secs as i64).to_string();
+                        }
+                        // Optionally, add a UI flag if we want it to look completely blocked
+                        // quota_data.is_forbidden = true; 
+                        // quota_data.forbidden_reason = Some(format!("Quota exhausted or rate limited (resets in {}s)", reset_secs));
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(accounts)
 }
 
 /// 添加账号
@@ -199,7 +223,7 @@ pub async fn fetch_account_quota(
         modules::load_account(&account_id).map_err(crate::error::AppError::Account)?;
 
     // 使用带重试的查询 (Shared logic)
-    let quota = modules::account::fetch_quota_with_retry(&mut account).await?;
+    let mut quota = modules::account::fetch_quota_with_retry(&mut account).await?;
 
     // 4. 更新账号配额
     modules::update_account_quota(&account_id, quota.clone())
@@ -211,6 +235,16 @@ pub async fn fetch_account_quota(
     let instance_lock = proxy_state.instance.read().await;
     if let Some(instance) = instance_lock.as_ref() {
         let _ = instance.token_manager.reload_account(&account_id).await;
+        
+        // [FIX] Blend TokenManager lockout state
+        if let Some(reset_secs) = instance.token_manager.get_rate_limit_reset_seconds(&account_id) {
+            if reset_secs > 0 {
+                for model in &mut quota.models {
+                    model.percentage = 0;
+                    model.reset_time = (chrono::Utc::now().timestamp() + reset_secs as i64).to_string();
+                }
+            }
+        }
     }
 
     Ok(quota)
@@ -1105,4 +1139,29 @@ pub async fn get_token_stats_account_trend_daily(
     days: i64,
 ) -> Result<Vec<crate::modules::token_stats::AccountTrendPoint>, String> {
     crate::modules::token_stats::get_account_trend_daily(days)
+}
+
+#[tauri::command]
+pub async fn query_transit_info(url: String, key: String) -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let response = client
+        .get(&url)
+        .bearer_auth(key)
+        .header(reqwest::header::ACCEPT, "application/json")
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let status = response.status();
+    let text = response.text().await.map_err(|e| e.to_string())?;
+
+    if status.is_success() {
+        Ok(text)
+    } else {
+        Err(format!("HTTP {}: {}", status, text))
+    }
 }
