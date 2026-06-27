@@ -449,35 +449,15 @@ where
         let created_ev = json!({ "type": "response.created", "response": { "id": &response_id, "object": "response", "status": "in_progress", "output": [] } });
         yield Ok::<Bytes, String>(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&created_ev).unwrap())));
 
-        // 2. response.output_item.added - 告诉客户端开始一个输出项
-        let output_item_added = json!({
-            "type": "response.output_item.added",
-            "output_index": 0,
-            "item": {
-                "id": &item_id,
-                "type": "message",
-                "role": "assistant",
-                "status": "in_progress",
-                "content": []
-            }
-        });
-        yield Ok::<Bytes, String>(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&output_item_added).unwrap())));
-
-        // 3. response.content_part.added - 告诉客户端开始一个文本内容块
-        let content_part_added = json!({
-            "type": "response.content_part.added",
-            "item_id": &item_id,
-            "output_index": 0,
-            "content_index": 0,
-            "part": {
-                "type": "output_text",
-                "text": ""
-            }
-        });
-        yield Ok::<Bytes, String>(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&content_part_added).unwrap())));
-
-        let mut emitted_tool_calls = std::collections::HashSet::new();
+        let mut emitted_tool_call_keys = std::collections::HashSet::new();
         let mut accumulated_text = String::new();
+        // [FIX] 懒加载：首个文本 delta 到来时才发出 message output item 事件
+        let mut text_started = false;
+        let mut text_output_index: u32 = 0;
+        let mut next_output_index: u32 = 0;
+        // [FIX] 记录所有工具调用，用于 response.completed 的 output 数组
+        let mut tool_calls_for_completion: Vec<(u32, String, String, String)> = Vec::new();
+
         let mut heartbeat_interval = tokio::time::interval(std::time::Duration::from_secs(15));
         heartbeat_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -498,9 +478,6 @@ where
                                     if let Ok(mut json) = serde_json::from_str::<Value>(json_part) {
                                         let actual_data = if let Some(inner) = json.get_mut("response").map(|v| v.take()) { inner } else { json };
                                         if let Some(candidates) = actual_data.get("candidates").and_then(|c| c.as_array()) {
-                                            if candidates.len() > 0 {
-                                                tracing::debug!("[Codex-Stream-Debug] Raw Candidate: {:?}", candidates[0]);
-                                            }
                                             if let Some(candidate) = candidates.get(0) {
                                                 if let Some(parts) = candidate.get("content").and_then(|c| c.get("parts")).and_then(|p| p.as_array()) {
                                                     for part in parts {
@@ -512,18 +489,47 @@ where
                                                                     let reasoning_ev = json!({
                                                                         "type": "response.reasoning.delta",
                                                                         "item_id": &item_id,
-                                                                        "output_index": 0,
+                                                                        "output_index": text_output_index,
                                                                         "content_index": 0,
                                                                         "delta": text
                                                                     });
                                                                     yield Ok::<Bytes, String>(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&reasoning_ev).unwrap())));
                                                                 } else {
+                                                                    // [FIX] 首个文本 delta：懒加载发出 output item + content part
+                                                                    if !text_started {
+                                                                        text_output_index = next_output_index;
+                                                                        next_output_index += 1;
+                                                                        text_started = true;
+
+                                                                        let output_item_added = json!({
+                                                                            "type": "response.output_item.added",
+                                                                            "output_index": text_output_index,
+                                                                            "item": {
+                                                                                "id": &item_id,
+                                                                                "type": "message",
+                                                                                "role": "assistant",
+                                                                                "status": "in_progress",
+                                                                                "content": []
+                                                                            }
+                                                                        });
+                                                                        yield Ok::<Bytes, String>(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&output_item_added).unwrap())));
+
+                                                                        let content_part_added = json!({
+                                                                            "type": "response.content_part.added",
+                                                                            "item_id": &item_id,
+                                                                            "output_index": text_output_index,
+                                                                            "content_index": 0,
+                                                                            "part": { "type": "output_text", "text": "" }
+                                                                        });
+                                                                        yield Ok::<Bytes, String>(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&content_part_added).unwrap())));
+                                                                    }
+
                                                                     accumulated_text.push_str(text);
-                                                                    // 4. response.output_text.delta - 文本增量
+                                                                    // response.output_text.delta
                                                                     let delta_ev = json!({
                                                                         "type": "response.output_text.delta",
                                                                         "item_id": &item_id,
-                                                                        "output_index": 0,
+                                                                        "output_index": text_output_index,
                                                                         "content_index": 0,
                                                                         "delta": text
                                                                     });
@@ -534,17 +540,96 @@ where
                                                         if let Some(sig) = part.get("thoughtSignature").or(part.get("thought_signature")).and_then(|s| s.as_str()) {
                                                             store_thought_signature(sig, &session_id, message_count);
                                                         }
+                                                        // [FIX] 工具调用：正确发出完整的 Codex Responses API 事件序列
                                                         if let Some(func_call) = part.get("functionCall") {
                                                             let call_key = serde_json::to_string(func_call).unwrap_or_default();
-                                                            if !emitted_tool_calls.contains(&call_key) {
-                                                                emitted_tool_calls.insert(call_key);
+                                                            if !emitted_tool_call_keys.contains(&call_key) {
+                                                                emitted_tool_call_keys.insert(call_key);
+
+                                                                let fc_name = func_call.get("name").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+                                                                let mut fc_args = func_call.get("args").unwrap_or(&json!({})).clone();
+
+                                                                // 标准化 shell 工具参数名称
+                                                                if fc_name == "shell" || fc_name == "bash" || fc_name == "local_shell" {
+                                                                    if let Some(obj) = fc_args.as_object_mut() {
+                                                                        if !obj.contains_key("command") {
+                                                                            for alt_key in &["cmd", "code", "script", "shell_command"] {
+                                                                                if let Some(val) = obj.remove(*alt_key) {
+                                                                                    obj.insert("command".to_string(), val);
+                                                                                    break;
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+
+                                                                let fc_args_str = serde_json::to_string(&fc_args).unwrap_or_default();
+
+                                                                // 生成确定性 call_id
+                                                                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                                                                use std::hash::{Hash, Hasher};
+                                                                serde_json::to_string(func_call).unwrap_or_default().hash(&mut hasher);
+                                                                let fc_call_id = format!("call_{:x}", hasher.finish());
+
+                                                                let fc_output_index = next_output_index;
+                                                                next_output_index += 1;
+
+                                                                // Event 1: response.output_item.added (function_call)
+                                                                let fc_item_added = json!({
+                                                                    "type": "response.output_item.added",
+                                                                    "output_index": fc_output_index,
+                                                                    "item": {
+                                                                        "id": &fc_call_id,
+                                                                        "type": "function_call",
+                                                                        "call_id": &fc_call_id,
+                                                                        "name": &fc_name,
+                                                                        "arguments": "",
+                                                                        "status": "in_progress"
+                                                                    }
+                                                                });
+                                                                yield Ok::<Bytes, String>(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&fc_item_added).unwrap())));
+
+                                                                // Event 2: response.function_call_arguments.delta
+                                                                let fc_args_delta = json!({
+                                                                    "type": "response.function_call_arguments.delta",
+                                                                    "item_id": &fc_call_id,
+                                                                    "output_index": fc_output_index,
+                                                                    "delta": &fc_args_str
+                                                                });
+                                                                yield Ok::<Bytes, String>(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&fc_args_delta).unwrap())));
+
+                                                                // Event 3: response.function_call_arguments.done
+                                                                let fc_args_done = json!({
+                                                                    "type": "response.function_call_arguments.done",
+                                                                    "item_id": &fc_call_id,
+                                                                    "output_index": fc_output_index,
+                                                                    "arguments": &fc_args_str
+                                                                });
+                                                                yield Ok::<Bytes, String>(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&fc_args_done).unwrap())));
+
+                                                                // Event 4: response.output_item.done (function_call)
+                                                                let fc_item_done = json!({
+                                                                    "type": "response.output_item.done",
+                                                                    "output_index": fc_output_index,
+                                                                    "item": {
+                                                                        "id": &fc_call_id,
+                                                                        "type": "function_call",
+                                                                        "call_id": &fc_call_id,
+                                                                        "name": &fc_name,
+                                                                        "arguments": &fc_args_str,
+                                                                        "status": "completed"
+                                                                    }
+                                                                });
+                                                                yield Ok::<Bytes, String>(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&fc_item_done).unwrap())));
+
+                                                                // 记录用于 response.completed 的 output 数组
+                                                                tool_calls_for_completion.push((fc_output_index, fc_call_id, fc_name, fc_args_str));
                                                             }
                                                         }
                                                     }
-
                                                 }
 
-                                                // 处理 groundingMetadata (搜索引文)
+                                                // 处理 groundingMetadata（搜索引文）
                                                 if let Some(grounding) = candidate.get("groundingMetadata") {
                                                     let mut grounding_text = String::new();
                                                     if let Some(queries) = grounding.get("webSearchQueries").and_then(|q| q.as_array()) {
@@ -569,14 +654,17 @@ where
                                                         }
                                                     }
                                                     if !grounding_text.is_empty() {
+                                                        if !text_started {
+                                                            text_output_index = next_output_index;
+                                                            next_output_index += 1;
+                                                            text_started = true;
+                                                            let output_item_added = json!({ "type": "response.output_item.added", "output_index": text_output_index, "item": { "id": &item_id, "type": "message", "role": "assistant", "status": "in_progress", "content": [] } });
+                                                            yield Ok::<Bytes, String>(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&output_item_added).unwrap())));
+                                                            let content_part_added = json!({ "type": "response.content_part.added", "item_id": &item_id, "output_index": text_output_index, "content_index": 0, "part": { "type": "output_text", "text": "" } });
+                                                            yield Ok::<Bytes, String>(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&content_part_added).unwrap())));
+                                                        }
                                                         accumulated_text.push_str(&grounding_text);
-                                                        let delta_ev = json!({
-                                                            "type": "response.output_text.delta",
-                                                            "item_id": &item_id,
-                                                            "output_index": 0,
-                                                            "content_index": 0,
-                                                            "delta": grounding_text
-                                                        });
+                                                        let delta_ev = json!({ "type": "response.output_text.delta", "item_id": &item_id, "output_index": text_output_index, "content_index": 0, "delta": grounding_text });
                                                         yield Ok::<Bytes, String>(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&delta_ev).unwrap())));
                                                     }
                                                 }
@@ -594,47 +682,64 @@ where
             }
         }
 
-        // 5. response.output_text.done - 文本完成
-        let text_done = json!({
-            "type": "response.output_text.done",
-            "item_id": &item_id,
-            "output_index": 0,
-            "content_index": 0,
-            "text": &accumulated_text
-        });
-        yield Ok::<Bytes, String>(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&text_done).unwrap())));
-
-        // 6. response.content_part.done
-        let content_part_done = json!({
-            "type": "response.content_part.done",
-            "item_id": &item_id,
-            "output_index": 0,
-            "content_index": 0,
-            "part": {
-                "type": "output_text",
+        // 结束阶段：发出文本完成事件（仅当有文本时）
+        if text_started {
+            let text_done = json!({
+                "type": "response.output_text.done",
+                "item_id": &item_id,
+                "output_index": text_output_index,
+                "content_index": 0,
                 "text": &accumulated_text
-            }
-        });
-        yield Ok::<Bytes, String>(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&content_part_done).unwrap())));
+            });
+            yield Ok::<Bytes, String>(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&text_done).unwrap())));
 
-        // 7. response.output_item.done
-        let output_item_done = json!({
-            "type": "response.output_item.done",
-            "output_index": 0,
-            "item": {
+            let content_part_done = json!({
+                "type": "response.content_part.done",
+                "item_id": &item_id,
+                "output_index": text_output_index,
+                "content_index": 0,
+                "part": { "type": "output_text", "text": &accumulated_text }
+            });
+            yield Ok::<Bytes, String>(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&content_part_done).unwrap())));
+
+            let output_item_done = json!({
+                "type": "response.output_item.done",
+                "output_index": text_output_index,
+                "item": {
+                    "id": &item_id,
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{ "type": "output_text", "text": &accumulated_text }]
+                }
+            });
+            yield Ok::<Bytes, String>(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&output_item_done).unwrap())));
+        }
+
+        // [FIX] response.completed：output 数组包含文本消息和所有工具调用
+        let mut completion_output: Vec<Value> = Vec::new();
+
+        if text_started {
+            completion_output.push(json!({
                 "id": &item_id,
                 "type": "message",
                 "role": "assistant",
                 "status": "completed",
-                "content": [{
-                    "type": "output_text",
-                    "text": &accumulated_text
-                }]
-            }
-        });
-        yield Ok::<Bytes, String>(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&output_item_done).unwrap())));
+                "content": [{ "type": "output_text", "text": &accumulated_text }]
+            }));
+        }
 
-        // 8. response.completed
+        for (_fc_idx, fc_call_id, fc_name, fc_args_str) in &tool_calls_for_completion {
+            completion_output.push(json!({
+                "id": fc_call_id,
+                "type": "function_call",
+                "call_id": fc_call_id,
+                "name": fc_name,
+                "arguments": fc_args_str,
+                "status": "completed"
+            }));
+        }
+
         let completed_ev = json!({
             "type": "response.completed",
             "response": {
