@@ -787,6 +787,35 @@ impl TokenManager {
             return None;
         }
 
+        // Image models: drift ONLY across versions within the SAME tier
+        // (pro-image ↔ pro-image, flash-image ↔ flash-image). Never silently downgrade
+        // pro→flash. If the account has no model in the requested tier, the name is left
+        // unchanged and upstream returns 404 — which is honest (the account lacks that model).
+        // To alias e.g. gemini-3-pro-image to a flash model, use the app's Model Routing Center.
+        let pro_image = ["gemini-3-pro-image", "gemini-3.1-pro-image"];
+        let flash_image = ["gemini-3-flash-image", "gemini-3.1-flash-image"];
+        let is_pro_image = pro_image.contains(&model.as_str());
+        let is_flash_image = flash_image.contains(&model.as_str());
+        if is_pro_image || is_flash_image {
+            let mut out = Vec::new();
+            let mut seen = HashSet::new();
+            let mut push = |candidate: &str| {
+                let c = candidate.to_string();
+                if seen.insert(c.clone()) {
+                    out.push(c);
+                }
+            };
+            push(&model); // requested first
+            if is_pro_image {
+                push("gemini-3.1-pro-image");
+                push("gemini-3-pro-image");
+            } else {
+                push("gemini-3.1-flash-image");
+                push("gemini-3-flash-image");
+            }
+            return Some(out);
+        }
+
         let pro_family = [
             "gemini-3-pro",
             "gemini-3-pro-preview",

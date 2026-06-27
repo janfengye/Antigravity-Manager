@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> Professional AI Account Management & Protocol Proxy System (v4.2.7)
+> Professional AI Account Management & Protocol Proxy System (v4.2.8)
 
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
@@ -9,7 +9,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.2.7-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.2.8-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -134,7 +134,7 @@ Automatically detects your OS, architecture, and package manager — one command
 
 **Linux / macOS:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.2.7/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.2.8/install.sh | bash
 ```
 
 **Windows (PowerShell):**
@@ -144,7 +144,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **Supported formats**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **Advanced usage**: Install a specific version `curl -fsSL ... | bash -s -- --version 4.2.7`，dry-run mode `curl -fsSL ... | bash -s -- --dry-run`
+> **Advanced usage**: Install a specific version `curl -fsSL ... | bash -s -- --version 4.2.8`，dry-run mode `curl -fsSL ... | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 If you have [Homebrew](https://brew.sh/) installed, you can also install via:
@@ -427,6 +427,20 @@ In clients that support OpenAI protocol (e.g., Cherry Studio), you can configure
 ## 📝 Developer & Community
 
 *   **Changelog**:
+    *   **v4.2.8 (2026-06-27)**:
+        -   **[Core Fix] Fixed Gemini Native Image Generation Proxy Anomalies & Account Rotation (Gemini Image Gen & Rotation)**:
+            -   **Native Bypass / Decoupling**: Refactored the image model redirection logic to only divert non-native image models (e.g., `dall-e`, `midjourney`). Native Gemini image models (e.g., `gemini-3-pro-image`) now flow directly through the main proxy pipeline, retaining the `size` parameters and preventing upstream API failures caused by the legacy shim's incompatible requests.
+            -   **Account-Level Dynamic Model Resolution**: Enabled account-specific dynamic image model resolution via `resolve_dynamic_model_for_account` to prevent 404 errors (as image model IDs are unique to each account and cannot use static aliases).
+            -   **High-Availability Rotation & Header Tracing**: Added automatic account rotation for image generations when encountering `403` or `404` errors. The proxy also injects the `X-Account-Email` header pointing to the attempted account in error responses to enhance debuggability.
+            -   **Strict Tier-Based Drift Constraints**: Restricted image model version drift in `TokenManager` to remain strictly within the same tier (`pro-image` to `pro-image`, `flash-image` to `flash-image`) to prevent silent quality downgrades from Pro to Flash.
+            -   *Related PR*: See [PR #3206](https://github.com/lbjlaq/Antigravity-Manager/pull/3206)
+        -   **[UX Enhancement] Enhanced Tray Multilingual Sync & API Integration Templates (Tray i18n & API Examples)**:
+            -   **Tray Menu Localization Follow**: Expanded the Rust tray menu's translation loader to support all client-supported languages (including Simplified/Traditional Chinese, Japanese, Korean, Russian, Arabic, Spanish, Portuguese, Malay, etc.) for real-time synchronization, with unknown locales defaulting to `en`.
+            -   **Example Guidelines & Korean Localization**: Translated comments inside API Proxy Python templates to English and added detailed instructions for image size mappings, model suffix utilization, and Base64 output extraction; also updated Korean translation strings (`ko.json`).
+            -   *Related PR*: See [PR #3206](https://github.com/lbjlaq/Antigravity-Manager/pull/3206)
+        -   **[Security Fix] Fixed Accidental Account Proxy Bindings Reset on Config Save (Account Proxy Bindings Loss Fix)**:
+            -   **Bug Fix**: Fixed a bug where the frontend `ProxyPoolSettings` component omitted the `account_bindings` field when building the config object during `onChange` updates. This caused custom account-to-proxy mappings on disk to be overwritten and reset to empty whenever other settings were saved. With this fix, bindings are preserved correctly across restarts and saves, preventing potential account bans from multiple accounts using a single IP.
+            -   *Related Issue*: See [Issue #3205](https://github.com/lbjlaq/Antigravity-Manager/issues/3205)
     *   **v4.2.7 (2026-06-24)**:
         -   **[New Feature] Introducing APIKEY.FUN Official Hub Partner**:
             -   **Dedicated Integration Panel**: Brand new built-in APIKEY.FUN hub panel providing reliable and cost-effective access to premium LLM APIs. Supports centralized API key management, auto quota inquiries, and usage tracking.

@@ -17,10 +17,23 @@ pub struct TrayTexts {
 
 /// Load translations from JSON
 fn load_translations(lang: &str) -> HashMap<String, String> {
+    // Map every language the frontend supports (see src/i18n.ts / navbar/constants.ts)
+    // so the tray menu follows the in-app language switch. Unknown codes fall back to
+    // English, matching the frontend's fallbackLng.
     let json_content = match lang {
-        "en" | "en-US" => include_str!("../../../src/locales/en.json"),
+        "zh" | "zh-CN" | "zh-Hans" => include_str!("../../../src/locales/zh.json"),
+        "zh-TW" | "zh-Hant" => include_str!("../../../src/locales/zh-TW.json"),
+        "ja" | "ja-JP" => include_str!("../../../src/locales/ja.json"),
         "tr" | "tr-TR" => include_str!("../../../src/locales/tr.json"),
-        _ => include_str!("../../../src/locales/zh.json"),
+        "vi" | "vi-VN" => include_str!("../../../src/locales/vi.json"),
+        "pt" | "pt-BR" | "pt-PT" => include_str!("../../../src/locales/pt.json"),
+        "ru" | "ru-RU" => include_str!("../../../src/locales/ru.json"),
+        "ko" | "ko-KR" => include_str!("../../../src/locales/ko.json"),
+        "ar" | "ar-SA" => include_str!("../../../src/locales/ar.json"),
+        "es" | "es-ES" | "es-MX" => include_str!("../../../src/locales/es.json"),
+        "my" | "ms" | "ms-MY" => include_str!("../../../src/locales/my.json"),
+        "en" | "en-US" => include_str!("../../../src/locales/en.json"),
+        _ => include_str!("../../../src/locales/en.json"),
     };
 
     let v: Value = serde_json::from_str(json_content).unwrap_or_else(|_| serde_json::json!({}));

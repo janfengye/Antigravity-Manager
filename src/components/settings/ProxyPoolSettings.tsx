@@ -92,6 +92,7 @@ export default function ProxyPoolSettings({ config, onChange }: ProxyPoolSetting
         health_check_interval: config?.health_check_interval ?? 300,
         auto_failover: config?.auto_failover ?? true,
         strategy: config?.strategy ?? 'priority',
+        account_bindings: config?.account_bindings ?? {},
     };
 
     const handleUpdateProxies = (proxies: ProxyEntry[]) => {

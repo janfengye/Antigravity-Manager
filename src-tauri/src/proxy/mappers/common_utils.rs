@@ -26,7 +26,9 @@ pub fn resolve_request_config(
     body: Option<&Value>,     // [NEW] Request body for Gemini native imageConfig
 ) -> RequestConfig {
     // 1. Image Generation Check (Priority)
-    if mapped_model.starts_with("gemini-3-pro-image") {
+    // Detect via the original requested alias OR the account-resolved model name, because the
+    // dynamic model rewrite may turn "gemini-3-pro-image" into e.g. "gemini-3.1-flash-image".
+    if original_model.to_lowercase().contains("-image") || mapped_model.contains("-image") {
         // [RESOLVE #1694] Improved priority logic:
         // 1. First parse inferred config from model suffix and OpenAI parameters
         let (mut inferred_config, parsed_base_model) =
@@ -68,10 +70,17 @@ pub fn resolve_request_config(
             inferred_config
         );
 
+        // Prefer the account-resolved concrete image model (mapped_model) for the upstream
+        // call; fall back to the parsed base of the requested alias if it wasn't resolved.
+        let upstream_model = if mapped_model.contains("-image") {
+            mapped_model.to_string()
+        } else {
+            parsed_base_model
+        };
         return RequestConfig {
             request_type: "image_gen".to_string(),
             inject_google_search: false,
-            final_model: parsed_base_model,
+            final_model: upstream_model,
             image_config: Some(inferred_config),
         };
     }

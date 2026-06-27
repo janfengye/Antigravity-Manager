@@ -961,12 +961,12 @@ export default function ApiProxy() {
             return `from anthropic import Anthropic
 
 client = Anthropic(
-    # 推荐使用 127.0.0.1
+    # Recommended: use 127.0.0.1
     base_url="${`http://127.0.0.1:${port}`}",
     api_key="${apiKey}"
 )
 
-# 注意: Antigravity 支持使用 Anthropic SDK 调用任意模型
+# Note: Antigravity lets you call any model via the Anthropic SDK
 response = client.messages.create(
     model="${modelId}",
     max_tokens=1024,
@@ -979,10 +979,10 @@ print(response.content[0].text)`;
         // 2. Gemini Protocol (Native)
         if (selectedProtocol === 'gemini') {
             const rawBaseUrl = `http://127.0.0.1:${port}`;
-            return `# 需要安装: pip install google-generativeai
+            return `# Requires: pip install google-generativeai
 import google.generativeai as genai
 
-# 使用 Antigravity 代理地址 (推荐 127.0.0.1)
+# Use the Antigravity proxy address (recommended: 127.0.0.1)
 genai.configure(
     api_key="${apiKey}",
     transport='rest',
@@ -994,8 +994,8 @@ response = model.generate_content("Hello")
 print(response.text)`;
         }
 
-        // 3. OpenAI Protocol
-        if (modelId.startsWith('gemini-3-pro-image')) {
+        // 3. OpenAI Protocol — image generation models (any *-image model)
+        if (modelId.toLowerCase().includes('-image')) {
             return `from openai import OpenAI
 
 client = OpenAI(
@@ -1003,21 +1003,33 @@ client = OpenAI(
     api_key="${apiKey}"
 )
 
+# IMPORTANT — model availability:
+#   "${modelId}" must be an image model your selected account actually has.
+#   Check the model list on the left: not every account exposes every image model
+#   (e.g. some accounts only have gemini-3.1-flash-image, not gemini-3-pro-image).
+#   Requesting a model the account lacks fails with:
+#     404 "Requested entity was not found"
+#   To keep using a different name, add an explicit mapping in the Model Routing Center.
+
 response = client.chat.completions.create(
     model="${modelId}",
-    # 方式 1: 使用 size 参数 (推荐)
-    # 支持: "1024x1024" (1:1), "1280x720" (16:9), "720x1280" (9:16), "1216x896" (4:3)
+
+    # Aspect ratio — Option 1: the size parameter (recommended)
+    #   "1024x1024" = 1:1   |   "1280x720" = 16:9
+    #   "720x1280"  = 9:16  |   "1216x896" = 4:3
     extra_body={ "size": "1024x1024" },
-    
-    # 方式 2: 使用模型后缀
-    # 例如: gemini-3-pro-image-16-9, gemini-3-pro-image-4-3
-    # model="gemini-3-pro-image-16-9",
+
+    # Aspect ratio — Option 2: a model-name suffix instead of size
+    #   model="${modelId}-16-9"   (also: -9-16, -4-3, -3-4)
     messages=[{
         "role": "user",
         "content": "Draw a futuristic city"
     }]
 )
 
+# The generated image is returned INSIDE the message content
+# (as a base64 data URL / markdown image), not as a hosted URL.
+# Extract the base64 payload from here to save the file.
 print(response.choices[0].message.content)`;
         }
 

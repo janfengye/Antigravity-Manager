@@ -36,9 +36,17 @@ pub async fn handle_chat_completions(
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_lowercase();
-    if model_name.contains("image")
+    // [FIX] Only redirect non-native image aliases (dall-e / midjourney) to the
+    // images-generations shim. Native Gemini image models (gemini-3-pro-image*) must
+    // flow through the normal pipeline (transform_openai_request -> resolve_request_config),
+    // which correctly sets requestType=image_gen, imageConfig (size/aspect ratio), sessionId,
+    // structured requestId and per-account dynamic model resolution — matching the official
+    // Antigravity client. The old shim dropped `size` and built a divergent upstream body,
+    // which caused image generation to silently fail for gemini-3-pro-image.
+    if (model_name.contains("image")
         || model_name.contains("dall-e")
-        || model_name.contains("midjourney")
+        || model_name.contains("midjourney"))
+        && !model_name.contains("gemini")
     {
         tracing::info!(
             "[ChatRedirection] Redirecting model {} to image generations",
@@ -1798,7 +1806,7 @@ async fn intercept_chat_to_image(
                     .into_response())
             }
         }
-        Err(e) => Err(e.into()), // using Err directly is fine since return type handles it
+        Err((status, msg, _email)) => Err((status, msg)),
     }
 }
 
@@ -1816,18 +1824,24 @@ pub async fn handle_images_generations(
             Json(openai_response),
         )
             .into_response()),
-        Err(e) => Err(e),
+        // Attach the attempted account to error responses too, so the traffic log shows
+        // which account the failed (e.g. 502/503) image request used.
+        Err((status, msg, email_opt)) => {
+            let email = email_opt.unwrap_or_default();
+            Ok((status, [("X-Account-Email", email)], msg).into_response())
+        }
     }
 }
 
 pub async fn handle_images_generations_internal(
     state: AppState,
     body: Value,
-) -> Result<(String, Value), (StatusCode, String)> {
+) -> Result<(String, Value), (StatusCode, String, Option<String>)> {
     // 1. 解析请求参数
     let prompt = body.get("prompt").and_then(|v| v.as_str()).ok_or((
         StatusCode::BAD_REQUEST,
         "Missing 'prompt' field".to_string(),
+        None,
     ))?;
 
     let model = body
@@ -1894,6 +1908,10 @@ pub async fn handle_images_generations_internal(
 
     let mut tasks = Vec::new();
 
+    // Track the last account actually attempted, so error responses (502/503) can be
+    // attributed to an account in the traffic log instead of showing "(none)".
+    let attempted_account = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
+
     for _ in 0..n {
         let upstream = upstream.clone();
         let token_manager = token_manager.clone();
@@ -1902,6 +1920,7 @@ pub async fn handle_images_generations_internal(
         let _response_format = response_format.to_string();
 
         let model_to_use = clean_model_name.clone();
+        let attempted_account = attempted_account.clone();
 
         tasks.push(tokio::spawn(async move {
             let mut last_error = String::new();
@@ -1922,11 +1941,22 @@ pub async fn handle_images_generations_internal(
                         break;
                     }
                 };
+                if let Ok(mut g) = attempted_account.lock() {
+                    *g = Some(email.clone());
+                }
+
+                // [FIX] Resolve to the account-specific dynamic image model, exactly like the
+                // chat (openai.rs:232) and gemini (gemini.rs:155) handlers do. Sending the static
+                // alias (e.g. "gemini-3-pro-image") made upstream return 404 "Requested entity was
+                // not found" because each account exposes its own concrete image model id.
+                let resolved_model = token_manager
+                    .resolve_dynamic_model_for_account(&account_id, &model_to_use)
+                    .await;
 
                 let gemini_body = json!({
                     "project": project_id,
                     "requestId": format!("agent-{}", uuid::Uuid::new_v4()),
-                    "model": model_to_use,
+                    "model": resolved_model,
                     "userAgent": "antigravity",
                     "requestType": "image_gen",
                     "request": {
@@ -1966,7 +1996,7 @@ pub async fn handle_images_generations_internal(
                             let status_code = status.as_u16();
                             last_error = format!("Upstream error {}: {}", status, err_text);
 
-                            // 429/500/503 等错误进行标记和重试
+                            // 429/500/503: mark limited and rotate to another account
                             if status_code == 429 || status_code == 503 || status_code == 500 {
                                 tracing::warn!(
                                     "[Images] Account {} rate limited/error ({}), rotating...",
@@ -1979,13 +2009,29 @@ pub async fn handle_images_generations_internal(
                                         status_code,
                                         None,
                                         &err_text,
-                                        Some("dall-e-3"),
+                                        Some(model_to_use.as_str()),
                                     )
                                     .await;
+                                force_rotate = true;
                                 continue; // Retry loop
                             }
 
-                            // 其他错误直接返回
+                            // [FIX] 403/404 usually mean THIS account lacks the image model or
+                            // project access. Rotate to another account instead of failing the
+                            // whole request, so an image-capable account can serve it.
+                            if (status_code == 403 || status_code == 404)
+                                && attempt < max_attempts - 1
+                            {
+                                tracing::warn!(
+                                    "[Images] Account {} returned {} for image gen, rotating to another account",
+                                    email,
+                                    status_code
+                                );
+                                force_rotate = true;
+                                continue;
+                            }
+
+                            // Other errors: return
                             return Err(last_error);
                         }
                         match response.json::<Value>().await {
@@ -2079,7 +2125,10 @@ pub async fn handle_images_generations_internal(
             StatusCode::BAD_GATEWAY
         };
 
-        return Err((status, error_msg));
+        let attempted = used_email
+            .clone()
+            .or_else(|| attempted_account.lock().ok().and_then(|g| g.clone()));
+        return Err((status, error_msg, attempted));
     }
 
     // 部分成功时记录警告
