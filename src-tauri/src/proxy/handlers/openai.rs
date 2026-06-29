@@ -137,7 +137,7 @@ pub async fn handle_chat_completions(
         openai_req.stream
     );
     let debug_cfg = state.debug_logging.read().await.clone();
-    
+
     let mut force_rotate = false;
 
     if debug_logger::is_enabled(&debug_cfg) {
@@ -2351,7 +2351,7 @@ pub async fn handle_images_edits(
             let mut last_error = String::new();
 
             let mut force_rotate = false;
-            
+
             for attempt in 0..max_attempts {
                 // 4.1 获取 Token
                 let (access_token, project_id, email, account_id, _wait_ms) = match token_manager
