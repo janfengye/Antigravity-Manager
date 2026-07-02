@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> Professional AI Account Management & Protocol Proxy System (v4.2.8)
+> Professional AI Account Management & Protocol Proxy System (v4.3.0)
 
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
@@ -9,7 +9,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.2.8-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.3.0-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -134,7 +134,7 @@ Automatically detects your OS, architecture, and package manager — one command
 
 **Linux / macOS:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.2.8/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.3.0/install.sh | bash
 ```
 
 **Windows (PowerShell):**
@@ -144,7 +144,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **Supported formats**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **Advanced usage**: Install a specific version `curl -fsSL ... | bash -s -- --version 4.2.8`，dry-run mode `curl -fsSL ... | bash -s -- --dry-run`
+> **Advanced usage**: Install a specific version `curl -fsSL ... | bash -s -- --version 4.3.0`，dry-run mode `curl -fsSL ... | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 If you have [Homebrew](https://brew.sh/) installed, you can also install via:
@@ -427,6 +427,16 @@ In clients that support OpenAI protocol (e.g., Cherry Studio), you can configure
 ## 📝 Developer & Community
 
 *   **Changelog**:
+    *   **v4.3.0 (2026-07-02)**:
+        -   **[Core Fix] Resolve 400 Errors Caused by System Messages Mixed in Messages during Claude-to-Gemini Mapping (Claude System Message Fix)**:
+            -   **System Message Extraction & Filtering**: In the Claude-to-Gemini request converter, messages with `role == "system"` are extracted and filtered out from the `messages` array, preventing them from being mixed into `contents` which triggers Gemini API `400 INVALID_ARGUMENT` errors.
+            -   **Appended to System Instruction**: The extracted system messages are appended as text blocks to Gemini's `system_instruction` during the `build_system_instruction` phase, ensuring the system prompt remains effective and complies with Gemini's API schema.
+            -   *Related PR*: See [PR #3219](https://github.com/lbjlaq/Antigravity-Manager/pull/3219)
+        -   **[Core Fix / Feature] Introduce Apply Patch Pre-flight & WebSocket Proxy Support (Patch Pre-flight & WS Support)**:
+            -   **Pre-flight Auto-Correction**: Scans and aligns the local target file before applying the V4A patch, automatically correcting harmless formatting issues like trailing spaces or header mismatches, drastically preventing `Failed to find expected lines` failures.
+            -   **Multi-Session Project Directory (CWD) Alignment**: Caches up to 12 recent project `cwd` paths. In multi-session scenarios, it evaluates anchor probes to locate the most relevant directory for incoming patch files, solving context isolation issues in stateless agent loops.
+            -   **WebSocket Proxy Support**: Enabled Axum's WebSocket capabilities and integrated `tokio-tungstenite` dependencies to support real-time stream proxying.
+            -   *Related PR*: See [PR #3214](https://github.com/lbjlaq/Antigravity-Manager/pull/3214)
     *   **v4.2.9 (2026-06-27)**:
         -   **[Core Fix] Resolve Codex Agent and Multi-Turn Disconnection Issues under Proxy (Codex Agent Flow Fix)**:
             -   **SSE Event Reconstruction**: Fixed a critical bug in `/v1/responses` where the proxy stream converter (`create_codex_sse_stream`) silently discarded all tool execution events when the upstream Gemini API returned a `functionCall` part. The proxy now properly serializes and emits the full suite of standard Codex SSE events: `response.output_item.added` (of type `function_call`), `response.function_call_arguments.delta`, `response.function_call_arguments.done`, and `response.output_item.done`.

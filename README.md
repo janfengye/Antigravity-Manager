@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> 专业级 AI 账号管理与协议代理系统 (v4.2.8)
+> 专业级 AI 账号管理与协议代理系统 (v4.3.0)
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
 
@@ -8,7 +8,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.2.8-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.3.0-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -133,7 +133,7 @@ graph TD
 
 **Linux / macOS:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.2.8/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.3.0/install.sh | bash
 ```
 
 **Windows (PowerShell):**
@@ -143,7 +143,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **支持的格式**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **高级用法**: 安装指定版本 `curl -fsSL ... | bash -s -- --version 4.2.8`，预览模式 `curl -fsSL ... | bash -s -- --dry-run`
+> **高级用法**: 安装指定版本 `curl -fsSL ... | bash -s -- --version 4.3.0`，预览模式 `curl -fsSL ... | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 如果您已安装 [Homebrew](https://brew.sh/)，也可以通过以下命令安装：
@@ -439,6 +439,16 @@ response = client.chat.completions.create(
 ## 📝 开发者与社区
 
 *   **版本演进 (Changelog)**:
+    *   **v4.3.0 (2026-07-02)**:
+        -   **[核心修复] 解决 Claude 请求映射到 Gemini 时混入 System 角色消息导致 400 错误的 Bug (Claude System Message Fix)**:
+            -   **System 消息提取与过滤**: 在 Claude 转 Gemini 的协议映射中，提取并过滤掉 `messages` 列表中 `role == "system"` 的消息，防止其混入 `contents` 从而引起 Gemini API 返回 `400 INVALID_ARGUMENT` 报错。
+            -   **追加至 System Instruction**: 过滤出的所有系统消息在 `build_system_instruction` 阶段会被作为文本块追加到 Gemini 的 `system_instruction` 中，保证系统提示词依然生效且符合 Gemini 的 API 格式要求。
+            -   *相关 PR*: 详见 [PR #3219](https://github.com/lbjlaq/Antigravity-Manager/pull/3219)
+        -   **[核心修复/功能拓展] 引入 Apply Patch 预检系统与 WebSocket 代理支持 (Patch Pre-flight & WS Support)**:
+            -   **Pre-flight 自动修复**: 在 patch 发送给 Codex 写入前，先读取本地目标文件进行预检，自动规整首尾空白、尾部空格等无害的格式偏差，极大降低了大模型因为少空格等瑕疵导致的 `Failed to find expected lines` 匹配失败。
+            -   **多会话项目目录（CWD）智能对齐**: 支持进程级缓存 12 个最近的项目 `cwd` 历史。多会话并发修改时，会自动分析打分并选用与 patch 锚点命中率最高的目标路径，解决工具循环调用时不带工作目录的定位问题。
+            -   **新增 WebSocket 代理**: 激活 Axum 的 WebSocket feature，引入 `tokio-tungstenite` 依赖，扩展了底层的实时流式代理与连接能力。
+            -   *相关 PR*: 详见 [PR #3214](https://github.com/lbjlaq/Antigravity-Manager/pull/3214)
     *   **v4.2.9 (2026-06-27)**:
         -   **[核心修复] 解决 Codex 客户端（如 Trae / Gemini CLI）在代理下无法使用 Agent 与多轮对话中断的 Bug (Codex Agent Flow Fix)**:
             -   **SSE 协议事件还原**: 修复了在 `/v1/responses` 接口中，当 Gemini 上游返回包含工具调用（`functionCall`）的响应时，流式转换（`create_codex_sse_stream`）只在内存中做了去重过滤而静默丢弃了所有事件输出的严重 Bug。修复后，代理能正确且完整地向客户端发出 Codex 所需的 `response.output_item.added` (类型为 `function_call`)、`response.function_call_arguments.delta`、`response.function_call_arguments.done` 和 `response.output_item.done` 这一系列标准 SSE 事件。

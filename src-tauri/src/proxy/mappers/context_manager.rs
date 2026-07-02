@@ -4,6 +4,7 @@
 //! to prevent "Prompt is too long" errors and avoid invalid signatures.
 
 use super::claude::models::{ClaudeRequest, ContentBlock, Message, MessageContent, SystemPrompt};
+use super::openai::models::OpenAIMessage;
 use tracing::{debug, info};
 
 /// Helper to estimate tokens from text with multi-language awareness
@@ -356,6 +357,96 @@ impl ContextManager {
 
         removed_count > 0
     }
+
+    /// Restore reasoning text for assistant messages from cache in OpenAI format
+    pub fn restore_openai_reasoning_content(messages: &mut Vec<OpenAIMessage>, session_id: &str) {
+        let mut assistant_turn_count = 0;
+        for msg in messages.iter_mut() {
+            if msg.role == "assistant" {
+                let is_missing = msg.reasoning_content.as_ref()
+                    .map(|s| s.is_empty() || s == "[undefined]")
+                    .unwrap_or(true);
+                
+                if is_missing {
+                    if let Some(cached_reasoning) = crate::proxy::SignatureCache::global()
+                        .get_session_reasoning(session_id, assistant_turn_count) 
+                    {
+                        tracing::debug!(
+                            "[OpenAI-Reasoning] Restored reasoning for assistant turn {} (len: {})",
+                            assistant_turn_count,
+                            cached_reasoning.len()
+                        );
+                        msg.reasoning_content = Some(cached_reasoning);
+                    }
+                }
+                assistant_turn_count += 1;
+            }
+        }
+    }
+
+    /// Purify reasoning text in OpenAI history to save tokens
+    pub fn purify_openai_history(messages: &mut Vec<OpenAIMessage>, strategy: PurificationStrategy) -> bool {
+        let protected_last_n = match strategy {
+            PurificationStrategy::Soft => 4, // Keep thinking for recent 4 messages (approx 2 turns)
+            PurificationStrategy::Aggressive => 0,
+        };
+        let total_msgs = messages.len();
+        if total_msgs == 0 {
+            return false;
+        }
+        let start_protection_idx = total_msgs.saturating_sub(protected_last_n);
+        let mut modified = false;
+
+        for (i, msg) in messages.iter_mut().enumerate() {
+            if i >= start_protection_idx {
+                continue;
+            }
+            if msg.role == "assistant" && msg.reasoning_content.is_some() {
+                tracing::debug!(
+                    "[ContextManager] Purifying reasoning_content of message {} (len: {})",
+                    i,
+                    msg.reasoning_content.as_ref().unwrap().len()
+                );
+                msg.reasoning_content = None;
+                modified = true;
+            }
+        }
+        modified
+    }
+
+    /// Trim old tool messages in OpenAI format, keeping only the last N rounds
+    pub fn trim_openai_tool_messages(messages: &mut Vec<OpenAIMessage>, keep_last_n_rounds: usize) -> bool {
+        let tool_rounds = identify_openai_tool_rounds(messages);
+        if tool_rounds.len() <= keep_last_n_rounds {
+            return false;
+        }
+
+        let rounds_to_remove = tool_rounds.len() - keep_last_n_rounds;
+        let mut indices_to_remove = std::collections::HashSet::new();
+
+        for round in tool_rounds.iter().take(rounds_to_remove) {
+            for idx in &round.indices {
+                indices_to_remove.insert(*idx);
+            }
+        }
+
+        let mut removed_count = 0;
+        for idx in (0..messages.len()).rev() {
+            if indices_to_remove.contains(&idx) {
+                messages.remove(idx);
+                removed_count += 1;
+            }
+        }
+
+        if removed_count > 0 {
+            info!(
+                "[ContextManager] [OpenAI] Trimmed {} tool messages, kept last {} rounds",
+                removed_count,
+                keep_last_n_rounds
+            );
+        }
+        removed_count > 0
+    }
 }
 
 /// Represents a tool call round (assistant tool_use + user tool_result(s))
@@ -413,6 +504,43 @@ fn identify_tool_rounds(messages: &[Message]) -> Vec<ToolRound> {
         messages.len()
     );
 
+    rounds
+}
+
+struct OpenAIToolRound {
+    _assistant_index: usize,
+    _tool_indices: Vec<usize>,
+    indices: Vec<usize>,
+}
+
+fn identify_openai_tool_rounds(messages: &[OpenAIMessage]) -> Vec<OpenAIToolRound> {
+    let mut rounds = Vec::new();
+    let mut current_round: Option<OpenAIToolRound> = None;
+
+    for (i, msg) in messages.iter().enumerate() {
+        if msg.role == "assistant" && msg.tool_calls.is_some() && !msg.tool_calls.as_ref().unwrap().is_empty() {
+            if let Some(round) = current_round.take() {
+                rounds.push(round);
+            }
+            current_round = Some(OpenAIToolRound {
+                _assistant_index: i,
+                _tool_indices: Vec::new(),
+                indices: vec![i],
+            });
+        } else if msg.role == "tool" || msg.role == "function" || msg.tool_call_id.is_some() {
+            if let Some(ref mut round) = current_round {
+                round._tool_indices.push(i);
+                round.indices.push(i);
+            }
+        } else if msg.role == "user" {
+            if let Some(round) = current_round.take() {
+                rounds.push(round);
+            }
+        }
+    }
+    if let Some(round) = current_round {
+        rounds.push(round);
+    }
     rounds
 }
 

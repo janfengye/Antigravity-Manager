@@ -61,7 +61,6 @@ fn build_safety_settings() -> Value {
         { "category": "HARM_CATEGORY_HATE_SPEECH", "threshold": threshold_str },
         { "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": threshold_str },
         { "category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": threshold_str },
-        { "category": "HARM_CATEGORY_CIVIC_INTEGRITY", "threshold": threshold_str },
     ])
 }
 
@@ -347,6 +346,29 @@ pub fn transform_claude_request_in(
     // 原封不动发回导致的 "Extra inputs are not permitted" 错误
     let mut cleaned_req = claude_req.clone();
 
+    // [CRITICAL FIX] 提取并过滤 role == "system" 的消息，防止混入 contents 导致 Gemini 返回 400 INVALID_ARGUMENT
+    let mut extra_system_messages = Vec::new();
+    let mut filtered_messages = Vec::new();
+    for msg in cleaned_req.messages {
+        if msg.role == "system" {
+            match &msg.content {
+                MessageContent::String(text) => {
+                    extra_system_messages.push(text.clone());
+                }
+                MessageContent::Array(blocks) => {
+                    for block in blocks {
+                        if let ContentBlock::Text { text } = block {
+                            extra_system_messages.push(text.clone());
+                        }
+                    }
+                }
+            }
+        } else {
+            filtered_messages.push(msg);
+        }
+    }
+    cleaned_req.messages = filtered_messages;
+
     // [FIX #813] 合并连续的同角色消息 (Consecutive User Messages)
     // 确保请求符合 Anthropic 和 Gemini 的角色交替协议
     merge_consecutive_messages(&mut cleaned_req.messages);
@@ -426,7 +448,7 @@ pub fn transform_claude_request_in(
 
     // 1. System Instruction (注入动态身份防护 & MCP XML 协议)
     let system_instruction =
-        build_system_instruction(&claude_req.system, &claude_req.model, has_mcp_tools);
+        build_system_instruction(&claude_req.system, &claude_req.model, has_mcp_tools, &extra_system_messages);
 
     //  Map model name (Use standard mapping)
     // [IMPROVED] 提取 web search 模型为常量，便于维护
@@ -818,6 +840,7 @@ fn build_system_instruction(
     system: &Option<SystemPrompt>,
     _model_name: &str,
     has_mcp_tools: bool,
+    extra_system_messages: &[String],
 ) -> Option<Value> {
     let mut parts = Vec::new();
 
@@ -874,6 +897,13 @@ fn build_system_instruction(
                     }
                 }
             }
+        }
+    }
+
+    // 添加提取出来的 role == "system" 消息
+    for extra_text in extra_system_messages {
+        if !extra_text.trim().is_empty() {
+            parts.push(json!({"text": format!("\n{}", extra_text)}));
         }
     }
 

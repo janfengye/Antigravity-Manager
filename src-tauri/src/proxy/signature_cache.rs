@@ -58,6 +58,11 @@ pub struct SignatureCache {
     /// Value: The most recent valid thought signature for this session
     /// This prevents signature pollution between different conversations
     session_signatures: Mutex<HashMap<String, CacheEntry<SessionSignatureEntry>>>,
+
+    /// Layer 4: Session ID -> Assistant Reasoning Text History (NEW v4.2.0)
+    /// Key: session fingerprint
+    /// Value: A vector of reasoning contents (index corresponds to assistant turn index)
+    session_reasonings: Mutex<HashMap<String, CacheEntry<Vec<String>>>>,
 }
 
 impl SignatureCache {
@@ -66,6 +71,7 @@ impl SignatureCache {
             tool_signatures: Mutex::new(HashMap::new()),
             thinking_families: Mutex::new(HashMap::new()),
             session_signatures: Mutex::new(HashMap::new()),
+            session_reasonings: Mutex::new(HashMap::new()),
         }
     }
 
@@ -262,6 +268,74 @@ impl SignatureCache {
         None
     }
 
+    /// Store reasoning text for a specific assistant turn in a session
+    pub fn cache_session_reasoning(&self, session_id: &str, reasoning: String, turn_index: usize) {
+        if reasoning.trim().is_empty() {
+            return;
+        }
+
+        if let Ok(mut cache) = self.session_reasonings.lock() {
+            let entry = cache.entry(session_id.to_string()).or_insert_with(|| {
+                CacheEntry::new(Vec::new())
+            });
+
+            // Update timestamp to refresh TTL
+            entry.timestamp = std::time::SystemTime::now();
+
+            if turn_index >= entry.data.len() {
+                entry.data.resize(turn_index + 1, String::new());
+            }
+
+            // Only update if the new reasoning is longer to prevent overwriting with partial content
+            let old_len = entry.data[turn_index].len();
+            if reasoning.len() > old_len {
+                tracing::debug!(
+                    "[SignatureCache] Session {} (turn={}) -> caching reasoning text (len: {} -> {})",
+                    session_id,
+                    turn_index,
+                    old_len,
+                    reasoning.len()
+                );
+                entry.data[turn_index] = reasoning;
+            }
+
+            // Session cache cleanup if limit exceeded
+            if cache.len() > SESSION_CACHE_LIMIT {
+                let before = cache.len();
+                cache.retain(|_, v| !v.is_expired());
+                let after = cache.len();
+                if before != after {
+                    tracing::debug!(
+                        "[SignatureCache] Session reasoning cache cleanup: {} -> {} entries",
+                        before,
+                        after
+                    );
+                }
+            }
+        }
+    }
+
+    /// Retrieve reasoning text for a specific assistant turn in a session
+    pub fn get_session_reasoning(&self, session_id: &str, turn_index: usize) -> Option<String> {
+        if let Ok(cache) = self.session_reasonings.lock() {
+            if let Some(entry) = cache.get(session_id) {
+                if !entry.is_expired() && turn_index < entry.data.len() {
+                    let text = &entry.data[turn_index];
+                    if !text.trim().is_empty() {
+                        tracing::debug!(
+                            "[SignatureCache] Session {} (turn={}) -> Hit reasoning text cache (len: {})",
+                            session_id,
+                            turn_index,
+                            text.len()
+                        );
+                        return Some(text.clone());
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// 删除指定会话的缓存签名
     #[allow(dead_code)] // 预留给管理接口或调试使用
     pub fn delete_session_signature(&self, session_id: &str) {
@@ -285,6 +359,9 @@ impl SignatureCache {
             cache.clear();
         }
         if let Ok(mut cache) = self.session_signatures.lock() {
+            cache.clear();
+        }
+        if let Ok(mut cache) = self.session_reasonings.lock() {
             cache.clear();
         }
     }
