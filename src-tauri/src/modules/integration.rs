@@ -67,7 +67,21 @@ impl SystemIntegration for DesktopIntegration {
         }
 
         // 2. 智能决策：是否使用最新的系统 Keychain 凭据管理器方式存储 Token
-        let is_ide = target_ide == Some("ide");
+        let mut is_ide = target_ide == Some("ide");
+
+        // Auto-detect IDE: if the located executable is the IDE, treat as IDE mode
+        if !is_ide {
+            if let Some(exe_path) = process::get_antigravity_executable_path(target_ide) {
+                let path_lower = exe_path.to_string_lossy().to_lowercase();
+                if path_lower.contains("antigravity ide") || path_lower.contains("antigravity-ide") {
+                    is_ide = true;
+                    crate::modules::logger::log_info(
+                        "[Desktop] Auto-detected Antigravity IDE executable, using IDE account switch logic.",
+                    );
+                }
+            }
+        }
+
         let mut use_keyring = false;
 
         if !is_ide {

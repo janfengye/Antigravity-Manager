@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> 专业级 AI 账号管理与协议代理系统 (v4.3.0)
+> 专业级 AI 账号管理与协议代理系统 (v4.3.1)
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
 
@@ -8,7 +8,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.3.0-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.3.1-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -133,7 +133,7 @@ graph TD
 
 **Linux / macOS:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.3.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.3.1/install.sh | bash
 ```
 
 **Windows (PowerShell):**
@@ -143,7 +143,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **支持的格式**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **高级用法**: 安装指定版本 `curl -fsSL ... | bash -s -- --version 4.3.0`，预览模式 `curl -fsSL ... | bash -s -- --dry-run`
+> **高级用法**: 安装指定版本 `curl -fsSL ... | bash -s -- --version 4.3.1`，预览模式 `curl -fsSL ... | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 如果您已安装 [Homebrew](https://brew.sh/)，也可以通过以下命令安装：
@@ -439,6 +439,13 @@ response = client.chat.completions.create(
 ## 📝 开发者与社区
 
 *   **版本演进 (Changelog)**:
+    *   **v4.3.1 (2026-07-03)**:
+        -   **[优化/修复] 优化 Antigravity IDE 客户端识别、路径解析与缓存支持 (IDE Detection & Cache Paths)**:
+            -   **IDE 模式自动检测**: 在系统集成账户切换时，若检测到所定位的可执行文件路径包含 `"antigravity ide"` 或 `"antigravity-ide"`，将自动识别为 IDE 模式并应用对应的 Keyring 凭证切换逻辑。
+            -   **数据库与存储路径智能合并检测**: 当 `target_ide` 为 `None` 时，会自动尝试并探测 `Antigravity IDE` 和 `Antigravity` 两者的 `state.vscdb` 数据库及 `storage.json` 路径，解决无显式参数时找不到 IDE 客户端配置的 Bug。
+            -   **新增 IDE 缓存支持**: 新增对 Windows 平台上独立 Electron 版 Antigravity IDE 缓存目录的清理与查找支持。
+            -   **配置路径检测优先级**: 引入配置路径检测（Strategy 2），优先读取应用配置中手动指定的 `antigravity_executable` / `antigravity_ide_executable` 可执行文件位置，并完善了标准位置的遍历探测。
+            -   *相关 PR*: 详见 [PR #3220](https://github.com/lbjlaq/Antigravity-Manager/pull/3220)
     *   **v4.3.0 (2026-07-02)**:
         -   **[核心修复] 解决 Claude 请求映射到 Gemini 时混入 System 角色消息导致 400 错误的 Bug (Claude System Message Fix)**:
             -   **System 消息提取与过滤**: 在 Claude 转 Gemini 的协议映射中，提取并过滤掉 `messages` 列表中 `role == "system"` 的消息，防止其混入 `contents` 从而引起 Gemini API 返回 `400 INVALID_ARGUMENT` 报错。

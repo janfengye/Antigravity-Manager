@@ -48,22 +48,27 @@ pub fn get_storage_path(target_ide: Option<&str>) -> Result<PathBuf, String> {
         }
     }
 
-    let folder_name = if target_ide == Some("ide") {
-        "Antigravity IDE"
+    let folder_names: &[&str] = if target_ide == Some("ide") {
+        &["Antigravity IDE"]
+    } else if target_ide == Some("code") || target_ide == Some("cursor") {
+        &["Antigravity"]
     } else {
-        "Antigravity"
+        // target_ide = None: try IDE folder first, fall back to classic name
+        &["Antigravity IDE", "Antigravity"]
     };
 
     // 3) Standard installation location
     #[cfg(target_os = "macos")]
     {
         let home = dirs::home_dir().ok_or("failed_to_get_home_dir")?;
-        let path = home.join(format!(
-            "Library/Application Support/{}/User/globalStorage/storage.json",
-            folder_name
-        ));
-        if path.exists() {
-            return Ok(path);
+        for folder_name in folder_names {
+            let path = home.join(format!(
+                "Library/Application Support/{}/User/globalStorage/storage.json",
+                folder_name
+            ));
+            if path.exists() {
+                return Ok(path);
+            }
         }
     }
 
@@ -71,23 +76,27 @@ pub fn get_storage_path(target_ide: Option<&str>) -> Result<PathBuf, String> {
     {
         let appdata =
             std::env::var("APPDATA").map_err(|_| "failed_to_get_appdata_env".to_string())?;
-        let path = PathBuf::from(appdata)
-            .join(folder_name)
-            .join("User\\globalStorage\\storage.json");
-        if path.exists() {
-            return Ok(path);
+        for folder_name in folder_names {
+            let path = PathBuf::from(&appdata)
+                .join(folder_name)
+                .join("User\\globalStorage\\storage.json");
+            if path.exists() {
+                return Ok(path);
+            }
         }
     }
 
     #[cfg(target_os = "linux")]
     {
         let home = dirs::home_dir().ok_or("failed_to_get_home_dir")?;
-        let path = home.join(format!(
-            ".config/{}/User/globalStorage/storage.json",
-            folder_name
-        ));
-        if path.exists() {
-            return Ok(path);
+        for folder_name in folder_names {
+            let path = home.join(format!(
+                ".config/{}/User/globalStorage/storage.json",
+                folder_name
+            ));
+            if path.exists() {
+                return Ok(path);
+            }
         }
     }
 

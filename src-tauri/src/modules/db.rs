@@ -44,19 +44,31 @@ pub fn get_db_path(target_ide: Option<&str>) -> Result<PathBuf, String> {
         }
     }
 
-    let folder_name = if target_ide == Some("ide") {
-        "Antigravity IDE"
+    let folder_names: &[&str] = if target_ide == Some("ide") {
+        &["Antigravity IDE"]
+    } else if target_ide == Some("code") || target_ide == Some("cursor") {
+        &["Antigravity"]
     } else {
-        "Antigravity"
+        &["Antigravity IDE", "Antigravity"]
     };
 
     // Standard mode: use system default path
     #[cfg(target_os = "macos")]
     {
         let home = dirs::home_dir().ok_or("Failed to get home directory")?;
+        for folder_name in folder_names {
+            let path = home.join(format!(
+                "Library/Application Support/{}/User/globalStorage/state.vscdb",
+                folder_name
+            ));
+            if path.exists() {
+                return Ok(path);
+            }
+        }
+        // Fall back to first candidate even if it doesn't exist
         Ok(home.join(format!(
             "Library/Application Support/{}/User/globalStorage/state.vscdb",
-            folder_name
+            folder_names[0]
         )))
     }
 
@@ -64,17 +76,34 @@ pub fn get_db_path(target_ide: Option<&str>) -> Result<PathBuf, String> {
     {
         let appdata = std::env::var("APPDATA")
             .map_err(|_| "Failed to get APPDATA environment variable".to_string())?;
+        for folder_name in folder_names {
+            let path = PathBuf::from(&appdata)
+                .join(folder_name)
+                .join("User\\globalStorage\\state.vscdb");
+            if path.exists() {
+                return Ok(path);
+            }
+        }
         Ok(PathBuf::from(appdata)
-            .join(folder_name)
+            .join(folder_names[0])
             .join("User\\globalStorage\\state.vscdb"))
     }
 
     #[cfg(target_os = "linux")]
     {
         let home = dirs::home_dir().ok_or("Failed to get home directory")?;
+        for folder_name in folder_names {
+            let path = home.join(format!(
+                ".config/{}/User/globalStorage/state.vscdb",
+                folder_name
+            ));
+            if path.exists() {
+                return Ok(path);
+            }
+        }
         Ok(home.join(format!(
             ".config/{}/User/globalStorage/state.vscdb",
-            folder_name
+            folder_names[0]
         )))
     }
 }

@@ -46,12 +46,16 @@ pub fn get_antigravity_cache_paths() -> Vec<PathBuf> {
             let local_path = PathBuf::from(&local_app_data);
             paths.push(local_path.join("Google\\Antigravity"));
             paths.push(local_path.join("Antigravity\\Cache"));
+            // Standalone Antigravity IDE cache (Electron-based)
+            paths.push(local_path.join("Antigravity IDE\\Cache"));
         }
 
         // AppData cache
         if let Ok(app_data) = std::env::var("APPDATA") {
             let app_path = PathBuf::from(&app_data);
             paths.push(app_path.join("Antigravity\\Cache"));
+            // Standalone Antigravity IDE cache (Electron-based)
+            paths.push(app_path.join("Antigravity IDE\\Cache"));
         }
     }
 

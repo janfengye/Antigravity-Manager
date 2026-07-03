@@ -1106,23 +1106,57 @@ pub fn get_antigravity_executable_path(target_ide: Option<&str>) -> Option<std::
         return Some(path);
     }
 
-    // Strategy 2: Check standard installation locations
+    // Strategy 2: Check config paths (supports user-configured locations)
+    if let Ok(config) = crate::modules::config::load_app_config() {
+        match target_ide {
+            Some("ide") => {
+                if let Some(ref p) = config.antigravity_ide_executable {
+                    let path = std::path::PathBuf::from(p);
+                    if path.exists() {
+                        return Some(path);
+                    }
+                }
+            }
+            _ => {
+                // Try antigravity_executable first (closest match for target_ide=None)
+                if let Some(ref p) = config.antigravity_executable {
+                    let path = std::path::PathBuf::from(p);
+                    if path.exists() {
+                        return Some(path);
+                    }
+                }
+                // Fall back to IDE executable if the other wasn't set or found
+                if let Some(ref p) = config.antigravity_ide_executable {
+                    let path = std::path::PathBuf::from(p);
+                    if path.exists() {
+                        return Some(path);
+                    }
+                }
+            }
+        }
+    }
+
+    // Strategy 3: Check standard installation locations
     check_standard_locations(target_ide)
 }
 
 /// Check standard installation locations
 fn check_standard_locations(target_ide: Option<&str>) -> Option<std::path::PathBuf> {
-    let folder_name = if target_ide == Some("ide") {
-        "Antigravity IDE"
+    let folder_names: &[&str] = if target_ide == Some("ide") {
+        &["Antigravity IDE"]
+    } else if target_ide == Some("code") || target_ide == Some("cursor") {
+        &["Antigravity"]
     } else {
-        "Antigravity"
+        &["Antigravity IDE", "Antigravity"]
     };
 
     #[cfg(target_os = "macos")]
     {
-        let path = std::path::PathBuf::from(format!("/Applications/{}.app", folder_name));
-        if path.exists() {
-            return Some(path);
+        for folder_name in folder_names {
+            let path = std::path::PathBuf::from(format!("/Applications/{}.app", folder_name));
+            if path.exists() {
+                return Some(path);
+            }
         }
     }
 
@@ -1137,64 +1171,69 @@ fn check_standard_locations(target_ide: Option<&str>) -> Option<std::path::PathB
         let program_files_x86 =
             env::var("ProgramFiles(x86)").unwrap_or_else(|_| "C:\\Program Files (x86)".to_string());
 
-        let mut possible_paths = Vec::new();
+        for folder_name in folder_names {
+            let mut possible_paths = Vec::new();
 
-        // User installation location (preferred)
-        if let Some(local) = local_appdata {
+            // User installation location (preferred)
+            if let Some(local) = &local_appdata {
+                possible_paths.push(
+                    std::path::PathBuf::from(local)
+                        .join("Programs")
+                        .join(folder_name)
+                        .join(format!("{}.exe", folder_name)),
+                );
+            }
+
+            // System installation location
             possible_paths.push(
-                std::path::PathBuf::from(&local)
-                    .join("Programs")
+                std::path::PathBuf::from(&program_files)
                     .join(folder_name)
                     .join(format!("{}.exe", folder_name)),
             );
-        }
 
-        // System installation location
-        possible_paths.push(
-            std::path::PathBuf::from(&program_files)
-                .join(folder_name)
-                .join(format!("{}.exe", folder_name)),
-        );
+            // 32-bit compatibility location
+            possible_paths.push(
+                std::path::PathBuf::from(&program_files_x86)
+                    .join(folder_name)
+                    .join(format!("{}.exe", folder_name)),
+            );
 
-        // 32-bit compatibility location
-        possible_paths.push(
-            std::path::PathBuf::from(&program_files_x86)
-                .join(folder_name)
-                .join(format!("{}.exe", folder_name)),
-        );
-
-        // Return the first existing path
-        for path in possible_paths {
-            if path.exists() {
-                return Some(path);
+            // Return the first existing path
+            for path in possible_paths {
+                if path.exists() {
+                    return Some(path);
+                }
             }
         }
     }
 
     #[cfg(target_os = "linux")]
     {
-        let exe_name = if target_ide == Some("ide") {
-            "antigravity-ide"
-        } else {
-            "antigravity"
-        };
-        let possible_paths = vec![
-            std::path::PathBuf::from(format!("/usr/bin/{}", exe_name)),
-            std::path::PathBuf::from(format!("/opt/{}/{}", folder_name, exe_name)),
-            std::path::PathBuf::from(format!("/usr/share/{}/{}", folder_name, exe_name)),
-        ];
+        for folder_name in folder_names {
+            let exe_name = if folder_name == "Antigravity IDE" {
+                "antigravity-ide"
+            } else {
+                "antigravity"
+            };
 
-        // User local installation
-        if let Some(home) = dirs::home_dir() {
-            let user_local = home.join(format!(".local/bin/{}", exe_name));
-            if user_local.exists() {
-                return Some(user_local);
+            let possible_paths = vec![
+                std::path::PathBuf::from(format!("/usr/bin/{}", exe_name)),
+                std::path::PathBuf::from(format!("/opt/{}/{}", folder_name, exe_name)),
+                std::path::PathBuf::from(format!("/usr/share/{}/{}", folder_name, exe_name)),
+            ];
+
+            // User local installation
+            if let Some(home) = dirs::home_dir() {
+                let user_local = home.join(format!(".local/bin/{}", exe_name));
+                if user_local.exists() {
+                    return Some(user_local);
+                }
             }
-        }
 
-        for path in possible_paths {
-            if path.exists() {
-                return Some(path);
+            for path in possible_paths {
+                if path.exists() {
+                    return Some(path);
+                }
             }
         }
     }
