@@ -437,8 +437,8 @@ pub fn global_tool_artifact_store() -> &'static ToolArtifactStore {
         }
         #[cfg(not(test))]
         {
-            let db_path = dirs::home_dir()
-                .map(|p| p.join(".codex-app-transfer").join("tool_artifacts.db"));
+            let db_path =
+                dirs::home_dir().map(|p| p.join(".codex-app-transfer").join("tool_artifacts.db"));
             match db_path {
                 Some(path) => {
                     let (store, warn) = ToolArtifactStore::with_db_path(

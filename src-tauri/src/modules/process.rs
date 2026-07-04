@@ -1210,7 +1210,7 @@ fn check_standard_locations(target_ide: Option<&str>) -> Option<std::path::PathB
     #[cfg(target_os = "linux")]
     {
         for folder_name in folder_names {
-            let exe_name = if folder_name == "Antigravity IDE" {
+            let exe_name = if *folder_name == "Antigravity IDE" {
                 "antigravity-ide"
             } else {
                 "antigravity"

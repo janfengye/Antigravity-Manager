@@ -2,9 +2,9 @@
 // 为 /v1/responses POST 提供 previous_response_id 链式历史支持
 // 这样即使客户端用 HTTP 而不是 WebSocket，也能实现多轮对话
 
+use crate::proxy::handlers::openai::get_cached_tool_call;
 use serde_json::Value;
 use std::collections::HashMap;
-use crate::proxy::handlers::openai::get_cached_tool_call;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
@@ -91,7 +91,10 @@ pub fn merge_history_with_new_input(
     });
 
     if has_compaction {
-        tracing::info!("[Session] Compaction detected in new input. Overwriting stale history (new items: {})", new_input.len());
+        tracing::info!(
+            "[Session] Compaction detected in new input. Overwriting stale history (new items: {})",
+            new_input.len()
+        );
         // 过滤掉 compaction 本身
         let mut filtered = Vec::new();
         for item in new_input {
@@ -126,10 +129,7 @@ pub fn merge_history_with_new_input(
     dedupe_input_items(history)
 }
 
-fn repair_tool_calls(
-    items: &mut Vec<Value>,
-    tool_call_cache: &HashMap<String, Value>,
-) {
+fn repair_tool_calls(items: &mut Vec<Value>, tool_call_cache: &HashMap<String, Value>) {
     let mut call_present = std::collections::HashSet::new();
     for item in items.iter() {
         let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
@@ -146,8 +146,15 @@ fn repair_tool_calls(
         let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
         if item_type == "function_call_output" || item_type == "custom_tool_call_output" {
             if let Some(call_id) = item.get("call_id").and_then(|v| v.as_str()) {
-                if !call_id.is_empty() && !call_present.contains(call_id) && !inserted.contains(call_id) {
-                    if let Some(cached_call) = tool_call_cache.get(call_id).cloned().or_else(|| get_cached_tool_call(call_id)) {
+                if !call_id.is_empty()
+                    && !call_present.contains(call_id)
+                    && !inserted.contains(call_id)
+                {
+                    if let Some(cached_call) = tool_call_cache
+                        .get(call_id)
+                        .cloned()
+                        .or_else(|| get_cached_tool_call(call_id))
+                    {
                         new_items.push(cached_call.clone());
                         inserted.insert(call_id.to_string());
                     }
@@ -182,8 +189,12 @@ fn dedupe_input_items(items: Vec<Value>) -> Vec<Value> {
         let call_id = item.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
         let is_referenced = !call_id.is_empty() && referenced_call_ids.contains(call_id);
         if let Some(&existing_idx) = keep_map.get(item_id) {
-            let existing_call_id = items[existing_idx].get("call_id").and_then(|v| v.as_str()).unwrap_or("");
-            let existing_referenced = !existing_call_id.is_empty() && referenced_call_ids.contains(existing_call_id);
+            let existing_call_id = items[existing_idx]
+                .get("call_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let existing_referenced =
+                !existing_call_id.is_empty() && referenced_call_ids.contains(existing_call_id);
             if is_referenced || !existing_referenced {
                 keep_map.insert(item_id.to_string(), idx);
             }

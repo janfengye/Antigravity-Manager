@@ -3111,6 +3111,11 @@ mod tests {
                 "disabled": false,
                 "proxy_disabled": proxy_disabled,
                 "proxy_disabled_reason": if proxy_disabled { "manual" } else { "" },
+                "quota": {
+                    "models": [
+                        { "name": "gemini-3-flash", "percentage": 100 }
+                    ]
+                },
                 "created_at": now,
                 "last_used": now
             });

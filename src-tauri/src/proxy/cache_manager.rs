@@ -122,10 +122,7 @@ impl CacheManager {
                 if let Ok(mut stats) = self.stats.write() {
                     stats.misses += 1;
                 }
-                tracing::debug!(
-                    "[CacheManager] Miss: hash={}",
-                    &hash[..hash.len().min(16)]
-                );
+                tracing::debug!("[CacheManager] Miss: hash={}", &hash[..hash.len().min(16)]);
                 None
             }
         }
@@ -204,8 +201,7 @@ impl CacheManager {
 
 /// 全局 CacheManager 单例
 use std::sync::LazyLock;
-static GLOBAL_CACHE_MANAGER: LazyLock<CacheManager> =
-    LazyLock::new(|| CacheManager::new(3600)); // 默认 TTL 1 小时
+static GLOBAL_CACHE_MANAGER: LazyLock<CacheManager> = LazyLock::new(|| CacheManager::new(3600)); // 默认 TTL 1 小时
 
 /// 获取全局 CacheManager
 pub fn global_cache_manager() -> &'static CacheManager {

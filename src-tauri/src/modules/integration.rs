@@ -73,7 +73,8 @@ impl SystemIntegration for DesktopIntegration {
         if !is_ide {
             if let Some(exe_path) = process::get_antigravity_executable_path(target_ide) {
                 let path_lower = exe_path.to_string_lossy().to_lowercase();
-                if path_lower.contains("antigravity ide") || path_lower.contains("antigravity-ide") {
+                if path_lower.contains("antigravity ide") || path_lower.contains("antigravity-ide")
+                {
                     is_ide = true;
                     crate::modules::logger::log_info(
                         "[Desktop] Auto-detected Antigravity IDE executable, using IDE account switch logic.",

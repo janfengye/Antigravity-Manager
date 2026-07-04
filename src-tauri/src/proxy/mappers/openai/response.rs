@@ -57,7 +57,8 @@ pub fn transform_openai_response(
                     // 工具调用部分
                     if let Some(fc) = part.get("functionCall") {
                         let name = fc.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
-                        let mut args_json = fc.get("args").unwrap_or(&serde_json::json!({})).clone();
+                        let mut args_json =
+                            fc.get("args").unwrap_or(&serde_json::json!({})).clone();
 
                         // [FIX #1575] 标准化 shell 工具参数名称
                         if name == "shell" || name == "bash" || name == "local_shell" {
@@ -75,7 +76,7 @@ pub fn transform_openai_response(
                         }
 
                         let mut arguments_str = args_json.to_string();
-                        
+
                         // [FIX] Codex CLI apply_patch freeform raw string
                         if name == "apply_patch" {
                             if let Some(obj) = args_json.as_object() {
@@ -85,17 +86,20 @@ pub fn transform_openai_response(
                                             arguments_str = patch.to_string();
                                         }
                                     }
-                                } else if let Some(patch) = obj.get("patch_text").and_then(|v| v.as_str()) {
+                                } else if let Some(patch) =
+                                    obj.get("patch_text").and_then(|v| v.as_str())
+                                {
                                     arguments_str = patch.to_string();
                                 }
                             }
                         }
 
-                        let final_name = if name == "shell" || name == "bash" || name == "local_shell" {
-                            "local_shell_call"
-                        } else {
-                            name
-                        };
+                        let final_name =
+                            if name == "shell" || name == "bash" || name == "local_shell" {
+                                "local_shell_call"
+                            } else {
+                                name
+                            };
 
                         let id = fc
                             .get("id")
@@ -131,18 +135,31 @@ pub fn transform_openai_response(
 
                     // 处理原生代码执行 (executableCode)
                     if let Some(exec_code) = part.get("executableCode") {
-                        let lang = exec_code.get("language").and_then(|v| v.as_str()).unwrap_or("python");
+                        let lang = exec_code
+                            .get("language")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("python");
                         let code = exec_code.get("code").and_then(|v| v.as_str()).unwrap_or("");
                         if !code.is_empty() {
-                            content_out.push_str(&format!("\n\n```{}\n{}\n```\n", lang.to_lowercase(), code));
+                            content_out.push_str(&format!(
+                                "\n\n```{}\n{}\n```\n",
+                                lang.to_lowercase(),
+                                code
+                            ));
                         }
                     }
 
                     // 处理代码执行结果 (codeExecutionResult)
                     if let Some(exec_result) = part.get("codeExecutionResult") {
-                        let output = exec_result.get("output").and_then(|v| v.as_str()).unwrap_or("");
+                        let output = exec_result
+                            .get("output")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
                         if !output.is_empty() {
-                            content_out.push_str(&format!("\n**Execution Output:**\n```text\n{}\n```\n", output));
+                            content_out.push_str(&format!(
+                                "\n**Execution Output:**\n```text\n{}\n```\n",
+                                output
+                            ));
                         }
                     }
                 }
@@ -253,7 +270,10 @@ pub fn transform_openai_response(
     // 如果 candidates 为空，但存在 promptFeedback（被安全拦截），伪造一个被拒绝的 choice
     if choices.is_empty() {
         if let Some(feedback) = raw.get("promptFeedback") {
-            let reason = feedback.get("blockReason").and_then(|v| v.as_str()).unwrap_or("UNKNOWN");
+            let reason = feedback
+                .get("blockReason")
+                .and_then(|v| v.as_str())
+                .unwrap_or("UNKNOWN");
             let refusal_msg = format!("请求由于安全策略被拦截 (blockReason: {})", reason);
             choices.push(Choice {
                 index: 0,

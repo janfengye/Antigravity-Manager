@@ -138,7 +138,7 @@ pub async fn handle_chat_completions(
         openai_req.stream
     );
     let debug_cfg = state.debug_logging.read().await.clone();
-    
+
     let mut force_rotate = false;
 
     if debug_logger::is_enabled(&debug_cfg) {
@@ -483,27 +483,34 @@ pub async fn handle_chat_completions(
                 };
 
                 if client_wants_stream {
-                // [MULTI-TURN] 保存本次对话的 messages 到 session store（/v1/chat/completions）
-                {
-                    let save_msgs = openai_req.messages.iter().map(|m| {
-                        let content_str = match &m.content {
-                            Some(crate::proxy::mappers::openai::OpenAIContent::String(s)) => s.clone(),
-                            _ => String::new(),
+                    // [MULTI-TURN] 保存本次对话的 messages 到 session store（/v1/chat/completions）
+                    {
+                        let save_msgs = openai_req
+                            .messages
+                            .iter()
+                            .map(|m| {
+                                let content_str = match &m.content {
+                                    Some(crate::proxy::mappers::openai::OpenAIContent::String(
+                                        s,
+                                    )) => s.clone(),
+                                    _ => String::new(),
+                                };
+                                json!({"role": m.role, "content": content_str})
+                            })
+                            .collect::<Vec<_>>();
+                        let chat_response_id =
+                            format!("chatcmpl-{}", uuid::Uuid::new_v4().simple());
+                        let entry = crate::proxy::http_session_store::HttpSessionEntry {
+                            input_items: save_msgs,
+                            instructions: String::new(),
+                            model: openai_req.model.clone(),
+                            last_accessed: std::time::Instant::now(),
                         };
-                        json!({"role": m.role, "content": content_str})
-                    }).collect::<Vec<_>>();
-                    let chat_response_id = format!("chatcmpl-{}", uuid::Uuid::new_v4().simple());
-                    let entry = crate::proxy::http_session_store::HttpSessionEntry {
-                        input_items: save_msgs,
-                        instructions: String::new(),
-                        model: openai_req.model.clone(),
-                        last_accessed: std::time::Instant::now(),
-                    };
-                    let rid = chat_response_id.clone();
-                    tokio::spawn(async move {
-                        crate::proxy::http_session_store::save_session(rid, entry).await;
-                    });
-                }
+                        let rid = chat_response_id.clone();
+                        tokio::spawn(async move {
+                            crate::proxy::http_session_store::save_session(rid, entry).await;
+                        });
+                    }
                     // 客户端请求流式，返回 SSE
                     let body = Body::from_stream(combined_stream);
                     return Ok(Response::builder()
@@ -890,7 +897,8 @@ const APPLY_PATCH_CHAT_PATH_SYSTEM_GUIDANCE_ZH: &str = concat!(
 
 const WEB_TOOLS_SYSTEM_GUIDANCE_ZH: &str = "联网获取信息时(实时事实 / 价格 / 文档 / 新闻 / 版本号 / 任何你不确定或可能已过时的内容),**优先用 `web_search` 和 `web_fetch` 工具,不要用 shell 的 curl / wget / python 去抓 URL 或搜索引擎**。本机对外网访问受限,shell 直连通常被防火墙 / 反爬拦截(返回空或 403),会白费多轮尝试、最后只能靠可能过时的记忆作答;而这两个工具经代理(浏览器 TLS 指纹 + headless 渲染)能真正抓到。用法:先 `web_search(query)` 找信息源,再用 `web_fetch(url)` 读该页**完整正文**(返回全文、自己读)。之前抓过的某 URL 若在对话历史里被折叠 / 压缩、需要回看完整原文, 用 `read_url_local(url)` 从本地缓存取回, 不必重新联网。";
 
-const CHINESE_LANGUAGE_DIRECTIVE: &str = "**请始终使用简体中文回复用户**(代码、命令、标识符、文件路径等技术内容保持原文,不要翻译)。";
+const CHINESE_LANGUAGE_DIRECTIVE: &str =
+    "**请始终使用简体中文回复用户**(代码、命令、标识符、文件路径等技术内容保持原文,不要翻译)。";
 
 fn tools_register_apply_patch(body: &Value) -> bool {
     let Some(tools) = body.get("tools").and_then(Value::as_array) else {
@@ -898,7 +906,8 @@ fn tools_register_apply_patch(body: &Value) -> bool {
     };
     tools.iter().any(|t| {
         t.get("name").and_then(Value::as_str) == Some("apply_patch")
-            && (t.get("type").and_then(Value::as_str) == Some("custom") || t.get("type").and_then(Value::as_str) == Some("function"))
+            && (t.get("type").and_then(Value::as_str) == Some("custom")
+                || t.get("type").and_then(Value::as_str) == Some("function"))
     })
 }
 
@@ -926,7 +935,8 @@ fn tools_register_web_fetch(body: &Value) -> bool {
 }
 
 fn apply_patch_chat_guidance_message() -> Value {
-    let content = format!("{CHINESE_LANGUAGE_DIRECTIVE}\n\n{APPLY_PATCH_CHAT_PATH_SYSTEM_GUIDANCE_ZH}");
+    let content =
+        format!("{CHINESE_LANGUAGE_DIRECTIVE}\n\n{APPLY_PATCH_CHAT_PATH_SYSTEM_GUIDANCE_ZH}");
     serde_json::json!({
         "role": "system",
         "content": content,
@@ -957,20 +967,28 @@ pub async fn handle_completions(
     // [MULTI-TURN] 支持 previous_response_id 链式历史恢复
     // 当客户端通过 HTTP POST /v1/responses 传入 previous_response_id 时，
     // 从服务器端 session store 取出上一轮的历史，合并到本轮的 input 中
-    let previous_response_id = body.get("previous_response_id").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let previous_response_id = body
+        .get("previous_response_id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
     let response_id_for_save = format!("resp-{}", uuid::Uuid::new_v4());
-    let http_tool_call_cache: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
+    let http_tool_call_cache: std::collections::HashMap<String, serde_json::Value> =
+        std::collections::HashMap::new();
     if let Some(ref prev_id) = previous_response_id {
         if let Some(session) = crate::proxy::http_session_store::get_session(prev_id).await {
             // 把历史 input items 合并进来
-            let existing_input = body.get("input").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+            let existing_input = body
+                .get("input")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
             let merged = crate::proxy::http_session_store::merge_history_with_new_input(
                 session.input_items,
                 &[],
                 &existing_input,
                 &http_tool_call_cache,
             );
-                let merged_len = merged.len();
+            let merged_len = merged.len();
             if let Some(obj) = body.as_object_mut() {
                 obj.insert("input".to_string(), json!(merged));
                 // 从历史 session 继承 instructions（如果本轮没带）
@@ -982,7 +1000,11 @@ pub async fn handle_completions(
                     obj.insert("model".to_string(), json!(session.model));
                 }
             }
-            tracing::debug!("[MultiTurn] Restored session from prev_id={}, {} items in history", prev_id, merged_len);
+            tracing::debug!(
+                "[MultiTurn] Restored session from prev_id={}, {} items in history",
+                prev_id,
+                merged_len
+            );
         }
     }
 
@@ -1285,14 +1307,26 @@ pub async fn handle_completions(
                             if let Some(item_type) = obj.get("type").and_then(|v| v.as_str()) {
                                 match item_type {
                                     "message" => {
-                                        let role = obj.get("role").and_then(|v| v.as_str()).unwrap_or("user");
-                                        let content = obj.get("content").cloned().unwrap_or(json!(""));
+                                        let role = obj
+                                            .get("role")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("user");
+                                        let content =
+                                            obj.get("content").cloned().unwrap_or(json!(""));
                                         messages.push(json!({ "role": role, "content": content }));
                                     }
                                     "function_call" | "custom_tool_call" => {
-                                        let call_id = obj.get("call_id").or_else(|| obj.get("id")).and_then(|v| v.as_str()).unwrap_or("");
-                                        let name = obj.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                                        let arguments = obj.get("arguments").and_then(|v| v.as_str()).unwrap_or("");
+                                        let call_id = obj
+                                            .get("call_id")
+                                            .or_else(|| obj.get("id"))
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("");
+                                        let name =
+                                            obj.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                                        let arguments = obj
+                                            .get("arguments")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("");
                                         messages.push(json!({
                                             "role": "assistant",
                                             "content": "",
@@ -1304,8 +1338,14 @@ pub async fn handle_completions(
                                         }));
                                     }
                                     "function_call_output" | "custom_tool_call_output" => {
-                                        let call_id = obj.get("call_id").or_else(|| obj.get("tool_call_id")).or_else(|| obj.get("id")).and_then(|v| v.as_str()).unwrap_or("");
-                                        let output_value = obj.get("output").cloned().unwrap_or(json!(""));
+                                        let call_id = obj
+                                            .get("call_id")
+                                            .or_else(|| obj.get("tool_call_id"))
+                                            .or_else(|| obj.get("id"))
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("");
+                                        let output_value =
+                                            obj.get("output").cloned().unwrap_or(json!(""));
                                         let output_str = if let Some(s) = output_value.as_str() {
                                             s.to_string()
                                         } else {
@@ -1412,7 +1452,7 @@ pub async fn handle_completions(
 
     // [NEW v4.2.0] Context Management & Reasoning Replay
     let session_id_str = SessionManager::extract_openai_session_id(&openai_req);
-    
+
     crate::proxy::mappers::context_manager::ContextManager::restore_openai_reasoning_content(
         &mut openai_req.messages,
         &session_id_str,
@@ -1432,7 +1472,11 @@ pub async fn handle_completions(
         tracing::info!("[Codex-Context] Purified older assistant reasoning_content in history");
     }
 
-    let assistant_turn_index = openai_req.messages.iter().filter(|m| m.role == "assistant").count();
+    let assistant_turn_index = openai_req
+        .messages
+        .iter()
+        .filter(|m| m.role == "assistant")
+        .count();
 
     let upstream = state.upstream.clone();
     let token_manager = state.token_manager;
@@ -1514,17 +1558,20 @@ pub async fn handle_completions(
         if let Some(contents) = gemini_body.get("contents").and_then(|c| c.as_array()) {
             let mut sizes = Vec::new();
             for (idx, msg) in contents.iter().enumerate() {
-                let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("unknown");
+                let role = msg
+                    .get("role")
+                    .and_then(|r| r.as_str())
+                    .unwrap_or("unknown");
                 let msg_str = serde_json::to_string(msg).unwrap_or_default();
                 sizes.push(format!("msg_{}[{}]: {} chars", idx, role, msg_str.len()));
             }
-            
+
             let system_instruction_len = gemini_body
                 .get("request")
                 .and_then(|r| r.get("systemInstruction"))
                 .map(|s| serde_json::to_string(s).unwrap_or_default().len())
                 .unwrap_or(0);
-                
+
             let tools_len = gemini_body
                 .get("request")
                 .and_then(|r| r.get("tools"))
@@ -1767,45 +1814,67 @@ pub async fn handle_completions(
                     match collect_stream_to_json(Box::pin(combined_stream)).await {
                         Ok(chat_resp) => {
                             let is_responses_api = uri.path() == "/v1/responses";
-                            
+
                             if is_responses_api {
                                 let mut output = Vec::new();
                                 for c in chat_resp.choices.iter() {
                                     let text = match &c.message.content {
-                                        Some(crate::proxy::mappers::openai::OpenAIContent::String(s)) => s.clone(),
-                                        _ => "".to_string()
+                                        Some(
+                                            crate::proxy::mappers::openai::OpenAIContent::String(s),
+                                        ) => s.clone(),
+                                        _ => "".to_string(),
                                     };
-                                    
+
                                     let has_content = !text.is_empty();
-                                    let has_tools = c.message.tool_calls.is_some() && !c.message.tool_calls.as_ref().unwrap().is_empty();
-                                    
+                                    let has_tools = c.message.tool_calls.is_some()
+                                        && !c.message.tool_calls.as_ref().unwrap().is_empty();
+
                                     if has_content || has_tools {
                                         let mut msg_obj = serde_json::Map::new();
                                         msg_obj.insert("type".to_string(), json!("message"));
                                         msg_obj.insert("role".to_string(), json!("assistant"));
-                                        
+
                                         if has_content {
                                             msg_obj.insert("content".to_string(), json!(text));
                                         }
                                         if let Some(tool_calls) = &c.message.tool_calls {
-                                            msg_obj.insert("tool_calls".to_string(), json!(tool_calls));
+                                            msg_obj.insert(
+                                                "tool_calls".to_string(),
+                                                json!(tool_calls),
+                                            );
                                         }
                                         output.push(serde_json::Value::Object(msg_obj));
                                     }
                                 }
-                                
+
                                 // Calculate usage if available
                                 let mut usage_obj = serde_json::Map::new();
                                 if let Some(ref usage) = chat_resp.usage {
-                                    usage_obj.insert("input_tokens".to_string(), json!(usage.prompt_tokens));
-                                    usage_obj.insert("output_tokens".to_string(), json!(usage.completion_tokens));
-                                    usage_obj.insert("total_tokens".to_string(), json!(usage.total_tokens));
+                                    usage_obj.insert(
+                                        "input_tokens".to_string(),
+                                        json!(usage.prompt_tokens),
+                                    );
+                                    usage_obj.insert(
+                                        "output_tokens".to_string(),
+                                        json!(usage.completion_tokens),
+                                    );
+                                    usage_obj.insert(
+                                        "total_tokens".to_string(),
+                                        json!(usage.total_tokens),
+                                    );
                                     if let Some(ref details) = usage.prompt_tokens_details {
                                         if let Some(ct) = details.cached_tokens {
-                                            usage_obj.insert("cache_read_input_tokens".to_string(), json!(ct));
+                                            usage_obj.insert(
+                                                "cache_read_input_tokens".to_string(),
+                                                json!(ct),
+                                            );
                                             let mut details_obj = serde_json::Map::new();
-                                            details_obj.insert("cached_tokens".to_string(), json!(ct));
-                                            usage_obj.insert("prompt_tokens_details".to_string(), json!(details_obj));
+                                            details_obj
+                                                .insert("cached_tokens".to_string(), json!(ct));
+                                            usage_obj.insert(
+                                                "prompt_tokens_details".to_string(),
+                                                json!(details_obj),
+                                            );
                                         }
                                     }
                                 } else {
@@ -1821,7 +1890,7 @@ pub async fn handle_completions(
                                     "output": output,
                                     "usage": usage_obj
                                 });
-                                
+
                                 return (
                                     StatusCode::OK,
                                     [
@@ -1834,23 +1903,29 @@ pub async fn handle_completions(
                             }
 
                             // NOW: Convert Chat Response -> Legacy Response (Same logic as below)
-                            let choices = chat_resp.choices.iter().map(|c| {
-                                let mut text = match &c.message.content {
-                                    Some(crate::proxy::mappers::openai::OpenAIContent::String(s)) => s.clone(),
-                                    _ => "".to_string()
-                                };
-                                if let Some(ref reasoning) = c.message.reasoning_content {
-                                    if !reasoning.is_empty() {
-                                        text = format!("{}\n\n{}", reasoning, text);
+                            let choices = chat_resp
+                                .choices
+                                .iter()
+                                .map(|c| {
+                                    let mut text = match &c.message.content {
+                                        Some(
+                                            crate::proxy::mappers::openai::OpenAIContent::String(s),
+                                        ) => s.clone(),
+                                        _ => "".to_string(),
+                                    };
+                                    if let Some(ref reasoning) = c.message.reasoning_content {
+                                        if !reasoning.is_empty() {
+                                            text = format!("{}\n\n{}", reasoning, text);
+                                        }
                                     }
-                                }
-                                json!({
-                                    "text": text,
-                                    "index": c.index,
-                                    "logprobs": null,
-                                    "finish_reason": c.finish_reason
+                                    json!({
+                                        "text": text,
+                                        "index": c.index,
+                                        "logprobs": null,
+                                        "finish_reason": c.finish_reason
+                                    })
                                 })
-                            }).collect::<Vec<_>>();
+                                .collect::<Vec<_>>();
 
                             let legacy_resp = json!({
                                 "id": chat_resp.id,
@@ -1897,23 +1972,24 @@ pub async fn handle_completions(
             let chat_resp = transform_openai_response(&gemini_resp, Some("session-123"), 1);
 
             let is_responses_api = uri.path() == "/v1/responses";
-            
+
             if is_responses_api {
                 let mut output = Vec::new();
                 for c in chat_resp.choices.iter() {
                     let text = match &c.message.content {
                         Some(crate::proxy::mappers::openai::OpenAIContent::String(s)) => s.clone(),
-                        _ => "".to_string()
+                        _ => "".to_string(),
                     };
-                    
+
                     let has_content = !text.is_empty();
-                    let has_tools = c.message.tool_calls.is_some() && !c.message.tool_calls.as_ref().unwrap().is_empty();
-                    
+                    let has_tools = c.message.tool_calls.is_some()
+                        && !c.message.tool_calls.as_ref().unwrap().is_empty();
+
                     if has_content || has_tools {
                         let mut msg_obj = serde_json::Map::new();
                         msg_obj.insert("type".to_string(), json!("message"));
                         msg_obj.insert("role".to_string(), json!("assistant"));
-                        
+
                         if has_content {
                             msg_obj.insert("content".to_string(), json!(text));
                         }
@@ -1923,7 +1999,7 @@ pub async fn handle_completions(
                         output.push(serde_json::Value::Object(msg_obj));
                     }
                 }
-                
+
                 // Calculate usage if available
                 let mut usage_obj = serde_json::Map::new();
                 if let Some(ref usage) = chat_resp.usage {
@@ -1935,7 +2011,8 @@ pub async fn handle_completions(
                             usage_obj.insert("cache_read_input_tokens".to_string(), json!(ct));
                             let mut details_obj = serde_json::Map::new();
                             details_obj.insert("cached_tokens".to_string(), json!(ct));
-                            usage_obj.insert("prompt_tokens_details".to_string(), json!(details_obj));
+                            usage_obj
+                                .insert("prompt_tokens_details".to_string(), json!(details_obj));
                         }
                     }
                 } else {
@@ -1951,7 +2028,7 @@ pub async fn handle_completions(
                     "output": output,
                     "usage": usage_obj
                 });
-                
+
                 return (
                     StatusCode::OK,
                     [
@@ -2782,7 +2859,7 @@ pub async fn handle_images_edits(
             let mut last_error = String::new();
 
             let mut force_rotate = false;
-            
+
             for attempt in 0..max_attempts {
                 // 4.1 获取 Token
                 let (access_token, project_id, email, account_id, _wait_ms) = match token_manager
@@ -2985,13 +3062,12 @@ pub async fn handle_images_edits(
         .into_response())
 }
 
-
 // ==========================================
 // CODE INTEGRATION: Codex WebSocket Handler
 // ==========================================
 
-use axum::extract::ws::{WebSocketUpgrade, WebSocket, Message};
-use futures::{StreamExt, SinkExt};
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use futures::{SinkExt, StreamExt};
 use uuid::Uuid;
 
 // ==========================================
@@ -3006,49 +3082,29 @@ use tokio::sync::RwLock as TokioRwLock;
 
 use std::collections::HashMap;
 
-
-
 static WEBSOCKET_TOOL_CALL_CACHE: OnceLock<TokioRwLock<HashMap<String, Value>>> = OnceLock::new();
 
-
-
 pub fn get_cached_tool_call(call_id: &str) -> Option<Value> {
-
     if let Some(cache) = WEBSOCKET_TOOL_CALL_CACHE.get() {
-
         if let Ok(guard) = cache.try_read() {
-
             return guard.get(call_id).cloned();
-
         }
-
     }
 
     None
-
 }
 
-
-
 pub fn insert_cached_tool_call(call_id: String, item: Value) {
-
     if call_id.is_empty() {
-
         return;
-
     }
 
     let cache = WEBSOCKET_TOOL_CALL_CACHE.get_or_init(|| TokioRwLock::new(HashMap::new()));
 
     if let Ok(mut guard) = cache.try_write() {
-
         guard.insert(call_id, item);
-
     }
-
 }
-
-
 
 #[derive(Debug, Clone)]
 
@@ -3068,11 +3124,7 @@ pub async fn handle_responses_websocket(
     ws.on_upgrade(move |socket| handle_websocket_session(socket, headers, state))
 }
 
-async fn handle_websocket_session(
-    mut socket: WebSocket,
-    headers: HeaderMap,
-    state: AppState,
-) {
+async fn handle_websocket_session(mut socket: WebSocket, headers: HeaderMap, state: AppState) {
     tracing::info!("Codex responses websocket: client connected");
     let mut session_state = WebsocketSessionState {
         last_request: None,
@@ -3093,12 +3145,10 @@ async fn handle_websocket_session(
 
         let text = match msg {
             Message::Text(t) => t,
-            Message::Binary(b) => {
-                match String::from_utf8(b) {
-                    Ok(s) => s,
-                    Err(_) => continue,
-                }
-            }
+            Message::Binary(b) => match String::from_utf8(b) {
+                Ok(s) => s,
+                Err(_) => continue,
+            },
             Message::Close(_) => {
                 tracing::info!("responses websocket: client disconnected");
                 break;
@@ -3144,8 +3194,9 @@ async fn handle_websocket_session(
         };
 
         let openai_body = convert_codex_to_openai_request(normalized);
-        let response_result = handle_chat_completions(State(state.clone()), headers.clone(), Json(openai_body)).await;
-        
+        let response_result =
+            handle_chat_completions(State(state.clone()), headers.clone(), Json(openai_body)).await;
+
         let response = match response_result {
             Ok(res) => res.into_response(),
             Err((status, err_msg)) => {
@@ -3220,7 +3271,12 @@ async fn handle_websocket_session(
                         break;
                     }
                     if let Ok(chunk_json) = serde_json::from_str::<Value>(json_part) {
-                        translate_openai_chunk_to_ws(&chunk_json, &mut translation_state, &mut socket).await;
+                        translate_openai_chunk_to_ws(
+                            &chunk_json,
+                            &mut translation_state,
+                            &mut socket,
+                        )
+                        .await;
                     }
                 }
             }
@@ -3233,19 +3289,28 @@ async fn handle_websocket_session(
                     let json_part = line.trim_start_matches("data: ").trim();
                     if json_part != "[DONE]" {
                         if let Ok(chunk_json) = serde_json::from_str::<Value>(json_part) {
-                            translate_openai_chunk_to_ws(&chunk_json, &mut translation_state, &mut socket).await;
+                            translate_openai_chunk_to_ws(
+                                &chunk_json,
+                                &mut translation_state,
+                                &mut socket,
+                            )
+                            .await;
                         }
                     }
                 }
             }
         }
 
-        let completed_output = finalize_ws_events(&mut translation_state, &mut socket, &mut session_state).await;
-        
+        let completed_output =
+            finalize_ws_events(&mut translation_state, &mut socket, &mut session_state).await;
+
         session_state.last_response_output = completed_output;
         session_state.last_response_id = translation_state.response_id.clone();
-        session_state.last_response_pending_tool_call_ids = translation_state.tool_calls.values()
-            .map(|(_, call_id, _, _)| call_id.clone()).collect();
+        session_state.last_response_pending_tool_call_ids = translation_state
+            .tool_calls
+            .values()
+            .map(|(_, call_id, _, _)| call_id.clone())
+            .collect();
     }
 }
 
@@ -3265,13 +3330,13 @@ fn should_handle_prewarm_locally(payload: &Value, state: &WebsocketSessionState)
     false
 }
 
-fn handle_prewarm_locally(
-    payload: &Value,
-    state: &mut WebsocketSessionState,
-) -> (Value, Value) {
+fn handle_prewarm_locally(payload: &Value, state: &mut WebsocketSessionState) -> (Value, Value) {
     let response_id = format!("resp_prewarm_{}", Uuid::new_v4());
     let created_at = chrono::Utc::now().timestamp();
-    let model = payload.get("model").and_then(|v| v.as_str()).unwrap_or("unknown");
+    let model = payload
+        .get("model")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
 
     let created_ev = json!({
         "type": "response.created",
@@ -3337,7 +3402,10 @@ fn normalize_responses_websocket_request(
                         obj.insert("input".to_string(), json!([]));
                     }
                 }
-                let model_name = normalized.get("model").and_then(|v| v.as_str()).unwrap_or("");
+                let model_name = normalized
+                    .get("model")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 if model_name.is_empty() {
                     return Err("missing model in response.create request".to_string());
                 }
@@ -3347,10 +3415,11 @@ fn normalize_responses_websocket_request(
                 normalize_response_subsequent_request(payload, state)
             }
         }
-        "response.append" => {
-            normalize_response_subsequent_request(payload, state)
-        }
-        _ => Err(format!("unsupported websocket request type: {}", event_type)),
+        "response.append" => normalize_response_subsequent_request(payload, state),
+        _ => Err(format!(
+            "unsupported websocket request type: {}",
+            event_type
+        )),
     }
 }
 
@@ -3400,7 +3469,9 @@ fn normalize_response_subsequent_request(
             }
             if t == "function_call_output" || t == "custom_tool_call_output" {
                 if let Some(call_id) = item.get("call_id").and_then(|v| v.as_str()) {
-                    state.last_response_pending_tool_call_ids.retain(|x| x != call_id);
+                    state
+                        .last_response_pending_tool_call_ids
+                        .retain(|x| x != call_id);
                 }
             }
             merged_input.push(item.clone());
@@ -3451,7 +3522,10 @@ fn normalize_response_subsequent_request(
 }
 #[allow(dead_code)]
 fn should_replace_websocket_transcript(payload: &Value) -> bool {
-    let previous_response_id = payload.get("previous_response_id").and_then(|v| v.as_str()).unwrap_or("");
+    let previous_response_id = payload
+        .get("previous_response_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     if !previous_response_id.is_empty() {
         return false;
     }
@@ -3494,7 +3568,7 @@ fn normalize_response_transcript_replacement(payload: &Value, last_request: &Val
 }
 
 fn dedupe_input_items_by_id(items: Vec<Value>) -> Vec<Value> {
-    use std::collections::{HashSet, HashMap};
+    use std::collections::{HashMap, HashSet};
     let mut referenced_call_ids = HashSet::new();
     for item in &items {
         let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
@@ -3583,7 +3657,10 @@ fn repair_tool_calls(
         let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
         if item_type == "function_call_output" || item_type == "custom_tool_call_output" {
             if let Some(call_id) = item.get("call_id").and_then(|v| v.as_str()) {
-                if !call_id.is_empty() && !call_present.contains(call_id) && !inserted.contains(call_id) {
+                if !call_id.is_empty()
+                    && !call_present.contains(call_id)
+                    && !inserted.contains(call_id)
+                {
                     if let Some(cached_call) = tool_call_cache.get(call_id) {
                         new_items.push(cached_call.clone());
                         inserted.insert(call_id.to_string());
@@ -3597,7 +3674,10 @@ fn repair_tool_calls(
 }
 
 fn convert_codex_to_openai_request(mut body: Value) -> Value {
-    let instructions = body.get("instructions").and_then(|v| v.as_str()).unwrap_or_default();
+    let instructions = body
+        .get("instructions")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
     let input_items = body.get("input").and_then(|v| v.as_array());
 
     let mut messages = Vec::new();
@@ -3612,9 +3692,16 @@ fn convert_codex_to_openai_request(mut body: Value) -> Value {
             let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
             match item_type {
                 "function_call" | "local_shell_call" | "web_search_call" => {
-                    let call_id = item.get("call_id").and_then(|v| v.as_str())
-                        .or_else(|| item.get("id").and_then(|v| v.as_str())).unwrap_or("unknown");
-                    let mut name = item.get("name").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+                    let call_id = item
+                        .get("call_id")
+                        .and_then(|v| v.as_str())
+                        .or_else(|| item.get("id").and_then(|v| v.as_str()))
+                        .unwrap_or("unknown");
+                    let mut name = item
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown")
+                        .to_string();
                     if item_type == "local_shell_call" || name == "local_shell_call" {
                         name = "shell".to_string();
                     } else if item_type == "web_search_call" || name == "web_search_call" {
@@ -3641,11 +3728,16 @@ fn convert_codex_to_openai_request(mut body: Value) -> Value {
                         for part in parts {
                             if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
                                 text_parts.push(text.to_string());
-                            } else if part.get("type").and_then(|v| v.as_str()) == Some("input_image") {
-                                if let Some(image_url) = part.get("image_url").and_then(|v| v.as_str()) {
+                            } else if part.get("type").and_then(|v| v.as_str())
+                                == Some("input_image")
+                            {
+                                if let Some(image_url) =
+                                    part.get("image_url").and_then(|v| v.as_str())
+                                {
                                     image_parts.push(json!({ "type": "image_url", "image_url": { "url": image_url } }));
                                 }
-                            } else if part.get("type").and_then(|v| v.as_str()) == Some("image_url") {
+                            } else if part.get("type").and_then(|v| v.as_str()) == Some("image_url")
+                            {
                                 if let Some(url_obj) = part.get("image_url") {
                                     image_parts.push(json!({ "type": "image_url", "image_url": url_obj.clone() }));
                                 }
@@ -3667,10 +3759,20 @@ fn convert_codex_to_openai_request(mut body: Value) -> Value {
                     }
                 }
                 "function_call" | "local_shell_call" | "web_search_call" => {
-                    let mut name = item.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
-                    let mut args_str = item.get("arguments").and_then(|v| v.as_str()).unwrap_or("{}").to_string();
-                    let call_id = item.get("call_id").and_then(|v| v.as_str())
-                        .or_else(|| item.get("id").and_then(|v| v.as_str())).unwrap_or("unknown");
+                    let mut name = item
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
+                    let mut args_str = item
+                        .get("arguments")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("{}")
+                        .to_string();
+                    let call_id = item
+                        .get("call_id")
+                        .and_then(|v| v.as_str())
+                        .or_else(|| item.get("id").and_then(|v| v.as_str()))
+                        .unwrap_or("unknown");
 
                     if item_type == "local_shell_call" || name == "local_shell_call" {
                         name = "shell";
@@ -3678,13 +3780,20 @@ fn convert_codex_to_openai_request(mut body: Value) -> Value {
                             if let Some(exec) = action.get("exec") {
                                 let mut args_obj = serde_json::Map::new();
                                 if let Some(cmd) = exec.get("command") {
-                                    let cmd_val = if cmd.is_string() { json!([cmd]) } else { cmd.clone() };
+                                    let cmd_val = if cmd.is_string() {
+                                        json!([cmd])
+                                    } else {
+                                        cmd.clone()
+                                    };
                                     args_obj.insert("command".to_string(), cmd_val);
                                 }
-                                if let Some(wd) = exec.get("working_directory").or(exec.get("workdir")) {
+                                if let Some(wd) =
+                                    exec.get("working_directory").or(exec.get("workdir"))
+                                {
                                     args_obj.insert("workdir".to_string(), wd.clone());
                                 }
-                                args_str = serde_json::to_string(&args_obj).unwrap_or_else(|_| "{}".to_string());
+                                args_str = serde_json::to_string(&args_obj)
+                                    .unwrap_or_else(|_| "{}".to_string());
                             }
                         }
                     } else if item_type == "web_search_call" || name == "web_search_call" {
@@ -3694,7 +3803,8 @@ fn convert_codex_to_openai_request(mut body: Value) -> Value {
                             if let Some(q) = action.get("query") {
                                 args_obj.insert("query".to_string(), q.clone());
                             }
-                            args_str = serde_json::to_string(&args_obj).unwrap_or_else(|_| "{}".to_string());
+                            args_str = serde_json::to_string(&args_obj)
+                                .unwrap_or_else(|_| "{}".to_string());
                         }
                     }
 
@@ -3708,16 +3818,33 @@ fn convert_codex_to_openai_request(mut body: Value) -> Value {
                     }));
                 }
                 "function_call_output" | "custom_tool_call_output" => {
-                    let call_id = item.get("call_id").and_then(|v| v.as_str()).unwrap_or("unknown");
+                    let call_id = item
+                        .get("call_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
                     let output = item.get("output");
                     let output_str = if let Some(o) = output {
-                        if o.is_string() { o.as_str().unwrap().to_string() }
-                        else if let Some(content) = o.get("content").and_then(|v| v.as_str()) { content.to_string() }
-                        else { o.to_string() }
-                    } else { "".to_string() };
+                        if o.is_string() {
+                            o.as_str().unwrap().to_string()
+                        } else if let Some(content) = o.get("content").and_then(|v| v.as_str()) {
+                            content.to_string()
+                        } else {
+                            o.to_string()
+                        }
+                    } else {
+                        "".to_string()
+                    };
 
-                    let name = call_id_to_name.get(call_id).cloned()
-                        .or_else(|| get_cached_tool_call(call_id).and_then(|v| v.get("name").and_then(|n| n.as_str()).map(|s| s.to_string())))
+                    let name = call_id_to_name
+                        .get(call_id)
+                        .cloned()
+                        .or_else(|| {
+                            get_cached_tool_call(call_id).and_then(|v| {
+                                v.get("name")
+                                    .and_then(|n| n.as_str())
+                                    .map(|s| s.to_string())
+                            })
+                        })
                         .unwrap_or_else(|| "shell".to_string());
 
                     messages.push(json!({
@@ -3856,24 +3983,43 @@ async fn translate_openai_chunk_to_ws(
                     for tc in tool_calls {
                         let tc_idx = tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                         let tc_id = tc.get("id").and_then(|v| v.as_str()).unwrap_or("");
-                        let tc_name = tc.get("function").and_then(|f| f.get("name")).and_then(|v| v.as_str()).unwrap_or("");
-                        let tc_args = tc.get("function").and_then(|f| f.get("arguments")).and_then(|v| v.as_str()).unwrap_or("");
+                        let tc_name = tc
+                            .get("function")
+                            .and_then(|f| f.get("name"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        let tc_args = tc
+                            .get("function")
+                            .and_then(|f| f.get("arguments"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
 
                         if !tc_id.is_empty() || !tc_name.is_empty() {
-                            let tool_item_id = format!("item-{}", &Uuid::new_v4().to_string()[..16]);
+                            let tool_item_id =
+                                format!("item-{}", &Uuid::new_v4().to_string()[..16]);
                             let call_id = if tc_id.is_empty() {
                                 format!("call_{}", &Uuid::new_v4().to_string()[..16])
                             } else {
                                 tc_id.to_string()
                             };
-                            state.tool_calls.insert(tc_idx, (tool_item_id, call_id.clone(), tc_name.to_string(), String::new()));
+                            state.tool_calls.insert(
+                                tc_idx,
+                                (
+                                    tool_item_id,
+                                    call_id.clone(),
+                                    tc_name.to_string(),
+                                    String::new(),
+                                ),
+                            );
                             if !tc_name.is_empty() {
                                 // 临时插入一个包含 name 的 Value，最终会被 finalize_ws_events 里的完整 Value 覆盖
                                 insert_cached_tool_call(call_id, json!({ "name": tc_name }));
                             }
                         }
 
-                        if let Some((tool_item_id, call_id, name, args)) = state.tool_calls.get_mut(&tc_idx) {
+                        if let Some((tool_item_id, call_id, name, args)) =
+                            state.tool_calls.get_mut(&tc_idx)
+                        {
                             args.push_str(tc_args);
 
                             if !state.tool_calls_added.contains(&tc_idx) {
@@ -3955,8 +4101,10 @@ async fn finalize_ws_events(
             let _ = socket.send(Message::Text(tool_done.to_string())).await;
 
             let tc_val = item_obj.clone();
-            
-            session_state.tool_call_cache.insert(call_id.clone(), tc_val.clone());
+
+            session_state
+                .tool_call_cache
+                .insert(call_id.clone(), tc_val.clone());
             insert_cached_tool_call(call_id.clone(), tc_val.clone());
             output_items.push(tc_val);
         }
@@ -4040,4 +4188,3 @@ fn split_namespace_tool_name(qualified_name: &str) -> (String, Option<String>) {
     }
     (name.to_string(), None)
 }
-

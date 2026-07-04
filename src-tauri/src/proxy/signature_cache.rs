@@ -275,9 +275,9 @@ impl SignatureCache {
         }
 
         if let Ok(mut cache) = self.session_reasonings.lock() {
-            let entry = cache.entry(session_id.to_string()).or_insert_with(|| {
-                CacheEntry::new(Vec::new())
-            });
+            let entry = cache
+                .entry(session_id.to_string())
+                .or_insert_with(|| CacheEntry::new(Vec::new()));
 
             // Update timestamp to refresh TTL
             entry.timestamp = std::time::SystemTime::now();

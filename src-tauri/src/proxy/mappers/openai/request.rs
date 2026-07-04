@@ -30,9 +30,9 @@ fn sanitize_system_instruction_for_cache(text: &str) -> String {
     }
 
     // 剥离 UUID (标准 8-4-4-4-12 格式)
-    if let Ok(re) = regex::Regex::new(
-        r"\b[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\b",
-    ) {
+    if let Ok(re) =
+        regex::Regex::new(r"\b[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\b")
+    {
         cleaned = re.replace_all(&cleaned, "{uuid}").into_owned();
     }
 
@@ -49,7 +49,6 @@ fn sanitize_system_instruction_for_cache(text: &str) -> String {
     // 去除首尾空白
     cleaned.trim().to_string()
 }
-
 
 fn qualify_namespace_tool_name(namespace_name: &str, child_name: &str) -> String {
     let child = child_name.trim();
@@ -279,18 +278,24 @@ pub fn transform_openai_request(
     if let Some(tools) = &request.tools {
         let flat_tools = flatten_tools(tools);
         for tool in &flat_tools {
-            let name_opt = tool.get("function")
+            let name_opt = tool
+                .get("function")
                 .and_then(|f| f.get("name"))
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
                 .or_else(|| {
-                    tool.get("name").and_then(|v| v.as_str()).map(|s| s.to_string())
+                    tool.get("name")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
                 })
                 .or_else(|| {
-                    tool.get("type").and_then(|v| v.as_str()).map(|s| s.to_string())
+                    tool.get("type")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
                 });
-            
-            let params_opt = tool.get("function")
+
+            let params_opt = tool
+                .get("function")
                 .and_then(|f| f.get("parameters"))
                 .or_else(|| tool.get("parameters"));
 
@@ -445,7 +450,7 @@ pub fn transform_openai_request(
 
                     let mut args_str = String::new();
                     let mut func_name = String::new();
-                    
+
                     if let Some(func) = &tc.function {
                         args_str = func.arguments.clone();
                         func_name = func.name.clone();
@@ -749,7 +754,10 @@ pub fn transform_openai_request(
                 let mut func = tool.clone();
                 // [FIX] 剔除 "type" 前如果不存在 "name"，则提取 "type" 兜底作为名字
                 if func.get("name").is_none() {
-                    let tool_type_opt = func.get("type").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let tool_type_opt = func
+                        .get("type")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
                     if let Some(tool_type) = tool_type_opt {
                         if let Some(obj) = func.as_object_mut() {
                             obj.insert("name".to_string(), json!(tool_type));
@@ -872,7 +880,7 @@ pub fn transform_openai_request(
 
     if !function_declarations.is_empty() {
         inner_request["tools"] = json!([{ "functionDeclarations": function_declarations }]);
-        
+
         let mut mode = "VALIDATED";
         if let Some(tool_choice) = &request.tool_choice {
             if let Some(s) = tool_choice.as_str() {
@@ -1043,6 +1051,7 @@ mod tests {
             model: "gemini-3-pro".to_string(),
             messages: vec![OpenAIMessage {
                 role: "user".to_string(),
+                refusal: None,
                 content: Some(OpenAIContent::String("test".into())),
                 reasoning_content: None,
                 tool_calls: None,
@@ -1053,7 +1062,7 @@ mod tests {
         };
 
         // Auto mode (default) should cap gemini-3-pro thinking budget to 24576
-        let (result, _sid, _msg_count) =
+        let (result, _sid, _msg_count, _) =
             transform_openai_request(&req, "test-v", "gemini-3-pro", None);
         let budget = result["request"]["generationConfig"]["thinkingConfig"]["thinkingBudget"]
             .as_i64()
@@ -1082,6 +1091,7 @@ mod tests {
             model: "gemini-2.0-flash-thinking".to_string(),
             messages: vec![OpenAIMessage {
                 role: "user".to_string(),
+                refusal: None,
                 content: Some(OpenAIContent::String("test".into())),
                 reasoning_content: None,
                 tool_calls: None,
@@ -1102,7 +1112,7 @@ mod tests {
         };
 
         // 验证针对 Gemini 模型即使是 Custom 模式也会被修正为 24576
-        let (result, _sid, _msg_count) =
+        let (result, _sid, _msg_count, _) =
             transform_openai_request(&req, "test-v", "gemini-2.0-flash-thinking", None);
         let budget = result["request"]["generationConfig"]["thinkingConfig"]["thinkingBudget"]
             .as_i64()
@@ -1114,12 +1124,12 @@ mod tests {
 
         // 验证非 Gemini 模型（如 Claude 原生路径，假设映射后名不含 gemini）则不应截断
         // 注意：这里的 transform_openai_request 第三个参数是 mapped_model
-        let (result_claude, _, _) =
+        let (result_claude, _, _, _) =
             transform_openai_request(&req, "test-v", "claude-3-7-sonnet", None);
         let budget_claude = result_claude["request"]["generationConfig"]["thinkingConfig"]
             ["thinkingBudget"]
             .as_i64();
-        // 如果不是 gemini 模型且协议中没带 thinking 配置，可能会是 None 或 32000
+        // 如果不是 gemini模型且协议中没带 thinking 配置，可能会是 None 或 32000
         // 在该测试环境下，由于模拟的是 OpenAI 格式转 Gemini 路径，如果没有 gemini 关键词通常不进入 thinking 逻辑
         // 我们只需确保 gemini 路径正确受限即可。
 
@@ -1133,6 +1143,7 @@ mod tests {
             model: "gpt-4-vision".to_string(),
             messages: vec![OpenAIMessage {
                 role: "user".to_string(),
+                refusal: None,
                 content: Some(OpenAIContent::Array(vec![
                     OpenAIContentBlock::Text { text: "What is in this image?".to_string() },
                     OpenAIContentBlock::ImageUrl { image_url: OpenAIImageUrl {
@@ -1158,7 +1169,7 @@ mod tests {
             ..Default::default()
         };
 
-        let (result, _sid, _msg_count) =
+        let (result, _sid, _msg_count, _) =
             transform_openai_request(&req, "test-v", "gemini-1.5-flash", None);
         let parts = &result["request"]["contents"][0]["parts"];
         assert_eq!(parts.as_array().unwrap().len(), 2);
@@ -1175,6 +1186,7 @@ mod tests {
             model: "gemini-3-pro-preview".to_string(),
             messages: vec![OpenAIMessage {
                 role: "user".to_string(),
+                refusal: None,
                 content: Some(OpenAIContent::String("Thinking test".to_string())),
                 reasoning_content: None,
                 tool_calls: None,
@@ -1201,7 +1213,7 @@ mod tests {
         };
 
         // Pass explicit gemini-3-pro-preview which doesn't have "-thinking" suffix
-        let (result, _sid, _msg_count) =
+        let (result, _sid, _msg_count, _) =
             transform_openai_request(&req, "test-p", "gemini-3-pro-preview", None);
         let gen_config = &result["request"]["generationConfig"];
 
@@ -1223,6 +1235,7 @@ mod tests {
             model: "gemini-3-pro-image-4k".to_string(),
             messages: vec![OpenAIMessage {
                 role: "user".to_string(),
+                refusal: None,
                 content: Some(OpenAIContent::String("Generate a cat".to_string())),
                 reasoning_content: None,
                 tool_calls: None,
@@ -1233,7 +1246,7 @@ mod tests {
         };
 
         // Pass gemini-3-pro-image which matches "gemini-3-pro" substring
-        let (result, _sid, _msg_count) =
+        let (result, _sid, _msg_count, _) =
             transform_openai_request(&req, "test-p", "gemini-3-pro-image", None);
         let gen_config = &result["request"]["generationConfig"];
 
@@ -1257,6 +1270,7 @@ mod tests {
             model: "gpt-4".to_string(),
             messages: vec![OpenAIMessage {
                 role: "user".to_string(),
+                refusal: None,
                 content: Some(OpenAIContent::String("Hello".to_string())),
                 reasoning_content: None,
                 tool_calls: None,
@@ -1276,7 +1290,7 @@ mod tests {
             ..Default::default()
         };
 
-        let (result, _sid, _msg_count) =
+        let (result, _sid, _msg_count, _) =
             transform_openai_request(&req, "test-p", "gemini-3-pro-high-thinking", None);
         let gen_config = &result["request"]["generationConfig"];
         let max_output_tokens = gen_config["maxOutputTokens"].as_i64().unwrap();
@@ -1297,6 +1311,7 @@ mod tests {
             model: "gpt-4".to_string(),
             messages: vec![OpenAIMessage {
                 role: "user".to_string(),
+                refusal: None,
                 content: Some(OpenAIContent::String("Hello".to_string())),
                 reasoning_content: None,
                 tool_calls: None,
@@ -1323,7 +1338,7 @@ mod tests {
         };
 
         // Test with Flash model
-        let (result, _sid, _msg_count) =
+        let (result, _sid, _msg_count, _) =
             transform_openai_request(&req, "test-p", "gemini-2.0-flash-thinking-exp", None);
         let gen_config = &result["request"]["generationConfig"];
 
@@ -1345,6 +1360,7 @@ mod tests {
             model: "claude-3-7-sonnet-thinking".to_string(), // Triggers is_thinking_model
             messages: vec![OpenAIMessage {
                 role: "assistant".to_string(),
+                refusal: None,
                 content: None,
                 reasoning_content: Some("Thinking...".to_string()),
                 tool_calls: Some(vec![ToolCall {
@@ -1368,7 +1384,7 @@ mod tests {
         // Simulate Vertex AI path
         let mapped_model = "projects/my-project/locations/us-central1/publishers/google/models/gemini-2.0-flash-thinking-exp";
 
-        let (result, _sid, _msg_count) =
+        let (result, _sid, _msg_count, _) =
             transform_openai_request(&req, "test-v", mapped_model, None);
 
         // Extract the tool call part from contents
@@ -1377,7 +1393,7 @@ mod tests {
         let parts = contents[0]["parts"].as_array().unwrap();
         let tool_part = parts
             .iter()
-            .find(|p| p.get("functionCall").is_some())
+            .find(|p: &&serde_json::Value| p.get("functionCall").is_some())
             .expect("Should find functionCall part");
 
         // Vertex AI requires sentinel
@@ -1395,6 +1411,7 @@ mod tests {
                 model: model.to_string(),
                 messages: vec![OpenAIMessage {
                     role: "assistant".to_string(),
+                    refusal: None,
                     content: None,
                     reasoning_content: None, // 无 reasoning_content，模拟无缓存首次调用
                     tool_calls: Some(vec![ToolCall {
@@ -1414,7 +1431,7 @@ mod tests {
                 ..Default::default()
             };
 
-            let (result, _sid, _msg_count) =
+            let (result, _sid, _msg_count, _) =
                 transform_openai_request(&req, "test-proj", model, None);
 
             let contents = result["request"]["contents"]
@@ -1428,7 +1445,7 @@ mod tests {
             let parts = model_msg["parts"].as_array().expect("Should have parts");
             let tool_part = parts
                 .iter()
-                .find(|p| p.get("functionCall").is_some())
+                .find(|p: &&serde_json::Value| p.get("functionCall").is_some())
                 .expect(&format!("[{model}] Should find functionCall part"));
 
             assert_eq!(
@@ -1448,6 +1465,7 @@ mod tests {
             model: "gemini-3-pro-image".to_string(),
             messages: vec![OpenAIMessage {
                 role: "user".to_string(),
+                refusal: None,
                 content: Some(OpenAIContent::String("Draw a cat".to_string())),
                 name: None,
                 tool_calls: None,
@@ -1462,7 +1480,7 @@ mod tests {
         };
 
         // 2. Transform request
-        let (result, _sid, _msg_count) =
+        let (result, _sid, _msg_count, _) =
             transform_openai_request(&req, "test-proj", "gemini-3-pro-image", None);
 
         // 3. Verify thinkingConfig has includeThoughts: false
@@ -1484,6 +1502,7 @@ mod tests {
             model: "gpt-4o-online".to_string(), // -online 触发联网
             messages: vec![OpenAIMessage {
                 role: "user".to_string(),
+                refusal: None,
                 content: Some(OpenAIContent::String("Hello".to_string())),
                 reasoning_content: None,
                 tool_calls: None,
@@ -1506,7 +1525,7 @@ mod tests {
         };
 
         // 使用 gemini-2.0-flash 模型执行转换
-        let (result, _, _) = transform_openai_request(&req, "proj", "gemini-2.0-flash", None);
+        let (result, _, _, _) = transform_openai_request(&req, "proj", "gemini-2.0-flash", None);
 
         let tools = result["request"]["tools"]
             .as_array()
@@ -1514,8 +1533,10 @@ mod tests {
 
         let has_functions = tools
             .iter()
-            .any(|t| t.get("functionDeclarations").is_some());
-        let has_google_search = tools.iter().any(|t| t.get("googleSearch").is_some());
+            .any(|t: &serde_json::Value| t.get("functionDeclarations").is_some());
+        let has_google_search = tools
+            .iter()
+            .any(|t: &serde_json::Value| t.get("googleSearch").is_some());
 
         assert!(has_functions, "Should contain functionDeclarations");
         assert!(
@@ -1524,4 +1545,3 @@ mod tests {
         );
     }
 }
-

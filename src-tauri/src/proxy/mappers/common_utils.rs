@@ -903,9 +903,8 @@ pub fn sanitize_system_prompt_for_tokens(text: &str) -> String {
     }
 
     // 剥离 UUID
-    if let Ok(re) = Regex::new(
-        r"\b[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\b",
-    ) {
+    if let Ok(re) = Regex::new(r"\b[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\b")
+    {
         cleaned = re.replace_all(&cleaned, "{uuid}").into_owned();
     }
 

@@ -363,13 +363,15 @@ impl ContextManager {
         let mut assistant_turn_count = 0;
         for msg in messages.iter_mut() {
             if msg.role == "assistant" {
-                let is_missing = msg.reasoning_content.as_ref()
+                let is_missing = msg
+                    .reasoning_content
+                    .as_ref()
                     .map(|s| s.is_empty() || s == "[undefined]")
                     .unwrap_or(true);
-                
+
                 if is_missing {
                     if let Some(cached_reasoning) = crate::proxy::SignatureCache::global()
-                        .get_session_reasoning(session_id, assistant_turn_count) 
+                        .get_session_reasoning(session_id, assistant_turn_count)
                     {
                         tracing::debug!(
                             "[OpenAI-Reasoning] Restored reasoning for assistant turn {} (len: {})",
@@ -385,7 +387,10 @@ impl ContextManager {
     }
 
     /// Purify reasoning text in OpenAI history to save tokens
-    pub fn purify_openai_history(messages: &mut Vec<OpenAIMessage>, strategy: PurificationStrategy) -> bool {
+    pub fn purify_openai_history(
+        messages: &mut Vec<OpenAIMessage>,
+        strategy: PurificationStrategy,
+    ) -> bool {
         let protected_last_n = match strategy {
             PurificationStrategy::Soft => 4, // Keep thinking for recent 4 messages (approx 2 turns)
             PurificationStrategy::Aggressive => 0,
@@ -415,7 +420,10 @@ impl ContextManager {
     }
 
     /// Trim old tool messages in OpenAI format, keeping only the last N rounds
-    pub fn trim_openai_tool_messages(messages: &mut Vec<OpenAIMessage>, keep_last_n_rounds: usize) -> bool {
+    pub fn trim_openai_tool_messages(
+        messages: &mut Vec<OpenAIMessage>,
+        keep_last_n_rounds: usize,
+    ) -> bool {
         let tool_rounds = identify_openai_tool_rounds(messages);
         if tool_rounds.len() <= keep_last_n_rounds {
             return false;
@@ -441,8 +449,7 @@ impl ContextManager {
         if removed_count > 0 {
             info!(
                 "[ContextManager] [OpenAI] Trimmed {} tool messages, kept last {} rounds",
-                removed_count,
-                keep_last_n_rounds
+                removed_count, keep_last_n_rounds
             );
         }
         removed_count > 0
@@ -518,7 +525,10 @@ fn identify_openai_tool_rounds(messages: &[OpenAIMessage]) -> Vec<OpenAIToolRoun
     let mut current_round: Option<OpenAIToolRound> = None;
 
     for (i, msg) in messages.iter().enumerate() {
-        if msg.role == "assistant" && msg.tool_calls.is_some() && !msg.tool_calls.as_ref().unwrap().is_empty() {
+        if msg.role == "assistant"
+            && msg.tool_calls.is_some()
+            && !msg.tool_calls.as_ref().unwrap().is_empty()
+        {
             if let Some(round) = current_round.take() {
                 rounds.push(round);
             }

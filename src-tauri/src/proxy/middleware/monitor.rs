@@ -379,9 +379,15 @@ pub async fn monitor_middleware(
                             }
                             Some("response.output_item.added") => {
                                 if let Some(item) = json.get("item") {
-                                    if item.get("type").and_then(|t| t.as_str()) == Some("function_call") {
-                                        let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                                        let id = item.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
+                                    if item.get("type").and_then(|t| t.as_str())
+                                        == Some("function_call")
+                                    {
+                                        let name =
+                                            item.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                                        let id = item
+                                            .get("call_id")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("");
                                         tool_calls.push(serde_json::json!({
                                             "id": id,
                                             "type": "function",
@@ -393,8 +399,10 @@ pub async fn monitor_middleware(
                             Some("response.function_call_arguments.delta") => {
                                 if let Some(delta) = json.get("delta").and_then(|v| v.as_str()) {
                                     if let Some(last_tc) = tool_calls.last_mut() {
-                                        let old_args = last_tc["function"]["arguments"].as_str().unwrap_or("");
-                                        last_tc["function"]["arguments"] = Value::String(format!("{}{}", old_args, delta));
+                                        let old_args =
+                                            last_tc["function"]["arguments"].as_str().unwrap_or("");
+                                        last_tc["function"]["arguments"] =
+                                            Value::String(format!("{}{}", old_args, delta));
                                     }
                                 }
                             }
@@ -453,7 +461,9 @@ pub async fn monitor_middleware(
 
                 // Build consolidated response object
                 let mut consolidated = serde_json::Map::new();
-                let has_actual_content = !response_content.is_empty() || !tool_calls.is_empty() || !thinking_content.is_empty();
+                let has_actual_content = !response_content.is_empty()
+                    || !tool_calls.is_empty()
+                    || !thinking_content.is_empty();
 
                 if !thinking_content.is_empty() {
                     consolidated.insert("thinking".to_string(), Value::String(thinking_content));
@@ -480,9 +490,18 @@ pub async fn monitor_middleware(
                     let mut usage_obj = serde_json::Map::new();
                     let input_toks = log.input_tokens.unwrap_or(0);
                     let output_toks = log.output_tokens.unwrap_or(0);
-                    usage_obj.insert("prompt_tokens".to_string(), Value::Number(input_toks.into()));
-                    usage_obj.insert("completion_tokens".to_string(), Value::Number(output_toks.into()));
-                    usage_obj.insert("total_tokens".to_string(), Value::Number((input_toks + output_toks).into()));
+                    usage_obj.insert(
+                        "prompt_tokens".to_string(),
+                        Value::Number(input_toks.into()),
+                    );
+                    usage_obj.insert(
+                        "completion_tokens".to_string(),
+                        Value::Number(output_toks.into()),
+                    );
+                    usage_obj.insert(
+                        "total_tokens".to_string(),
+                        Value::Number((input_toks + output_toks).into()),
+                    );
                     consolidated.insert("usage".to_string(), Value::Object(usage_obj));
                 }
 

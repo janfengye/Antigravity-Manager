@@ -447,8 +447,12 @@ pub fn transform_claude_request_in(
     }
 
     // 1. System Instruction (注入动态身份防护 & MCP XML 协议)
-    let system_instruction =
-        build_system_instruction(&claude_req.system, &claude_req.model, has_mcp_tools, &extra_system_messages);
+    let system_instruction = build_system_instruction(
+        &claude_req.system,
+        &claude_req.model,
+        has_mcp_tools,
+        &extra_system_messages,
+    );
 
     //  Map model name (Use standard mapping)
     // [IMPROVED] 提取 web search 模型为常量，便于维护

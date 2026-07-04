@@ -117,10 +117,10 @@ pub struct OpenAIMessage {
 pub struct ToolCall {
     pub id: String,
     pub r#type: String,
-    
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub function: Option<ToolFunction>,
-    
+
     // [NEW] Fields for apply_patch_call
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
