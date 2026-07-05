@@ -2,11 +2,38 @@
 use super::models::*;
 use serde_json::Value;
 
+pub fn resolve_shell_tool_name(
+    model_tool_name: &str,
+    client_tool_names: &std::collections::HashSet<String>,
+) -> String {
+    if model_tool_name == "shell"
+        || model_tool_name == "bash"
+        || model_tool_name == "local_shell"
+        || model_tool_name == "local_shell_call"
+    {
+        if client_tool_names.contains(model_tool_name) {
+            return model_tool_name.to_string();
+        }
+        for name in &["local_shell_call", "bash", "shell", "local_shell"] {
+            if client_tool_names.contains(*name) {
+                return name.to_string();
+            }
+        }
+        "local_shell_call".to_string()
+    } else {
+        model_tool_name.to_string()
+    }
+}
+
 pub fn transform_openai_response(
     gemini_response: &Value,
     session_id: Option<&str>,
     message_count: usize,
+    client_tool_names: Option<&std::collections::HashSet<String>>,
 ) -> OpenAIResponse {
+    let empty_set = std::collections::HashSet::new();
+    let client_tool_names = client_tool_names.unwrap_or(&empty_set);
+
     // 解包 response 字段
     let raw = gemini_response.get("response").unwrap_or(gemini_response);
 
@@ -94,12 +121,7 @@ pub fn transform_openai_response(
                             }
                         }
 
-                        let final_name =
-                            if name == "shell" || name == "bash" || name == "local_shell" {
-                                "local_shell_call"
-                            } else {
-                                name
-                            };
+                        let final_name = resolve_shell_tool_name(name, client_tool_names);
 
                         let id = fc
                             .get("id")
@@ -365,7 +387,7 @@ mod tests {
             "responseId": "resp_123"
         });
 
-        let result = transform_openai_response(&gemini_resp, Some("session-123"), 1);
+        let result = transform_openai_response(&gemini_resp, Some("session-123"), 1, None);
         assert_eq!(result.object, "chat.completion");
         let content = match result.choices[0].message.content.as_ref().unwrap() {
             OpenAIContent::String(s) => s,
@@ -392,7 +414,7 @@ mod tests {
             "responseId": "resp_123"
         });
 
-        let result = transform_openai_response(&gemini_resp, Some("session-123"), 1);
+        let result = transform_openai_response(&gemini_resp, Some("session-123"), 1, None);
 
         assert!(result.usage.is_some());
         let usage = result.usage.unwrap();
@@ -414,7 +436,7 @@ mod tests {
             "responseId": "resp_123"
         });
 
-        let result = transform_openai_response(&gemini_resp, Some("session-123"), 1);
+        let result = transform_openai_response(&gemini_resp, Some("session-123"), 1, None);
         assert!(result.usage.is_none());
     }
 }

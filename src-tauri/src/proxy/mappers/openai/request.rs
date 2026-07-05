@@ -105,6 +105,34 @@ fn flatten_tools(tools: &[Value]) -> Vec<Value> {
     flat
 }
 
+pub fn extract_client_tool_names(tools: &Option<Vec<Value>>) -> std::collections::HashSet<String> {
+    let mut names = std::collections::HashSet::new();
+    if let Some(tools_list) = tools {
+        let flat_tools = flatten_tools(tools_list);
+        for tool in flat_tools {
+            let name_opt = tool
+                .get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .or_else(|| {
+                    tool.get("name")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                })
+                .or_else(|| {
+                    tool.get("type")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                });
+            if let Some(name) = name_opt {
+                names.insert(name);
+            }
+        }
+    }
+    names
+}
+
 pub fn transform_openai_request(
     request: &OpenAIRequest,
     project_id: &str,

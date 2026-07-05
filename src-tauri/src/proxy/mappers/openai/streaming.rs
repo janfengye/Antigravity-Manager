@@ -74,6 +74,7 @@ pub fn create_openai_sse_stream<S, E>(
     model: String,
     session_id: String,
     message_count: usize,
+    client_tool_names: Option<std::collections::HashSet<String>>,
 ) -> Pin<Box<dyn Stream<Item = Result<Bytes, String>> + Send>>
 where
     S: Stream<Item = Result<Bytes, E>> + Send + ?Sized + 'static,
@@ -82,6 +83,9 @@ where
     let mut buffer = BytesMut::new();
     let stream_id = format!("chatcmpl-{}", Uuid::new_v4());
     let created_ts = Utc::now().timestamp();
+
+    let empty_set = std::collections::HashSet::new();
+    let client_tool_names = client_tool_names.unwrap_or(empty_set);
 
     let stream = async_stream::stream! {
         let mut emitted_tool_calls = std::collections::HashSet::new();
@@ -166,11 +170,7 @@ where
                                                                         }
                                                                     }
 
-                                                                    let final_name = if name == "shell" || name == "bash" || name == "local_shell" {
-                                                                        "local_shell_call"
-                                                                    } else {
-                                                                        name
-                                                                    };
+                                                                    let final_name = super::response::resolve_shell_tool_name(name, &client_tool_names);
 
                                                                     let mut hasher = std::collections::hash_map::DefaultHasher::new();
                                                                     use std::hash::{Hash, Hasher};
@@ -914,6 +914,7 @@ mod tests {
             "gemini-1.5-flash".to_string(),
             "test-session".to_string(),
             0,
+            None,
         );
 
         let mut chunks = Vec::new();

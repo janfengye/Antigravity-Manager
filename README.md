@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> 专业级 AI 账号管理与协议代理系统 (v4.3.1)
+> 专业级 AI 账号管理与协议代理系统 (v4.3.2)
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
 
@@ -8,7 +8,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.3.1-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.3.2-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -133,7 +133,7 @@ graph TD
 
 **Linux / macOS:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.3.1/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.3.2/install.sh | bash
 ```
 
 **Windows (PowerShell):**
@@ -143,7 +143,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **支持的格式**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **高级用法**: 安装指定版本 `curl -fsSL ... | bash -s -- --version 4.3.1`，预览模式 `curl -fsSL ... | bash -s -- --dry-run`
+> **高级用法**: 安装指定版本 `curl -fsSL ... | bash -s -- --version 4.3.2`，预览模式 `curl -fsSL ... | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 如果您已安装 [Homebrew](https://brew.sh/)，也可以通过以下命令安装：
@@ -439,6 +439,11 @@ response = client.chat.completions.create(
 ## 📝 开发者与社区
 
 *   **版本演进 (Changelog)**:
+    *   **v4.3.2 (2026-07-05)**:
+        -   **[核心修复] 解决由于代理强制重写命令行工具名为 local_shell_call 导致工具调用失败的 Bug (Dynamic Shell Tool Resolution)**:
+            -   **动态解析机制**：取消了流式与非流式响应中将所有 `shell` / `bash` / `local_shell` 工具名称强制改写为 `local_shell_call` 的硬编码限制。现在，代理层会根据客户端在当前请求中实际声明 of 工具列表（如 `bash` 或 `shell`）动态匹配并映射。
+            -   **向后兼容性**：若客户端当前请求未携带任何工具信息，则默认回退到原有名称 `local_shell_call`，保证旧版客户端的平滑兼容。
+            -   *相关 Issue*: 详见 [Issue #3224](https://github.com/lbjlaq/Antigravity-Manager/issues/3224)
     *   **v4.3.1 (2026-07-03)**:
         -   **[优化/修复] 优化 Antigravity IDE 客户端识别、路径解析与缓存支持 (IDE Detection & Cache Paths)**:
             -   **IDE 模式自动检测**: 在系统集成账户切换时，若检测到所定位的可执行文件路径包含 `"antigravity ide"` 或 `"antigravity-ide"`，将自动识别为 IDE 模式并应用对应的 Keyring 凭证切换逻辑。

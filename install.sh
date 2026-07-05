@@ -43,7 +43,7 @@ Usage:
     curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | bash
 
     # Install specific version
-    curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | VERSION=4.3.1 bash
+    curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | VERSION=4.3.2 bash
 
 Options:
     --help      Show this help message

@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> Professional AI Account Management & Protocol Proxy System (v4.3.1)
+> Professional AI Account Management & Protocol Proxy System (v4.3.2)
 
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
@@ -9,7 +9,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.3.1-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.3.2-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -134,7 +134,7 @@ Automatically detects your OS, architecture, and package manager — one command
 
 **Linux / macOS:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.3.1/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.3.2/install.sh | bash
 ```
 
 **Windows (PowerShell):**
@@ -144,7 +144,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **Supported formats**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **Advanced usage**: Install a specific version `curl -fsSL ... | bash -s -- --version 4.3.1`，dry-run mode `curl -fsSL ... | bash -s -- --dry-run`
+> **Advanced usage**: Install a specific version `curl -fsSL ... | bash -s -- --version 4.3.2`，dry-run mode `curl -fsSL ... | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 If you have [Homebrew](https://brew.sh/) installed, you can also install via:
@@ -427,6 +427,11 @@ In clients that support OpenAI protocol (e.g., Cherry Studio), you can configure
 ## 📝 Developer & Community
 
 *   **Changelog**:
+    *   **v4.3.2 (2026-07-05)**:
+        -   **[Core Fix] Resolve Tool Call Failures Caused by Hardcoded local_shell_call Mapping (Dynamic Shell Tool Resolution)**:
+            -   **Dynamic Resolution**: Removed the hardcoded logic that unconditionally rewrote all shell-related tool names (`shell`, `bash`, `local_shell`) to `local_shell_call` in both streaming and non-streaming responses. The proxy now dynamically matches and maps the tool name based on the client's declared tools (e.g., `bash` or `shell`).
+            -   **Backward Compatibility**: If no tool list is declared in the request, the mapping defaults to `local_shell_call` to ensure smooth compatibility with legacy clients.
+            -   *Related Issue*: See [Issue #3224](https://github.com/lbjlaq/Antigravity-Manager/issues/3224)
     *   **v4.3.1 (2026-07-03)**:
         -   **[Optimization/Fix] Optimize Antigravity IDE Client Detection, Path Resolution, and Cache Support (IDE Detection & Cache Paths)**:
             -   **Auto-detect IDE Mode**: During account integration sync, if the resolved executable path contains `"antigravity ide"` or `"antigravity-ide"`, it automatically switches to IDE mode and applies the corresponding Keyring account credential logic.

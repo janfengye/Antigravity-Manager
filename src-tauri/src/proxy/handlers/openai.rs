@@ -168,6 +168,8 @@ pub async fn handle_chat_completions(
         debug!("[{}] Client Adapter detected", trace_id);
     }
 
+    let client_tool_names = crate::proxy::mappers::openai::request::extract_client_tool_names(&openai_req.tools);
+
     // 1. 获取 UpstreamClient (Clone handle)
     let upstream = state.upstream.clone();
     let token_manager = state.token_manager;
@@ -394,6 +396,7 @@ pub async fn handle_chat_completions(
                     openai_req.model.clone(),
                     session_id,
                     message_count,
+                    Some(client_tool_names.clone()),
                 );
 
                 let mut first_data_chunk = None;
@@ -577,7 +580,7 @@ pub async fn handle_chat_completions(
             }
 
             let openai_response =
-                transform_openai_response(&gemini_resp, Some(&session_id), message_count);
+                transform_openai_response(&gemini_resp, Some(&session_id), message_count, Some(&client_tool_names));
             return Ok((
                 StatusCode::OK,
                 [
@@ -1453,6 +1456,8 @@ pub async fn handle_completions(
     // [NEW v4.2.0] Context Management & Reasoning Replay
     let session_id_str = SessionManager::extract_openai_session_id(&openai_req);
 
+    let client_tool_names = crate::proxy::mappers::openai::request::extract_client_tool_names(&openai_req.tools);
+
     crate::proxy::mappers::context_manager::ContextManager::restore_openai_reasoning_content(
         &mut openai_req.messages,
         &session_id_str,
@@ -1753,6 +1758,7 @@ pub async fn handle_completions(
                         openai_req.model.clone(),
                         session_id,
                         message_count,
+                        Some(client_tool_names.clone()),
                     );
 
                     // Peek Logic (Repeated for safety/correctness on this stream type)
@@ -1969,7 +1975,7 @@ pub async fn handle_completions(
                 }
             };
 
-            let chat_resp = transform_openai_response(&gemini_resp, Some("session-123"), 1);
+            let chat_resp = transform_openai_response(&gemini_resp, Some("session-123"), 1, Some(&client_tool_names));
 
             let is_responses_api = uri.path() == "/v1/responses";
 
