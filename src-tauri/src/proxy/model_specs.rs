@@ -72,7 +72,11 @@ pub fn get_thinking_budget(model_id: &str, _token: Option<&ProxyToken>) -> u64 {
     }
 
     // 3. 默认安全限额
-    24576
+    if std_id.contains("claude") {
+        16000
+    } else {
+        24576
+    }
 }
 
 /// 判断是否为思维模型

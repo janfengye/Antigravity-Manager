@@ -284,3 +284,64 @@ Antigravity v4.1.4 新增支持。
 *   **验证点**:
     *   验证在大输出量下，SSE 流是否稳定。
     *   观察日志中是否触发了 `ContextManager` 的主动纯化（Purify），以及签名是否被安全剥离。
+
+---
+
+## 6. 智能上下文压缩等级验证 (Compression Level Test)
+
+针对新版本引入的 `智能上下文压缩等级` (Disabled / Low / Medium / High)，您可以使用以下步骤验证各等级的净化降噪表现。
+
+### A. 基础测试数据准备
+
+在客户端（如 Cline 或 Cherry Studio）中开启新会话，我们将准备一段混合了**冗余客套口语**和**典型重复构建日志**的文本作为第一轮的请求：
+
+```text
+Hello, could you please help me build this package? Actually, basically, I think probably it is failed.
+
+Progress: 10%
+Progress: 20%
+Progress: 30%
+Progress: 40%
+Progress: 50%
+Error: compilation failed at src/main.rs:25
+```
+
+当模型回复后，紧接着进行**第二轮追问**（例如：`How to fix this error?`），此时第一轮消息将成为“历史消息”，从而触发对应的静态清洗规则。
+
+---
+
+### B. 验证 Low 等级 (仅日志降噪)
+
+1.  **设置**：在设置面板中，将 `智能上下文压缩等级` 选择为 **`低度 (Low - 日志降噪)`**。
+2.  **测试**：执行上述两轮对话。
+3.  **日志与效果验证**：
+    *   在 `npm run tauri:debug` 的控制台中，观察第二轮请求发送时的 payload：
+        *   **RTK 日志去噪生效**：第一轮消息中的 `Progress: 10% ... 50%` 会被自动净化并折叠成类似 `[Collapsed 3 similar lines]` 的占位符。
+        *   **报错安全捞回**：底部的 `Error: compilation failed...` 报错信息被完整保留。
+        *   **口语保持原样**：第一轮消息开头的 `Hello, could you please...` 客套话仍然完整保留在 payload 中，未被精简。
+
+---
+
+### C. 验证 Medium 等级 (日志降噪 + 口语净化)
+
+1.  **设置**：在设置面板中，将 `智能上下文压缩等级` 选择为 **`中度 (Medium - 日志+口语)`**。
+2.  **测试**：重新开辟会话，并执行上述两轮对话。
+3.  **日志与效果验证**：
+    *   在控制台中观察第二轮请求发送时的 payload：
+        *   **RTK 日志去噪生效**：重复的进度行继续被成功折叠。
+        *   **Caveman 口语净化生效**：历史消息中的开头文本被大幅纯化，无实质意义的 `Hello, could you please...` 和 `Actually, basically, I think probably...` 等修饰性语气词被完全剔除，转换为骨架极简的原始人语风。
+        *   **代码隔离安全**：所有的代码片段和堆栈路径（如 `src/main.rs:25`）均未被破坏。
+
+---
+
+### D. 验证 High 等级 (日志+口语+动态防暴)
+
+1.  **设置**：在设置面板中，将 `智能上下文压缩等级` 选择为 **`高度 (High - 动态防暴)`**。
+2.  **测试**：发送一段较长或包含数万 Token 的项目代码，促使上下文用量上升。
+3.  **日志与效果验证**：
+    *   **动态三级压强自适应**：在控制台中将能够看到 `ContextManager` 实时估算当前上下文的压强比例（如 `Context pressure: 45.2%`）。
+    *   **分级触发日志**：
+        *   超出 L1 阈值：触发 `[Layer-1] Tool trimming` 裁剪老旧工具包。
+        *   超出 L2 阈值：触发 `[Layer-2] Thinking compression` 压缩历史思考，同时重播并保护签名。
+        *   超出 L3 阈值：触发 `[Layer-3] Fork+Summary` 终极重置，控制台将显示重开会话以及摘要的生成，同时首条摘要的 payload 中将显示注入的 `cache_control: {"type": "ephemeral"}` 标记（在后续聊天中，您会在客户端观察到 Prompt Cache 命中率呈几何级飙升，极速响应）。
+

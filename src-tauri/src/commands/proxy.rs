@@ -274,6 +274,11 @@ pub async fn ensure_admin_server(
     crate::proxy::update_global_system_prompt_config(config.global_system_prompt.clone());
     // [NEW] 初始化全局图像思维模式配置
     crate::proxy::update_image_thinking_mode(config.image_thinking_mode.clone());
+    // [NEW] 初始化全局压缩等级配置
+    crate::proxy::config::update_global_compression_level(
+        config.experimental.compression_level.clone(),
+        config.experimental.enable_usage_scaling,
+    );
 
     Ok(())
 }

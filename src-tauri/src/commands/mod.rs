@@ -422,6 +422,16 @@ pub async fn save_config(
         crate::proxy::update_global_system_prompt_config(config.proxy.global_system_prompt.clone());
         // [NEW] 更新全局图像思维模式配置
         crate::proxy::update_image_thinking_mode(config.proxy.image_thinking_mode.clone());
+        // [NEW] 更新全局压缩等级配置
+        crate::proxy::config::update_global_compression_level(
+            config.proxy.experimental.compression_level.clone(),
+            config.proxy.experimental.enable_usage_scaling,
+        );
+        crate::proxy::config::update_global_thresholds(
+            config.proxy.experimental.context_compression_threshold_l1,
+            config.proxy.experimental.context_compression_threshold_l2,
+            config.proxy.experimental.context_compression_threshold_l3,
+        );
         // 更新代理池配置
         instance
             .axum_server

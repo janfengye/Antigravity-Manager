@@ -807,7 +807,14 @@
         "title": "Experimental Settings",
         "title_tooltip": "Exploratory features that may be adjusted or removed in future versions.",
         "enable_usage_scaling": "Enable Usage Scaling",
-        "enable_usage_scaling_tooltip": "For Claude protocol. Enables aggressive scaling when total input exceeds 30k tokens to prevent frequent client-side compression. Note: Reported usage will not reflect actual billing after enabling.",
+        "enable_usage_scaling_tooltip": "For all compatible protocols (Claude/OpenAI/Gemini). Enables aggressive scaling and multi-phase context compression when total input exceeds 30k tokens. Note: Reported usage will not reflect actual billing after enabling.",
+        "compression_level_label": "Context Compression Level",
+        "compression_level_tooltip": "Choose the context compression level you want to enable. Log cleaning and language purification are always active without any 30k token limits.",
+        "compression_level_desc": "Low: only trims/deduplicates terminal output logs; Medium: adds Caveman style natural language purification; High: additionally activates progressive L1-L3 threshold resets for very large context.",
+        "level_disabled": "Disabled",
+        "level_low": "Low (Log Dedup)",
+        "level_medium": "Medium (Log + Language)",
+        "level_high": "High (Dynamic Resets)",
         "context_compression_threshold_l1": "L1 Compression Threshold (Tool Trimming)",
         "context_compression_threshold_l1_tooltip": "Trims old tool call records to save space. Recommended: 0.4 (40%)",
         "context_compression_threshold_l2": "L2 Compression Threshold (Thinking Compression)",
@@ -1120,6 +1127,8 @@
     "page_title": "API Monitor Dashboard",
     "page_subtitle": "Real-time request logging and analysis",
     "open_monitor": "Open Monitor",
+    "input": "Input",
+    "output": "Output",
     "logging_status": {
       "active": "Recording",
       "paused": "Paused"
@@ -1251,6 +1260,8 @@
     "requests": "Requests",
     "input": "Input",
     "output": "Output",
+    "cached": "Cache",
+    "cached_token": "Cached token",
     "total": "Total",
     "percentage": "Share",
     "no_data": "No data available"

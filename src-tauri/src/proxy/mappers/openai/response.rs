@@ -24,6 +24,37 @@ pub fn resolve_shell_tool_name(
         model_tool_name.to_string()
     }
 }
+fn extract_apply_patch_input(args: &Value) -> String {
+    if let Some(obj) = args.as_object() {
+        if let Some(input) = obj.get("input").and_then(|v| v.as_str()) {
+            return input.to_string();
+        }
+        if let Some(arr) = obj.get("command").and_then(|v| v.as_array()) {
+            if arr.len() > 1 {
+                if let Some(patch) = arr[1].as_str() {
+                    return patch.to_string();
+                }
+            }
+        }
+        if let Some(cmd_str) = obj.get("command").and_then(|v| v.as_str()) {
+            if let Some(patch) = cmd_str.strip_prefix("apply_patch\n") {
+                return patch.to_string();
+            }
+            if let Some(patch) = cmd_str.strip_prefix("apply_patch ") {
+                return patch.to_string();
+            }
+            return cmd_str.to_string();
+        }
+        for key in ["patch_text", "patch", "diff", "content"] {
+            if let Some(patch) = obj.get(key).and_then(|v| v.as_str()) {
+                return patch.to_string();
+            }
+        }
+    }
+    args.as_str()
+        .map(str::to_string)
+        .unwrap_or_else(|| serde_json::to_string(args).unwrap_or_default())
+}
 
 pub fn transform_openai_response(
     gemini_response: &Value,
@@ -106,19 +137,14 @@ pub fn transform_openai_response(
 
                         // [FIX] Codex CLI apply_patch freeform raw string
                         if name == "apply_patch" {
-                            if let Some(obj) = args_json.as_object() {
-                                if let Some(arr) = obj.get("command").and_then(|v| v.as_array()) {
-                                    if arr.len() > 1 {
-                                        if let Some(patch) = arr[1].as_str() {
-                                            arguments_str = patch.to_string();
-                                        }
-                                    }
-                                } else if let Some(patch) =
-                                    obj.get("patch_text").and_then(|v| v.as_str())
-                                {
-                                    arguments_str = patch.to_string();
-                                }
-                            }
+                            let extracted_patch = extract_apply_patch_input(&args_json);
+                            let (optimized_patch, _) =
+                                crate::proxy::adapters::apply_patch_preflight::optimize_patch(
+                                    &extracted_patch,
+                                    None,
+                                    true,
+                                );
+                            arguments_str = optimized_patch;
                         }
 
                         let final_name = resolve_shell_tool_name(name, client_tool_names);
@@ -314,40 +340,69 @@ pub fn transform_openai_response(
     }
 
     // Extract and map usage metadata from Gemini to OpenAI format
+    // Supports both legacy v1internal format (promptTokenCount/candidatesTokenCount/totalTokenCount/cachedContentTokenCount)
+    // and new Interactions API format (total_input_tokens/total_output_tokens/total_thought_tokens/total_cached_tokens)
     let usage = raw.get("usageMetadata").and_then(|u| {
+        // 优先使用新格式字段，fallback 到旧格式
         let prompt_tokens = u
-            .get("promptTokenCount")
+            .get("total_input_tokens")
+            .or_else(|| u.get("promptTokenCount"))
             .and_then(|v| v.as_u64())
             .unwrap_or(0) as u32;
-        let completion_tokens = u
-            .get("candidatesTokenCount")
+        let raw_output_tokens = u
+            .get("total_output_tokens")
+            .or_else(|| u.get("candidatesTokenCount"))
             .and_then(|v| v.as_u64())
             .unwrap_or(0) as u32;
-        let total_tokens = u
-            .get("totalTokenCount")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as u32;
-        let cached_tokens = u
-            .get("cachedContentTokenCount")
+        let raw_total_tokens = u
+            .get("total_tokens")
+            .or_else(|| u.get("totalTokenCount"))
             .and_then(|v| v.as_u64())
             .map(|v| v as u32);
+        let cached_tokens = u
+            .get("total_cached_tokens")
+            .or_else(|| u.get("cachedContentTokenCount"))
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32);
+        // [NEW] 从新格式提取 reasoning/thought tokens
+        let reasoning_tokens = u
+            .get("total_thought_tokens")
+            .or_else(|| u.get("totalThoughtTokens"))
+            .or_else(|| u.get("thoughtsTokenCount"))
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32);
+        let tool_use_tokens = u
+            .get("total_tool_use_tokens")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32);
+        let input_tokens_by_modality = u.get("input_tokens_by_modality").cloned();
 
-        // [FIX] 效仿 Anthropic 的计费逻辑，向客户端返回时扣除已缓存的 tokens，避免客户端钱包暴降
-        let mut final_prompt_tokens = prompt_tokens;
-        if let Some(ct) = cached_tokens {
-            if final_prompt_tokens >= ct {
-                final_prompt_tokens -= ct;
-            }
-        }
+        // New Interactions usage keeps thought/tool-use tokens separate from
+        // total_output_tokens. Codex counts those as output-side tokens.
+        let completion_tokens =
+            raw_output_tokens + reasoning_tokens.unwrap_or(0) + tool_use_tokens.unwrap_or(0);
+
+        // Keep prompt_tokens as Gemini's raw input token count. cached_tokens is a
+        // subset of the prompt, not an amount to subtract from it.
+        let final_total_tokens = raw_total_tokens.unwrap_or(prompt_tokens + completion_tokens);
 
         Some(super::models::OpenAIUsage {
-            prompt_tokens: final_prompt_tokens,
+            prompt_tokens,
             completion_tokens,
-            total_tokens,
+            total_tokens: final_total_tokens,
             prompt_tokens_details: cached_tokens.map(|ct| super::models::PromptTokensDetails {
                 cached_tokens: Some(ct),
             }),
-            completion_tokens_details: None,
+            completion_tokens_details: reasoning_tokens.map(|rt| {
+                super::models::CompletionTokensDetails {
+                    reasoning_tokens: Some(rt),
+                }
+            }),
+            input_tokens_by_modality,
+            raw_output_tokens: Some(raw_output_tokens),
+            total_thought_tokens: reasoning_tokens,
+            total_tool_use_tokens: tool_use_tokens,
+            gemini_total_tokens: raw_total_tokens,
         })
     });
 
@@ -423,6 +478,57 @@ mod tests {
         assert_eq!(usage.total_tokens, 150);
         assert!(usage.prompt_tokens_details.is_some());
         assert_eq!(usage.prompt_tokens_details.unwrap().cached_tokens, Some(25));
+    }
+
+    #[test]
+    fn test_interactions_usage_metadata_mapping() {
+        let gemini_resp = json!({
+            "candidates": [{
+                "content": {"parts": [{"text": "Hello!"}]},
+                "finishReason": "STOP"
+            }],
+            "usageMetadata": {
+                "input_tokens_by_modality": [
+                    {
+                        "modality": "text",
+                        "tokens": 7
+                    }
+                ],
+                "total_cached_tokens": 0,
+                "total_input_tokens": 7,
+                "total_output_tokens": 20,
+                "total_thought_tokens": 22,
+                "total_tokens": 49,
+                "total_tool_use_tokens": 0
+            },
+            "modelVersion": "gemini-3-flash-preview",
+            "responseId": "resp_123"
+        });
+
+        let result = transform_openai_response(&gemini_resp, Some("session-123"), 1);
+        let usage = result.usage.unwrap();
+
+        assert_eq!(usage.prompt_tokens, 7);
+        assert_eq!(usage.completion_tokens, 42);
+        assert_eq!(usage.total_tokens, 49);
+        assert_eq!(
+            usage
+                .completion_tokens_details
+                .as_ref()
+                .unwrap()
+                .reasoning_tokens,
+            Some(22)
+        );
+
+        let responses_usage = usage.to_responses_usage_value();
+        assert_eq!(responses_usage["input_tokens"], 7);
+        assert_eq!(responses_usage["input_tokens_details"]["cached_tokens"], 0);
+        assert_eq!(responses_usage["output_tokens"], 42);
+        assert_eq!(
+            responses_usage["output_tokens_details"]["reasoning_tokens"],
+            22
+        );
+        assert_eq!(responses_usage["total_tokens"], 49);
     }
 
     #[test]

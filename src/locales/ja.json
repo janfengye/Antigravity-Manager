@@ -1065,6 +1065,8 @@
     "page_title": "APIモニターダッシュボード",
     "page_subtitle": "リアルタイムのリクエストログと分析",
     "open_monitor": "モニターを開く",
+    "input": "入力",
+    "output": "出力",
     "logging_status": {
       "active": "記録中",
       "paused": "一時停止中"
@@ -1193,6 +1195,8 @@
     "requests": "リクエスト数",
     "input": "入力",
     "output": "出力",
+    "cached": "キャッシュ",
+    "cached_token": "キャッシュヒット",
     "total": "合計",
     "percentage": "割合",
     "no_data": "データなし"

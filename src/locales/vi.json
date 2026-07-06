@@ -948,6 +948,8 @@
     "page_title": "Bảng Theo dõi API Monitor",
     "page_subtitle": "Ghi log và phân tích request thời gian thực",
     "open_monitor": "Mở Monitor",
+    "input": "Đầu vào",
+    "output": "Đầu ra",
     "logging_status": {
       "active": "Đang ghi",
       "paused": "Tạm dừng"
@@ -1065,6 +1067,8 @@
     "requests": "Số yêu cầu",
     "input": "Đầu vào",
     "output": "Đầu ra",
+    "cached": "Bộ nhớ đệm",
+    "cached_token": "Token cache",
     "total": "Tổng",
     "percentage": "Tỷ lệ",
     "no_data": "Không có dữ liệu"

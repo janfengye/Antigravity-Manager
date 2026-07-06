@@ -21,13 +21,17 @@ fn resolve_output_dir(cfg: &DebugLoggingConfig) -> Option<PathBuf> {
     None
 }
 
+fn resolve_exchange_output_dir(cfg: &DebugLoggingConfig) -> Option<PathBuf> {
+    resolve_output_dir(cfg).map(|dir| dir.join("debug_exchanges"))
+}
+
 pub async fn write_debug_payload(
     cfg: &DebugLoggingConfig,
     trace_id: Option<&str>,
     prefix: &str,
     payload: &Value,
 ) {
-    if !cfg.enabled {
+    if !is_enabled(cfg) {
         return;
     }
 
@@ -59,8 +63,46 @@ pub async fn write_debug_payload(
     }
 }
 
+pub async fn write_exchange_payload(
+    cfg: &DebugLoggingConfig,
+    trace_id: Option<&str>,
+    prefix: &str,
+    payload: &Value,
+) {
+    if !is_enabled(cfg) {
+        return;
+    }
+
+    let output_dir = match resolve_exchange_output_dir(cfg) {
+        Some(dir) => dir,
+        None => {
+            tracing::warn!("[Debug-Exchange] Enabled but output_dir is not available.");
+            return;
+        }
+    };
+
+    if let Err(e) = fs::create_dir_all(&output_dir).await {
+        tracing::warn!("[Debug-Exchange] Failed to create output dir: {}", e);
+        return;
+    }
+
+    let filename = build_filename(prefix, trace_id);
+    let path = output_dir.join(filename);
+
+    match serde_json::to_vec_pretty(payload) {
+        Ok(bytes) => {
+            if let Err(e) = fs::write(&path, bytes).await {
+                tracing::warn!("[Debug-Exchange] Failed to write file: {}", e);
+            }
+        }
+        Err(e) => {
+            tracing::warn!("[Debug-Exchange] Failed to serialize payload: {}", e);
+        }
+    }
+}
+
 pub fn is_enabled(cfg: &DebugLoggingConfig) -> bool {
-    cfg.enabled
+    cfg.enabled || crate::modules::log_bridge::is_log_bridge_enabled()
 }
 
 /// 解析 SSE 流式数据，提取 thinking 和正文内容
@@ -157,9 +199,10 @@ where
         let (thinking_content, response_content) = parse_sse_stream(&raw_text);
 
         let mut payload = serde_json::json!({
-            "kind": "upstream_response",
+            "kind": prefix,
             "trace_id": trace_id,
             "meta": meta,
+            "raw_stream": raw_text,
         });
 
         // 只有在有内容时才添加对应字段
@@ -170,7 +213,7 @@ where
             payload["response_content"] = serde_json::Value::String(response_content);
         }
 
-        write_debug_payload(&cfg, Some(&payload["trace_id"].as_str().unwrap_or("unknown")), prefix, &payload).await;
+        write_exchange_payload(&cfg, Some(&payload["trace_id"].as_str().unwrap_or("unknown")), prefix, &payload).await;
     };
 
     Box::pin(wrapped)

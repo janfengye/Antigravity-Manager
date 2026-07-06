@@ -21,6 +21,7 @@ pub struct ProxyRequestLog {
     pub response_body: Option<String>,
     pub input_tokens: Option<u32>,
     pub output_tokens: Option<u32>,
+    pub cached_tokens: Option<u32>,
     pub protocol: Option<String>, // 协议类型: "openai", "anthropic", "gemini"
     pub username: Option<String>, // User token username
 }
@@ -84,10 +85,11 @@ impl ProxyMonitor {
         {
             let model = log.model.clone().unwrap_or_else(|| "unknown".to_string());
             let account = account.clone();
+            let cached = log.cached_tokens.unwrap_or(0);
             tokio::spawn(async move {
-                if let Err(e) =
-                    crate::modules::token_stats::record_usage(&account, &model, input, output)
-                {
+                if let Err(e) = crate::modules::token_stats::record_usage(
+                    &account, &model, input, output, cached,
+                ) {
                     tracing::debug!("Failed to record token stats: {}", e);
                 }
             });
@@ -145,23 +147,6 @@ impl ProxyMonitor {
                     tracing::error!("Failed to save security log: {}", e);
                 }
             }
-
-            // Record token stats if available
-            if let (Some(account), Some(input), Some(output)) = (
-                &log_to_save.account_email,
-                log_to_save.input_tokens,
-                log_to_save.output_tokens,
-            ) {
-                let model = log_to_save
-                    .model
-                    .clone()
-                    .unwrap_or_else(|| "unknown".to_string());
-                if let Err(e) =
-                    crate::modules::token_stats::record_usage(account, &model, input, output)
-                {
-                    tracing::debug!("Failed to record token stats: {}", e);
-                }
-            }
         });
 
         // Emit event (send summary only, without body to reduce memory)
@@ -182,6 +167,7 @@ impl ProxyMonitor {
                 response_body: None, // Don't send body in event
                 input_tokens: log.input_tokens,
                 output_tokens: log.output_tokens,
+                cached_tokens: log.cached_tokens,
                 protocol: log.protocol.clone(),
                 username: log.username.clone(),
             };

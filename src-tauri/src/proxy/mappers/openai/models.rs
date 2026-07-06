@@ -1,7 +1,7 @@
 // OpenAI 数据模型
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct OpenAIRequest {
@@ -170,6 +170,16 @@ pub struct OpenAIUsage {
     pub prompt_tokens_details: Option<PromptTokensDetails>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completion_tokens_details: Option<CompletionTokensDetails>,
+    #[serde(skip)]
+    pub input_tokens_by_modality: Option<Value>,
+    #[serde(skip)]
+    pub raw_output_tokens: Option<u32>,
+    #[serde(skip)]
+    pub total_thought_tokens: Option<u32>,
+    #[serde(skip)]
+    pub total_tool_use_tokens: Option<u32>,
+    #[serde(skip)]
+    pub gemini_total_tokens: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -182,4 +192,31 @@ pub struct PromptTokensDetails {
 pub struct CompletionTokensDetails {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_tokens: Option<u32>,
+}
+
+impl OpenAIUsage {
+    pub fn to_responses_usage_value(&self) -> Value {
+        let cached_tokens = self
+            .prompt_tokens_details
+            .as_ref()
+            .and_then(|details| details.cached_tokens)
+            .unwrap_or(0);
+        let reasoning_tokens = self
+            .completion_tokens_details
+            .as_ref()
+            .and_then(|details| details.reasoning_tokens)
+            .unwrap_or(0);
+
+        json!({
+            "input_tokens": self.prompt_tokens,
+            "input_tokens_details": {
+                "cached_tokens": cached_tokens
+            },
+            "output_tokens": self.completion_tokens,
+            "output_tokens_details": {
+                "reasoning_tokens": reasoning_tokens
+            },
+            "total_tokens": self.total_tokens
+        })
+    }
 }

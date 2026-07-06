@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> 专业级 AI 账号管理与协议代理系统 (v4.3.2)
+> 专业级 AI 账号管理与协议代理系统 (v4.3.4)
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
 
@@ -8,7 +8,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.3.2-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.3.4-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -143,7 +143,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **支持的格式**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **高级用法**: 安装指定版本 `curl -fsSL ... | bash -s -- --version 4.3.2`，预览模式 `curl -fsSL ... | bash -s -- --dry-run`
+> **高级用法**: 安装指定版本 `curl -fsSL ... | bash -s -- --version 4.3.4`，预览模式 `curl -fsSL ... | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 如果您已安装 [Homebrew](https://brew.sh/)，也可以通过以下命令安装：
@@ -439,6 +439,29 @@ response = client.chat.completions.create(
 ## 📝 开发者与社区
 
 *   **版本演进 (Changelog)**:
+    *   **v4.3.4 (2026-07-06)**:
+        -   **[社区贡献] 合并 PR #3225：apply_patch 调用失败修复与多层缓存优化 (Apply Patch Fix & Multi-Layer Cache Optimization)**：
+            -   **apply_patch 格式规整增强 (Tier A Optimization)**: 在将 patch 发送给 Codex 前，新增对 unified diff 格式的深度预处理逻辑 (`optimize_patch`)，自动修正 `@@` 行头、缺失 `+/-` 前缀及 header 清洗等常见格式问题，显著降低 `apply_patch` 调用失败率。
+            -   **L2 Tools 多层独立缓存 (Multi-Layer Split Cache)**: 引入 `CacheManager` 三层独立缓存体系（`si_cache` L1 / `tools_cache` L2 / `prefix_tracker` L3），在 Tool 清洗环节加入 L2 缓存检测，对相同工具集的请求跨会话复用已处理结果，减少重复计算开销。
+            -   **可视化缓存 Token 统计**: 在监控日志中细化记录 `cached_tokens` 和 `reasoning_tokens` 的分流统计，响应体通过 `to_responses_usage_value()` 统一序列化，Responses API 的 Token 消耗一目了然。
+            -   **调试日志持久化 (Debug Exchange Logger)**: 新增可选的请求/响应全链路调试日志写入功能（`debug_logger::write_exchange_payload`），可将原始请求、Gemini 上游请求体、原始响应及转换后响应以 JSON 格式落盘，极大提升问题排查效率。
+            -   **custom_tool_call 协议兼容**: 完善了 `/v1/responses` Responses API 对 `custom_tool_call` 和 `custom_tool_call_output` 类型 item 的处理，支持 `status: incomplete` 跳过与孤儿 output 安全忽略，提升 Codex 多工具会话的健壮性。
+            -   *相关 PR*: 详见 [PR #3225](https://github.com/lbjlaq/Antigravity-Manager/pull/3225)，由贡献者 [@new-Beginner](https://github.com/new-Beginner) 提交。
+    *   **v4.3.3 (2026-07-06)**:
+        -   **[核心特性] 全协议支持 L1~L3 动态水位与摘要 Fork 压缩泄压体系 (Adaptive Context Pressure Capping & XML Summarization)**:
+            -   **界面配置入口**：用户可在前端界面的 **实验性设置 (Experimental)** 中一键切换智能压缩等级（低度/中度/高度），并手动拖拽滑块自定义调节 L1、L2、L3 的动态防暴触发阈值。
+            -   **三协议全面适配**：对 Claude 协议、OpenAI 协议与 Gemini 原生协议全面适配并完成了自适应上下文泄压机制的对齐。
+            -   **分级自适应泄压规范 (L1~L3 Levels) 及智能压缩等级说明**：
+            - **智能压缩等级划分 (Low / Medium / High)**：
+                - `低度 (Low - 日志降噪)`：仅执行底层的 Rtk 终端日志精简去噪，缩减进度与过程冗余日志。
+                - `中度 (Medium - 日志+口语)`：在低度日志净化基础上，额外激活 Caveman 口语净化，自动过滤历史轮次中的多余语气助词及冗余指令修饰。
+                - `高度 (High - 动态防暴)`：在中度基础上，全面激活 L1~L3 动态压强水位防御机制，智能规避大模型上下文溢出报错。
+            - **分级自适应泄压水位机制**：
+                -   `L1` 水位（工具冗余裁剪，默认 10%）：自动精简历史对话中长达数万字节的 ToolResult 报文，保留最后 5 轮核心上下文。
+                -   `L2` 水位（思维文本压缩，默认 15%）：提取并提纯历史助手消息中的 `reasoning_content` / `thought` 块，保留签名安全骨架的同时极致压缩思考过程。
+                -   `L3` 水位（异步 XML 摘要 Fork 重设，默认 20%）：在后台利用轻量级模型生成极高信息密度的结构化 XML 历史快照，在下一次请求时在底层触发会话 Fork 重设，使得 Agent 仅凭数十个 tokens 的 XML 快照即可承接历史记忆，打破大模型极限上下文壁垒。
+            -   **安全签名提取与防爆校验**：在 OpenAI 及 Gemini 提纯截断过程中，利用 `SignatureCache` 自动检索并完美保留最新的合法思维签名，绕过 Google API 严格的安全签名链式校验，保障代理流量 100% 成功送达。
+            -   *单元测试与向前兼容*：新增并重构了同步垫片接口，使得原先的静态 Caveman / Rtk 清理保持完美兼容，并在测试环境锁的保护下让 Gemini 所有的拦截测试 100% 成功运行。
     *   **v4.3.2 (2026-07-05)**:
         -   **[核心修复] 解决由于代理强制重写命令行工具名为 local_shell_call 导致工具调用失败的 Bug (Dynamic Shell Tool Resolution)**:
             -   **动态解析机制**：取消了流式与非流式响应中将所有 `shell` / `bash` / `local_shell` 工具名称强制改写为 `local_shell_call` 的硬编码限制。现在，代理层会根据客户端在当前请求中实际声明 of 工具列表（如 `bash` 或 `shell`）动态匹配并映射。
@@ -2913,6 +2936,7 @@ response = client.chat.completions.create(
 *   [learn-claude-code](https://github.com/shareAI-lab/learn-claude-code)
 *   [Practical-Guide-to-Context-Engineering](https://github.com/WakeUp-Jin/Practical-Guide-to-Context-Engineering)
 *   [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)
+*   [OmniRoute](https://github.com/diegosouzapw/OmniRoute)
 *   [antigravity-claude-proxy](https://github.com/badrisnarayanan/antigravity-claude-proxy)
 *   [aistudio-gemini-proxy](https://github.com/zhongruichen/aistudio-gemini-proxy)
 *   [gcli2api](https://github.com/su-kaka/gcli2api)

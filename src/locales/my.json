@@ -941,6 +941,8 @@
     "page_title": "Papan Pemuka Monitor API",
     "page_subtitle": "Pengelogan dan analisis permintaan masa nyata",
     "open_monitor": "Buka Monitor",
+    "input": "Input",
+    "output": "Output",
     "logging_status": {
       "active": "Merekod",
       "paused": "Dijeda"
@@ -1038,6 +1040,8 @@
     "requests": "Permintaan",
     "input": "Input",
     "output": "Output",
+    "cached": "Cache",
+    "cached_token": "Cached token",
     "total": "Jumlah",
     "percentage": "Bahagian",
     "no_data": "Tiada data tersedia"

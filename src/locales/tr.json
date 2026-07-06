@@ -917,6 +917,8 @@
     "page_title": "API İzleme Paneli",
     "page_subtitle": "Gerçek zamanlı istek loglama ve analiz",
     "open_monitor": "İzlemeyi Aç",
+    "input": "Giriş",
+    "output": "Çıkış",
     "logging_status": {
       "active": "Kaydediliyor",
       "paused": "Duraklatıldı"
@@ -1016,6 +1018,8 @@
     "requests": "İstekler",
     "input": "Giriş",
     "output": "Çıkış",
+    "cached": "Önbellek",
+    "cached_token": "Önbellek isabeti",
     "total": "Toplam",
     "percentage": "Oran",
     "no_data": "Veri yok"

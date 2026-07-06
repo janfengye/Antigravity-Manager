@@ -735,7 +735,14 @@
         "title": "實驗性設定 (Experimental)",
         "title_tooltip": "探索性功能，可能在未來版本中調整或移除。",
         "enable_usage_scaling": "啟用用量縮放",
-        "enable_usage_scaling_tooltip": "針對 Claude 協定。當總輸入超過 30k Token 時開啟激進縮放，防止在大上下文下頻繁觸發用戶端壓縮。注意：開啟後用戶端顯示的用量不再代表實際計費點數。"
+        "enable_usage_scaling_tooltip": "支援所有相容協定 (Claude/OpenAI/Gemini)。當總輸入超過 30k Token 時開啟激進縮放與分階段上下文去噪提純，防止在大上下文下頻繁觸發用戶端壓縮。注意：開啟後用戶端顯示的用量不再代表實際計費點數。",
+        "compression_level_label": "智能上下文壓縮等級",
+        "compression_level_tooltip": "選擇您希望啟用的壓縮等級。靜態降噪與口語提純不需要達到 30k 即可常駐生效。",
+        "compression_level_desc": "選擇不同的壓縮方案：Low 僅終端日誌降噪；Medium 在此基礎上增加口語淨化；High 額外開啟大上下文分階段防禦重置。",
+        "level_disabled": "關閉 (Disabled)",
+        "level_low": "低度 (Low - 日誌降噪)",
+        "level_medium": "中度 (Medium - 日誌+口語)",
+        "level_high": "高度 (High - 動態防暴)"
       },
       "cloudflared": {
         "title": "公網訪問 (Cloudflared)",
@@ -975,6 +982,8 @@
     "page_title": "API 監控看板",
     "page_subtitle": "即時請求紀錄與分析",
     "open_monitor": "開啟監控",
+    "input": "輸入",
+    "output": "輸出",
     "logging_status": {
       "active": "正在錄製",
       "paused": "已暫停"
@@ -1075,6 +1084,8 @@
     "requests": "請求數",
     "input": "輸入",
     "output": "輸出",
+    "cached": "快取",
+    "cached_token": "快取命中",
     "total": "合計",
     "percentage": "佔比",
     "no_data": "暫無資料"

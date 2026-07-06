@@ -30,42 +30,72 @@ pub fn store_thought_signature(sig: &str, session_id: &str, message_count: usize
 }
 
 /// Extract and convert Gemini usageMetadata to OpenAI usage format
+/// Supports both legacy v1internal format and new Interactions API format.
+///
+/// Key semantic difference:
+/// - Old format: candidatesTokenCount = all output tokens (text + thinking + tool)
+/// - New format: total_output_tokens = text + tool output only; thought tokens are separate (total_thought_tokens)
+/// For Codex, we must sum them back together as `completion_tokens`.
 fn extract_usage_metadata(u: &Value) -> Option<super::models::OpenAIUsage> {
-    use super::models::{OpenAIUsage, PromptTokensDetails};
+    use super::models::{CompletionTokensDetails, OpenAIUsage, PromptTokensDetails};
 
+    // 优先使用新格式字段，fallback 到旧格式
     let prompt_tokens = u
-        .get("promptTokenCount")
+        .get("total_input_tokens")
+        .or_else(|| u.get("promptTokenCount"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0) as u32;
-    let completion_tokens = u
-        .get("candidatesTokenCount")
+    let raw_output_tokens = u
+        .get("total_output_tokens")
+        .or_else(|| u.get("candidatesTokenCount"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0) as u32;
+    let raw_total_tokens = u
+        .get("total_tokens")
+        .or_else(|| u.get("totalTokenCount"))
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32);
     let cached_tokens = u
-        .get("cachedContentTokenCount")
+        .get("total_cached_tokens")
+        .or_else(|| u.get("cachedContentTokenCount"))
         .or_else(|| u.get("cachedTokens"))
         .and_then(|v| v.as_u64())
         .map(|v| v as u32);
+    let reasoning_tokens = u
+        .get("total_thought_tokens")
+        .or_else(|| u.get("totalThoughtTokens"))
+        .or_else(|| u.get("thoughtsTokenCount"))
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32);
+    let tool_use_tokens = u
+        .get("total_tool_use_tokens")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32);
+    let input_tokens_by_modality = u.get("input_tokens_by_modality").cloned();
 
-    // [FIX] 效仿 Anthropic 的计费逻辑，向客户端返回时扣除已缓存的 tokens，避免客户端钱包暴降
-    let mut final_prompt_tokens = prompt_tokens;
-    if let Some(ct) = cached_tokens {
-        if final_prompt_tokens >= ct {
-            final_prompt_tokens -= ct;
-        }
-    }
+    // 新格式下 output_tokens 不含 thought/tool-use, 需要加回来
+    let completion_tokens =
+        raw_output_tokens + reasoning_tokens.unwrap_or(0) + tool_use_tokens.unwrap_or(0);
 
-    // 确保数学公式 total_tokens = prompt_tokens + completion_tokens 成立
-    let final_total_tokens = final_prompt_tokens + completion_tokens;
+    // cached_tokens is a subset of prompt_tokens. Keep prompt_tokens in the same
+    // raw-input-token unit as Gemini usageMetadata so downstream logs can reconcile it.
+    let final_total_tokens = raw_total_tokens.unwrap_or(prompt_tokens + completion_tokens);
 
     Some(OpenAIUsage {
-        prompt_tokens: final_prompt_tokens,
+        prompt_tokens,
         completion_tokens,
         total_tokens: final_total_tokens,
         prompt_tokens_details: cached_tokens.map(|ct| PromptTokensDetails {
             cached_tokens: Some(ct),
         }),
-        completion_tokens_details: None,
+        completion_tokens_details: reasoning_tokens.map(|rt| CompletionTokensDetails {
+            reasoning_tokens: Some(rt),
+        }),
+        input_tokens_by_modality,
+        raw_output_tokens: Some(raw_output_tokens),
+        total_thought_tokens: reasoning_tokens,
+        total_tool_use_tokens: tool_use_tokens,
+        gemini_total_tokens: raw_total_tokens,
     })
 }
 
@@ -132,8 +162,11 @@ where
                                                             if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
                                                                 let clean_text = text.replace("<think>\n", "").replace("<think>", "").replace("\n</think>", "").replace("</think>", "");
                                                                 if is_thought_part {
+                                                                    // thought 内容写入 thought_out（给支持 reasoning_content 的客户端）
+                                                                    // 同时单独写入 content_out（作 fallback，给不支持 reasoning_content 的客户端）
+                                                                    // 两者是独立 chunk，不会在同一 chunk 里混入正文
                                                                     thought_out.push_str(&clean_text);
-                                                                    content_out.push_str(&clean_text); // fallback for UI without reasoning support
+                                                                    content_out.push_str(&clean_text);
                                                                 }
                                                                 else { content_out.push_str(&clean_text); }
                                                             }
@@ -458,6 +491,38 @@ fn split_namespace_tool_name(qualified_name: &str) -> (String, Option<String>) {
     (name.to_string(), None)
 }
 
+fn extract_apply_patch_input(args: &Value) -> String {
+    if let Some(obj) = args.as_object() {
+        if let Some(input) = obj.get("input").and_then(|v| v.as_str()) {
+            return input.to_string();
+        }
+        if let Some(arr) = obj.get("command").and_then(|v| v.as_array()) {
+            if arr.len() > 1 {
+                if let Some(patch) = arr[1].as_str() {
+                    return patch.to_string();
+                }
+            }
+        }
+        if let Some(cmd_str) = obj.get("command").and_then(|v| v.as_str()) {
+            if let Some(patch) = cmd_str.strip_prefix("apply_patch\n") {
+                return patch.to_string();
+            }
+            if let Some(patch) = cmd_str.strip_prefix("apply_patch ") {
+                return patch.to_string();
+            }
+            return cmd_str.to_string();
+        }
+        for key in ["patch_text", "patch", "diff", "content"] {
+            if let Some(patch) = obj.get(key).and_then(|v| v.as_str()) {
+                return patch.to_string();
+            }
+        }
+    }
+    args.as_str()
+        .map(str::to_string)
+        .unwrap_or_else(|| serde_json::to_string(args).unwrap_or_default())
+}
+
 pub fn create_codex_sse_stream<S, E>(
     mut gemini_stream: Pin<Box<S>>,
     _model: String,
@@ -600,7 +665,7 @@ where
                                                                     }
                                                                 }
 
-                                                                let mut args_str = serde_json::to_string(&args).unwrap_or_default();
+                                                                let args_str = serde_json::to_string(&args).unwrap_or_default();
 
                                                                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
                                                                 use std::hash::{Hash, Hasher};
@@ -612,27 +677,26 @@ where
                                                                 let is_custom_tool = actual_name == "apply_patch" || actual_name == "apply_patch_v2" || actual_name == "shell";
 
                                                                 let mut final_args_str = args_str.clone();
+                                                                let mut apply_patch_repairs_value: Option<Value> = None;
+                                                                let mut apply_patch_validation: Option<(usize, String)> = None;
                                                                 if is_custom_tool && (actual_name == "apply_patch" || actual_name == "apply_patch_v2") {
-                                                                    if let Some(obj) = args.as_object() {
-                                                                        if let Some(arr) = obj.get("command").and_then(|v| v.as_array()) {
-                                                                            if arr.len() > 1 {
-                                                                                if let Some(patch) = arr[1].as_str() {
-                                                                                    final_args_str = patch.to_string();
-                                                                                }
-                                                                            }
-                                                                        } else if let Some(cmd_str) = obj.get("command").and_then(|v| v.as_str()) {
-                                                                            // FALLBACK: Model returned string instead of array (e.g. gemini-pro-agent without prompt)
-                                                                            if cmd_str.starts_with("apply_patch\n") {
-                                                                                final_args_str = cmd_str["apply_patch\n".len()..].to_string();
-                                                                            } else if cmd_str.starts_with("*** Begin Patch") {
-                                                                                final_args_str = cmd_str.to_string();
-                                                                            } else {
-                                                                                final_args_str = cmd_str.to_string();
-                                                                            }
-                                                                        } else if let Some(patch) = obj.get("patch_text").and_then(|v| v.as_str()) {
-                                                                            final_args_str = patch.to_string();
-                                                                        }
+                                                                    let extracted_patch = extract_apply_patch_input(&args);
+                                                                    let (optimized_patch, repairs) =
+                                                                        crate::proxy::adapters::apply_patch_preflight::optimize_patch(
+                                                                            &extracted_patch,
+                                                                            None,
+                                                                            true,
+                                                                        );
+                                                                    if !repairs.is_empty() {
+                                                                        apply_patch_repairs_value = Some(
+                                                                            crate::proxy::adapters::apply_patch_preflight::repairs_to_value(&repairs),
+                                                                        );
                                                                     }
+                                                                    final_args_str = optimized_patch;
+                                                                    apply_patch_validation =
+                                                                        crate::proxy::adapters::apply_patch_preflight::validate_v4a_for_codex(
+                                                                            &final_args_str,
+                                                                        );
                                                                 }
 
                                                                 let mut item_obj = json!({
@@ -653,6 +717,31 @@ where
 
                                                                 let tool_output_index = next_output_index;
                                                                 next_output_index += 1;
+
+                                                                if let Some((line, message)) = apply_patch_validation.as_ref() {
+                                                                    crate::proxy::adapters::apply_patch_trace::emit(
+                                                                        &crate::proxy::adapters::apply_patch_trace::ApplyPatchTrace {
+                                                                            source: "gemini_native",
+                                                                            model: &_model,
+                                                                            call_id: &call_id,
+                                                                            fc_id: &tool_item_id,
+                                                                            args_raw: &args_str,
+                                                                            input: &final_args_str,
+                                                                            interrupted: false,
+                                                                            json_truncation: None,
+                                                                            v4a_truncation: None,
+                                                                            v4a_validation: Some((*line, message.as_str())),
+                                                                            decision: "incomplete",
+                                                                            repairs: apply_patch_repairs_value.as_ref(),
+                                                                        },
+                                                                    );
+                                                                    if accumulated_text.is_empty() {
+                                                                        accumulated_text = format!(
+                                                                            "apply_patch 格式非法，已停止执行以避免重复失败。第 {line} 行：{message}"
+                                                                        );
+                                                                    }
+                                                                    continue;
+                                                                }
 
                                                                 let mut added_item = item_obj.clone();
                                                                 added_item["status"] = json!("in_progress");
@@ -686,6 +775,9 @@ where
                                                                 });
                                                                 if is_custom_tool {
                                                                     args_done_ev["call_id"] = json!(&call_id);
+                                                                    args_done_ev["input"] = json!(&final_args_str);
+                                                                } else {
+                                                                    args_done_ev["arguments"] = json!(&final_args_str);
                                                                 }
                                                                 yield Ok::<Bytes, String>(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&args_done_ev).unwrap())));
 
@@ -698,6 +790,24 @@ where
 
                                                                 let tc_val = item_obj.clone();
                                                                 crate::proxy::handlers::openai::insert_cached_tool_call(call_id.clone(), tc_val.clone());
+                                                                if is_custom_tool && (actual_name == "apply_patch" || actual_name == "apply_patch_v2") {
+                                                                    crate::proxy::adapters::apply_patch_trace::emit(
+                                                                        &crate::proxy::adapters::apply_patch_trace::ApplyPatchTrace {
+                                                                            source: "gemini_native",
+                                                                            model: &_model,
+                                                                            call_id: &call_id,
+                                                                            fc_id: &tool_item_id,
+                                                                            args_raw: &args_str,
+                                                                            input: &final_args_str,
+                                                                            interrupted: false,
+                                                                            json_truncation: None,
+                                                                            v4a_truncation: None,
+                                                                            v4a_validation: None,
+                                                                            decision: "completed",
+                                                                            repairs: apply_patch_repairs_value.as_ref(),
+                                                                        },
+                                                                    );
+                                                                }
                                                                 // [FIX] 按发出顺序追踪输出项
                                                                 final_outputs_map.insert(tool_output_index, tc_val);
                                                             }
@@ -840,28 +950,24 @@ where
         });
 
         if let Some(resp_obj) = completed_ev.get_mut("response").and_then(|r| r.as_object_mut()) {
-            let mut usage_obj = serde_json::Map::new();
             if let Some(ref usage) = final_usage {
-                usage_obj.insert("input_tokens".to_string(), json!(usage.prompt_tokens));
-                usage_obj.insert("output_tokens".to_string(), json!(usage.completion_tokens));
-                usage_obj.insert("total_tokens".to_string(), json!(usage.total_tokens));
-
-                // Show cached tokens count under usage object
-                if let Some(ref details) = usage.prompt_tokens_details {
-                    if let Some(ct) = details.cached_tokens {
-                        usage_obj.insert("cache_read_input_tokens".to_string(), json!(ct));
-
-                        let mut details_obj = serde_json::Map::new();
-                        details_obj.insert("cached_tokens".to_string(), json!(ct));
-                        usage_obj.insert("prompt_tokens_details".to_string(), json!(details_obj));
-                    }
-                }
+                resp_obj.insert("usage".to_string(), usage.to_responses_usage_value());
             } else {
-                usage_obj.insert("input_tokens".to_string(), json!(0));
-                usage_obj.insert("output_tokens".to_string(), json!(0));
-                usage_obj.insert("total_tokens".to_string(), json!(0));
+                resp_obj.insert(
+                    "usage".to_string(),
+                    json!({
+                        "input_tokens": 0,
+                        "input_tokens_details": {
+                            "cached_tokens": 0
+                        },
+                        "output_tokens": 0,
+                        "output_tokens_details": {
+                            "reasoning_tokens": 0
+                        },
+                        "total_tokens": 0
+                    }),
+                );
             }
-            resp_obj.insert("usage".to_string(), json!(usage_obj));
         }
 
         yield Ok::<Bytes, String>(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&completed_ev).unwrap())));

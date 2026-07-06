@@ -800,7 +800,14 @@
         "title": "实验性设置 (Experimental)",
         "title_tooltip": "探索性功能，可能在未来版本中调整或移除。",
         "enable_usage_scaling": "启用用量缩放",
-        "enable_usage_scaling_tooltip": "针对 Claude 兼容协议。当总输入超过 30k Token 时开启激进缩放，防止在大上下文下频繁触发客户端压缩。注意：开启后客户端显示的用量不再代表实际计费点数。",
+        "enable_usage_scaling_tooltip": "支持所有兼容协议 (Claude/OpenAI/Gemini)。当总输入超过 30k Token 时开启激进缩放与分阶段上下文去噪提纯，防止在大上下文下频繁触发客户端压缩。注意：开启后客户端显示的用量不再代表实际计费点数。",
+        "compression_level_label": "智能上下文压缩等级",
+        "compression_level_tooltip": "选择您希望启用的压缩等级。静态降噪与口语提纯不需要达到 30k 即可常驻生效。",
+        "compression_level_desc": "选择不同的压缩方案：Low 仅终端日志降噪；Medium 在此基础上增加口语净化；High 额外开启大上下文分阶段防御重置。",
+        "level_disabled": "关闭 (Disabled)",
+        "level_low": "低度 (Low - 日志降噪)",
+        "level_medium": "中度 (Medium - 日志+口语)",
+        "level_high": "高度 (High - 动态防暴)",
         "context_compression_threshold_l1": "L1 压缩阈值 (工具记录清理)",
         "context_compression_threshold_l1_tooltip": "清理旧的工具调用记录以节省空间。建议值: 0.4 (40%)",
         "context_compression_threshold_l2": "L2 压缩阈值 (思维链压缩)",
@@ -1113,6 +1120,8 @@
     "page_title": "API 监控看板",
     "page_subtitle": "实时请求日志与分析",
     "open_monitor": "打开监控",
+    "input": "输入",
+    "output": "输出",
     "logging_status": {
       "active": "正在录制",
       "paused": "已暂停"
@@ -1213,6 +1222,8 @@
     "requests": "请求数",
     "input": "输入",
     "output": "输出",
+    "cached": "缓存",
+    "cached_token": "缓存命中",
     "total": "合计",
     "percentage": "占比",
     "no_data": "暂无数据"

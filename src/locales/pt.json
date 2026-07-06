@@ -941,6 +941,8 @@
     "page_title": "Painel de Monitoramento da API",
     "page_subtitle": "Registro e análise de solicitações em tempo real",
     "open_monitor": "Abrir Monitor",
+    "input": "Entrada",
+    "output": "Saída",
     "logging_status": {
       "active": "Gravando",
       "paused": "Pausado"
@@ -1047,6 +1049,8 @@
     "requests": "Requisições",
     "input": "Entrada",
     "output": "Saída",
+    "cached": "Cache",
+    "cached_token": "Token em cache",
     "total": "Total",
     "percentage": "Porcentagem",
     "no_data": "Sem dados"

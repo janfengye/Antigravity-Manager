@@ -8,14 +8,17 @@ interface TokenStatsAggregated {
     period: string;
     total_input_tokens: number;
     total_output_tokens: number;
+    total_cached_tokens: number;
     total_tokens: number;
     request_count: number;
+    uncached_input_tokens?: number;
 }
 
 interface AccountTokenStats {
     account_email: string;
     total_input_tokens: number;
     total_output_tokens: number;
+    total_cached_tokens: number;
     total_tokens: number;
     request_count: number;
 }
@@ -24,6 +27,7 @@ interface ModelTokenStats {
     model: string;
     total_input_tokens: number;
     total_output_tokens: number;
+    total_cached_tokens: number;
     total_tokens: number;
     request_count: number;
 }
@@ -41,6 +45,7 @@ interface AccountTrendPoint {
 interface TokenStatsSummary {
     total_input_tokens: number;
     total_output_tokens: number;
+    total_cached_tokens: number;
     total_tokens: number;
     total_requests: number;
     unique_accounts: number;
@@ -114,7 +119,11 @@ const TokenStats: React.FC = () => {
                     break;
             }
 
-            setChartData(data);
+            setChartData(data.map(point => ({
+                ...point,
+                total_cached_tokens: point.total_cached_tokens || 0,
+                uncached_input_tokens: Math.max((point.total_input_tokens || 0) - (point.total_cached_tokens || 0), 0)
+            })));
 
             const models = new Set<string>();
             modelTrend.forEach(point => {
@@ -175,11 +184,6 @@ const TokenStats: React.FC = () => {
         fullEmail: account.account_email,
         color: COLORS[index % COLORS.length]
     }));
-
-    const modelColorMap = new Map<string, string>();
-    allModels.forEach((model, index) => {
-        modelColorMap.set(model, MODEL_COLORS[index % MODEL_COLORS.length]);
-    });
 
     const trendChartContainerRef = useRef<HTMLDivElement>(null);
     const [tooltipPosition, setTooltipPosition] = useState<{ x: number; y: number } | undefined>(undefined);
@@ -266,24 +270,40 @@ const TokenStats: React.FC = () => {
         );
     };
 
-    // Custom Tooltip for Bar/Pie Charts
-    const SimpleCustomTooltip = ({ active, payload, label }: any) => {
+    const UsageTrendTooltip = ({ active, payload, label }: any) => {
         if (!active || !payload || !payload.length) return null;
+        const row = payload[0]?.payload || {};
+        const items = [
+            { label: t('token_stats.total', '合计'), value: row.total_tokens || 0, color: '#111827' },
+            { label: t('token_stats.input', '输入'), value: row.total_input_tokens || 0, color: '#3b82f6' },
+            { label: t('token_stats.cached_token', '缓存命中'), value: row.total_cached_tokens || 0, color: '#93c5fd' },
+            { label: t('token_stats.output', '输出'), value: row.total_output_tokens || 0, color: '#8b5cf6' },
+        ];
         return (
-            <div className="bg-white/95 dark:bg-gray-800/95 backdrop-blur-sm p-2.5 rounded-xl shadow-xl border border-gray-100 dark:border-gray-700 text-xs z-[100] pointer-events-none">
+            <div className="bg-white/95 dark:bg-gray-800/95 backdrop-blur-sm p-2.5 rounded-xl shadow-xl border border-gray-100 dark:border-gray-700 text-xs z-[100] pointer-events-none min-w-[170px]">
                 {label && <p className="font-semibold text-gray-700 dark:text-gray-200 mb-2">{label}</p>}
                 <div className="space-y-1">
-                    {payload.map((entry: any, index: number) => (
-                        <div key={index} className="flex items-center gap-2">
-                            <div className="w-2 h-2 rounded-full" style={{ backgroundColor: entry.color || entry.fill }} />
-                            <span className="text-gray-500 dark:text-gray-400">
-                                {entry.name}:
-                            </span>
+                    {items.map((item) => (
+                        <div key={item.label} className="flex items-center justify-between gap-4">
+                            <div className="flex items-center gap-2">
+                                <div className="w-2 h-2 rounded-full" style={{ backgroundColor: item.color }} />
+                                <span className="text-gray-500 dark:text-gray-400">
+                                    {item.label}:
+                                </span>
+                            </div>
                             <span className="font-mono font-medium text-gray-700 dark:text-gray-200">
-                                {formatNumber(entry.value)}
+                                {formatNumber(item.value)}
                             </span>
                         </div>
                     ))}
+                    <div className="flex items-center justify-between gap-4 pt-1 border-t border-gray-100 dark:border-gray-700">
+                        <span className="text-gray-500 dark:text-gray-400">
+                            {t('token_stats.requests', '请求数')}:
+                        </span>
+                        <span className="font-mono font-medium text-gray-700 dark:text-gray-200">
+                            {(row.request_count || 0).toLocaleString()}
+                        </span>
+                    </div>
                 </div>
             </div>
         );
@@ -360,7 +380,7 @@ const TokenStats: React.FC = () => {
                 </div>
 
                 {summary && (
-                    <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
                         <div className="bg-gradient-to-br from-white to-gray-50 dark:from-gray-800 dark:to-gray-800/50 rounded-xl p-4 shadow-sm border border-gray-200 dark:border-gray-700 hover:shadow-md transition-shadow">
                             <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400 text-sm mb-2">
                                 <div className="p-1.5 rounded-lg bg-gray-100 dark:bg-gray-700">
@@ -392,6 +412,17 @@ const TokenStats: React.FC = () => {
                             </div>
                             <div className="text-2xl font-bold text-purple-600 dark:text-purple-400">
                                 {formatNumber(summary.total_output_tokens)}
+                            </div>
+                        </div>
+                        <div className="bg-gradient-to-br from-sky-50/50 to-white dark:from-sky-900/10 dark:to-gray-800 rounded-xl p-4 shadow-sm border border-sky-100 dark:border-sky-900/30 hover:shadow-md transition-shadow">
+                            <div className="flex items-center gap-2 text-sky-600/80 dark:text-sky-400/80 text-sm mb-2">
+                                <div className="p-1.5 rounded-lg bg-sky-100/50 dark:bg-sky-900/30">
+                                    <Zap className="w-4 h-4 text-sky-600 dark:text-sky-400" />
+                                </div>
+                                {t('token_stats.cached_token', '缓存命中')}
+                            </div>
+                            <div className="text-2xl font-bold text-sky-600 dark:text-sky-400">
+                                {formatNumber(summary.total_cached_tokens)}
                             </div>
                         </div>
                         <div className="bg-gradient-to-br from-green-50/50 to-white dark:from-green-900/10 dark:to-gray-800 rounded-xl p-4 shadow-sm border border-green-100 dark:border-green-900/30 hover:shadow-md transition-shadow">
@@ -547,13 +578,14 @@ const TokenStats: React.FC = () => {
                                             tickLine={false}
                                         />
                                         <Tooltip
-                                            content={<SimpleCustomTooltip />}
+                                            content={<UsageTrendTooltip />}
                                             cursor={{ fill: 'transparent' }}
                                             allowEscapeViewBox={{ x: true, y: true }}
                                             wrapperStyle={{ zIndex: 100 }}
                                         />
-                                        <Bar dataKey="total_input_tokens" name="Input" fill="#3b82f6" radius={[4, 4, 0, 0]} maxBarSize={50} />
-                                        <Bar dataKey="total_output_tokens" name="Output" fill="#8b5cf6" radius={[4, 4, 0, 0]} maxBarSize={50} />
+                                        <Bar dataKey="total_cached_tokens" name={t('token_stats.cached_token', '缓存命中')} stackId="input" fill="#93c5fd" radius={[0, 0, 4, 4]} maxBarSize={50} />
+                                        <Bar dataKey="uncached_input_tokens" name={t('token_stats.input', '输入')} stackId="input" fill="#3b82f6" radius={[4, 4, 0, 0]} maxBarSize={50} />
+                                        <Bar dataKey="total_output_tokens" name={t('token_stats.output', '输出')} fill="#8b5cf6" radius={[4, 4, 0, 0]} maxBarSize={50} />
                                     </BarChart>
                                 </ResponsiveContainer>
                             ) : (
@@ -648,6 +680,9 @@ const TokenStats: React.FC = () => {
                                                 {t('token_stats.output', '输出')}
                                             </th>
                                             <th className="text-right py-3 px-4 font-medium text-gray-500 dark:text-gray-400">
+                                                {t('token_stats.cached_token', '缓存命中')}
+                                            </th>
+                                            <th className="text-right py-3 px-4 font-medium text-gray-500 dark:text-gray-400">
                                                 {t('token_stats.total', '合计')}
                                             </th>
                                             <th className="text-right py-3 px-4 font-medium text-gray-500 dark:text-gray-400">
@@ -682,6 +717,9 @@ const TokenStats: React.FC = () => {
                                                     </td>
                                                     <td className="py-3 px-4 text-right text-purple-600">
                                                         {formatNumber(model.total_output_tokens)}
+                                                    </td>
+                                                    <td className="py-3 px-4 text-right text-sky-600">
+                                                        {formatNumber(model.total_cached_tokens)}
                                                     </td>
                                                     <td className="py-3 px-4 text-right font-semibold text-gray-800 dark:text-white">
                                                         {formatNumber(model.total_tokens)}
@@ -737,6 +775,9 @@ const TokenStats: React.FC = () => {
                                                 {t('token_stats.output', '输出')}
                                             </th>
                                             <th className="text-right py-3 px-4 font-medium text-gray-500 dark:text-gray-400">
+                                                {t('token_stats.cached_token', '缓存命中')}
+                                            </th>
+                                            <th className="text-right py-3 px-4 font-medium text-gray-500 dark:text-gray-400">
                                                 {t('token_stats.total', '合计')}
                                             </th>
                                         </tr>
@@ -758,6 +799,9 @@ const TokenStats: React.FC = () => {
                                                 </td>
                                                 <td className="py-3 px-4 text-right text-purple-600">
                                                     {formatNumber(account.total_output_tokens)}
+                                                </td>
+                                                <td className="py-3 px-4 text-right text-sky-600">
+                                                    {formatNumber(account.total_cached_tokens)}
                                                 </td>
                                                 <td className="py-3 px-4 text-right font-semibold text-gray-800 dark:text-white">
                                                     {formatNumber(account.total_tokens)}

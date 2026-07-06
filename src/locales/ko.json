@@ -977,6 +977,8 @@
     "page_title": "API 모니터 대시보드",
     "page_subtitle": "실시간 요청 로깅 및 분석",
     "open_monitor": "모니터 열기",
+    "input": "입력",
+    "output": "출력",
     "logging_status": {
       "active": "기록 중",
       "paused": "일시 중지됨"
@@ -1077,6 +1079,8 @@
     "requests": "요청",
     "input": "입력",
     "output": "출력",
+    "cached": "캐시",
+    "cached_token": "캐시 적중",
     "total": "합계",
     "percentage": "점유율",
     "no_data": "사용 가능한 데이터 없음"

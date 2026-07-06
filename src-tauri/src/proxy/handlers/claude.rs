@@ -406,6 +406,55 @@ pub async fn handle_messages(
         close_tool_loop_for_thinking(&mut request.messages);
     }
 
+    let experimental_cfg = state.experimental.read().await;
+    let compression_level = if experimental_cfg.compression_level == "disabled" {
+        if experimental_cfg.enable_usage_scaling {
+            "high".to_string()
+        } else {
+            "disabled".to_string()
+        }
+    } else {
+        experimental_cfg.compression_level.clone()
+    };
+
+    if compression_level != "disabled" {
+        // [ACC-P RTK] Low, Medium, High 等级均对传入的工具返回日志执行静态 RTK 去噪折叠
+        for msg in &mut request.messages {
+            crate::proxy::mappers::context_manager::ContextManager::clean_tool_message(msg);
+        }
+
+        // [ACC-P Caveman] Medium, High 等级对除最近 4 条（~2轮）以外的旧对话常驻执行 Caveman 提纯
+        if compression_level == "medium" || compression_level == "high" {
+            let total_msgs = request.messages.len();
+            let start_protection_idx = total_msgs.saturating_sub(4);
+            for (i, msg) in request.messages.iter_mut().enumerate() {
+                if i >= start_protection_idx {
+                    continue;
+                }
+                if msg.role == "user" || msg.role == "assistant" {
+                    match &mut msg.content {
+                        crate::proxy::mappers::claude::models::MessageContent::String(s) => {
+                            let cleaned = crate::proxy::mappers::caveman_cleaner::CavemanCleaner::clean(s);
+                            if cleaned != *s {
+                                *s = cleaned;
+                            }
+                        }
+                        crate::proxy::mappers::claude::models::MessageContent::Array(blocks) => {
+                            for block in blocks {
+                                if let crate::proxy::mappers::claude::models::ContentBlock::Text { text } = block {
+                                    let cleaned = crate::proxy::mappers::caveman_cleaner::CavemanCleaner::clean(text);
+                                    if cleaned != *text {
+                                        *text = cleaned;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // ===== [Issue #467 Fix] 拦截 Claude Code Warmup 请求 =====
     // Claude Code 会每 10 秒发送一次 warmup 请求来保持连接热身，
     // 这些请求会消耗大量配额。检测到 warmup 请求后直接返回模拟响应。
@@ -419,13 +468,16 @@ pub async fn handle_messages(
 
     if use_zai {
         // 重新序列化修复后的请求体
-        let new_body = match serde_json::to_value(&request) {
+        let mut new_body = match serde_json::to_value(&request) {
             Ok(v) => v,
             Err(e) => {
                 tracing::error!("Failed to serialize fixed request for z.ai: {}", e);
                 return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             }
         };
+
+        // Inject cache_control into the XML summary message if it is a Forked session
+        inject_cache_control_to_forked_summary(&mut new_body);
 
         return crate::proxy::providers::zai_anthropic::forward_anthropic_json(
             &state,
@@ -703,7 +755,7 @@ pub async fn handle_messages(
         let mut is_purified = false;
         let mut compression_applied = false;
 
-        if !retried_without_thinking && scaling_enabled {
+        if !retried_without_thinking && compression_level == "high" {
             // 新增 scaling_enabled 联动判断
             // 1. Determine context limit (Flash: ~1M, Pro: ~2M)
             let context_limit = if mapped_model.contains("flash") {
@@ -2202,13 +2254,18 @@ async fn try_compress_with_summary(
     );
 
     // 4. Create forked conversation with summary as prefix
+    // Wrap text inside a ContentBlock::Text and attach cache_control to freeze it in upstream's Prompt Cache
     let mut forked_messages = vec![
         Message {
             role: "user".to_string(),
-            content: MessageContent::String(format!(
-                "Context has been compressed. Here is the structured summary of our conversation history:\n\n{}",
-                xml_summary
-            )),
+            content: MessageContent::Array(vec![
+                crate::proxy::mappers::claude::models::ContentBlock::Text {
+                    text: format!(
+                        "Context has been compressed. Here is the structured summary of our conversation history:\n\n{}",
+                        xml_summary
+                    ),
+                }
+            ]),
         },
         Message {
             role: "assistant".to_string(),
@@ -2253,4 +2310,31 @@ async fn try_compress_with_summary(
         size: original_request.size.clone(),
         quality: original_request.quality.clone(),
     })
+}
+
+/// Injects cache_control ephemeral trigger to first message's content block if it's the XML summary
+fn inject_cache_control_to_forked_summary(body: &mut serde_json::Value) {
+    if let Some(messages) = body.get_mut("messages").and_then(|m| m.as_array_mut()) {
+        if !messages.is_empty() {
+            let first_msg = &mut messages[0];
+            if let Some(content) = first_msg.get_mut("content") {
+                if let Some(content_arr) = content.as_array_mut() {
+                    if !content_arr.is_empty() {
+                        let is_summary = content_arr[0].get("text")
+                            .and_then(|t| t.as_str())
+                            .map(|s| s.contains("Context has been compressed"))
+                            .unwrap_or(false);
+                        
+                        if is_summary {
+                            if let Some(obj) = content_arr[0].as_object_mut() {
+                                obj.insert("cache_control".to_string(), serde_json::json!({
+                                    "type": "ephemeral"
+                                }));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

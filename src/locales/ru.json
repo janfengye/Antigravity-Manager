@@ -942,6 +942,8 @@
     "page_title": "Дашборд API Монитора",
     "page_subtitle": "Логирование и анализ запросов в реальном времени",
     "open_monitor": "Открыть монитор",
+    "input": "Ввод",
+    "output": "Вывод",
     "logging_status": {
       "active": "Запись",
       "paused": "Приостановлено"
@@ -1042,6 +1044,8 @@
     "requests": "Запросы",
     "input": "Вход",
     "output": "Выход",
+    "cached": "Кэш",
+    "cached_token": "Попадание в кэш",
     "total": "Всего",
     "percentage": "Доля",
     "no_data": "Нет данных"

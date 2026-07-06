@@ -121,6 +121,88 @@ pub fn update_image_thinking_mode(mode: Option<String>) {
     }
 }
 
+// ============================================================================
+// 全局压缩等级配置存储
+// ============================================================================
+static GLOBAL_COMPRESSION_LEVEL: OnceLock<RwLock<String>> = OnceLock::new();
+static GLOBAL_USAGE_SCALING: OnceLock<RwLock<bool>> = OnceLock::new();
+static GLOBAL_THRESHOLD_L1: OnceLock<RwLock<f32>> = OnceLock::new();
+static GLOBAL_THRESHOLD_L2: OnceLock<RwLock<f32>> = OnceLock::new();
+static GLOBAL_THRESHOLD_L3: OnceLock<RwLock<f32>> = OnceLock::new();
+
+pub fn get_global_threshold_l1() -> f32 {
+    GLOBAL_THRESHOLD_L1.get().and_then(|lock| lock.read().ok()).map(|v| *v).unwrap_or(0.6)
+}
+
+pub fn get_global_threshold_l2() -> f32 {
+    GLOBAL_THRESHOLD_L2.get().and_then(|lock| lock.read().ok()).map(|v| *v).unwrap_or(0.75)
+}
+
+pub fn get_global_threshold_l3() -> f32 {
+    GLOBAL_THRESHOLD_L3.get().and_then(|lock| lock.read().ok()).map(|v| *v).unwrap_or(0.9)
+}
+
+pub fn get_global_compression_level() -> String {
+    let level = GLOBAL_COMPRESSION_LEVEL
+        .get()
+        .and_then(|lock| lock.read().ok())
+        .map(|cfg| cfg.clone())
+        .unwrap_or_else(|| "disabled".to_string());
+
+    if level == "disabled" {
+        let scaling = GLOBAL_USAGE_SCALING
+            .get()
+            .and_then(|lock| lock.read().ok())
+            .map(|s| *s)
+            .unwrap_or(false);
+        if scaling {
+            "high".to_string()
+        } else {
+            "disabled".to_string()
+        }
+    } else {
+        level
+    }
+}
+
+pub fn update_global_compression_level(level: String, scaling: bool) {
+    if let Some(lock) = GLOBAL_COMPRESSION_LEVEL.get() {
+        if let Ok(mut cfg) = lock.write() {
+            *cfg = level;
+        }
+    } else {
+        let _ = GLOBAL_COMPRESSION_LEVEL.set(RwLock::new(level));
+    }
+
+    if let Some(lock) = GLOBAL_USAGE_SCALING.get() {
+        if let Ok(mut cfg) = lock.write() {
+            *cfg = scaling;
+        }
+    } else {
+        let _ = GLOBAL_USAGE_SCALING.set(RwLock::new(scaling));
+    }
+}
+
+pub fn update_global_thresholds(l1: f32, l2: f32, l3: f32) {
+    if let Some(lock) = GLOBAL_THRESHOLD_L1.get() {
+        if let Ok(mut cfg) = lock.write() { *cfg = l1; }
+    } else {
+        let _ = GLOBAL_THRESHOLD_L1.set(RwLock::new(l1));
+    }
+
+    if let Some(lock) = GLOBAL_THRESHOLD_L2.get() {
+        if let Ok(mut cfg) = lock.write() { *cfg = l2; }
+    } else {
+        let _ = GLOBAL_THRESHOLD_L2.set(RwLock::new(l2));
+    }
+
+    if let Some(lock) = GLOBAL_THRESHOLD_L3.get() {
+        if let Ok(mut cfg) = lock.write() { *cfg = l3; }
+    } else {
+        let _ = GLOBAL_THRESHOLD_L3.set(RwLock::new(l3));
+    }
+}
+
 /// 全局系统提示词配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GlobalSystemPromptConfig {
@@ -276,6 +358,11 @@ pub struct ExperimentalConfig {
     #[serde(default = "default_false")]
     pub enable_usage_scaling: bool,
 
+    /// 压缩级别 (Compression Level)
+    /// disabled, low, medium, high
+    #[serde(default = "default_compression_level")]
+    pub compression_level: String,
+
     /// 上下文压缩阈值 L1 (Tool Trimming)
     #[serde(default = "default_threshold_l1")]
     pub context_compression_threshold_l1: f32,
@@ -295,7 +382,8 @@ impl Default for ExperimentalConfig {
             enable_signature_cache: true,
             enable_tool_loop_recovery: true,
             enable_cross_model_checks: true,
-            enable_usage_scaling: false, // 默认关闭,回归透明模式
+            enable_usage_scaling: false,
+            compression_level: "disabled".to_string(),
             context_compression_threshold_l1: 0.4,
             context_compression_threshold_l2: 0.55,
             context_compression_threshold_l3: 0.7,
@@ -311,6 +399,9 @@ fn default_threshold_l2() -> f32 {
 }
 fn default_threshold_l3() -> f32 {
     0.7
+}
+fn default_compression_level() -> String {
+    "disabled".to_string()
 }
 
 /// Thinking Budget 模式

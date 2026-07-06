@@ -4,8 +4,11 @@
 //! to prevent "Prompt is too long" errors and avoid invalid signatures.
 
 use super::claude::models::{ClaudeRequest, ContentBlock, Message, MessageContent, SystemPrompt};
-use super::openai::models::OpenAIMessage;
+use super::openai::models::{OpenAIRequest, OpenAIMessage};
+use serde_json::{json, Value};
 use tracing::{debug, info};
+use super::rtk_cleaner::RtkCleaner;
+use super::caveman_cleaner::CavemanCleaner;
 
 /// Helper to estimate tokens from text with multi-language awareness
 ///
@@ -61,7 +64,90 @@ impl ContextManager {
             PurificationStrategy::Aggressive => 0, // No protection
         };
 
-        Self::strip_thinking_blocks(messages, protected_last_n)
+        let mut modified = Self::strip_thinking_blocks(messages, protected_last_n);
+
+        // Apply Caveman cleaning to older message contents to save tokens
+        let total_msgs = messages.len();
+        let start_protection_idx = total_msgs.saturating_sub(protected_last_n);
+        for (i, msg) in messages.iter_mut().enumerate() {
+            if i >= start_protection_idx {
+                continue;
+            }
+            if msg.role == "user" || msg.role == "assistant" {
+                match &mut msg.content {
+                    MessageContent::String(s) => {
+                        let cleaned = CavemanCleaner::clean(s);
+                        if cleaned != *s {
+                            *s = cleaned;
+                            modified = true;
+                        }
+                    }
+                    MessageContent::Array(blocks) => {
+                        for block in blocks {
+                            if let ContentBlock::Text { text } = block {
+                                let cleaned = CavemanCleaner::clean(text);
+                                if cleaned != *text {
+                                    *text = cleaned;
+                                    modified = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        modified
+    }
+
+    /// Clean tool result messages using RtkCleaner
+    pub fn clean_tool_message(msg: &mut Message) -> bool {
+        let mut modified = false;
+        if let MessageContent::Array(blocks) = &mut msg.content {
+            for block in blocks {
+                if let ContentBlock::ToolResult { content, .. } = block {
+                    if let Some(s) = content.as_str() {
+                        let cleaned = RtkCleaner::clean(s, 48);
+                        if cleaned != s {
+                            *content = serde_json::Value::String(cleaned);
+                            modified = true;
+                        }
+                    }
+                }
+            }
+        }
+        modified
+    }
+
+    /// Clean OpenAI tool message using RtkCleaner
+    pub fn clean_openai_tool_message(msg: &mut OpenAIMessage) -> bool {
+        if msg.role == "tool" {
+            if let Some(ref mut content) = msg.content {
+                match content {
+                    crate::proxy::mappers::openai::models::OpenAIContent::String(s) => {
+                        let cleaned = RtkCleaner::clean(s, 48);
+                        if cleaned != *s {
+                            *s = cleaned;
+                            return true;
+                        }
+                    }
+                    crate::proxy::mappers::openai::models::OpenAIContent::Array(blocks) => {
+                        let mut modified = false;
+                        for block in blocks {
+                            if let crate::proxy::mappers::openai::models::OpenAIContentBlock::Text { text } = block {
+                                let cleaned = RtkCleaner::clean(text, 48);
+                                if cleaned != *text {
+                                    *text = cleaned;
+                                    modified = true;
+                                }
+                            }
+                        }
+                        return modified;
+                    }
+                }
+            }
+        }
+        false
     }
 
     /// Internal helper to strip thinking blocks from messages outside the protected range
@@ -310,6 +396,11 @@ impl ContextManager {
         None
     }
 
+    /// Extract last valid signature for OpenAI using SignatureCache
+    pub fn extract_last_openai_valid_signature(session_id: &str) -> Option<String> {
+        crate::proxy::signature_cache::SignatureCache::global().get_session_signature(session_id)
+    }
+
     // ===== [Layer 1] Tool Message Intelligent Trimming =====
     // Borrowed from Practical-Guide-to-Context-Engineering
     // This layer removes old tool call/result pairs while preserving recent ones
@@ -324,9 +415,17 @@ impl ContextManager {
     /// Returns true if any messages were removed
     pub fn trim_tool_messages(messages: &mut Vec<Message>, keep_last_n_rounds: usize) -> bool {
         let tool_rounds = identify_tool_rounds(messages);
+        let mut modified = false;
+
+        // Clean retained tool messages using RtkCleaner
+        for msg in messages.iter_mut() {
+            if Self::clean_tool_message(msg) {
+                modified = true;
+            }
+        }
 
         if tool_rounds.len() <= keep_last_n_rounds {
-            return false; // No trimming needed
+            return modified; // No trimming needed, but might have cleaned some messages
         }
 
         // Identify indices to remove (older rounds)
@@ -407,13 +506,42 @@ impl ContextManager {
                 continue;
             }
             if msg.role == "assistant" && msg.reasoning_content.is_some() {
-                tracing::debug!(
-                    "[ContextManager] Purifying reasoning_content of message {} (len: {})",
-                    i,
-                    msg.reasoning_content.as_ref().unwrap().len()
-                );
-                msg.reasoning_content = None;
-                modified = true;
+                // [FIX] If the assistant message contains tool calls, do NOT strip its reasoning_content/signature.
+                // Otherwise, the signature chain is broken, and Google API throws a 400 thought_signature error for historical tool calls.
+                let has_tool_calls = msg.tool_calls.as_ref().map(|tc| !tc.is_empty()).unwrap_or(false);
+                if !has_tool_calls {
+                    tracing::debug!(
+                        "[ContextManager] Purifying reasoning_content of message {} (len: {})",
+                        i,
+                        msg.reasoning_content.as_ref().unwrap().len()
+                    );
+                    msg.reasoning_content = None;
+                    modified = true;
+                }
+            }
+            if msg.role == "user" || msg.role == "assistant" {
+                if let Some(ref mut content) = msg.content {
+                    match content {
+                        crate::proxy::mappers::openai::models::OpenAIContent::String(s) => {
+                            let cleaned = CavemanCleaner::clean(s);
+                            if cleaned != *s {
+                                *s = cleaned;
+                                modified = true;
+                            }
+                        }
+                        crate::proxy::mappers::openai::models::OpenAIContent::Array(blocks) => {
+                            for block in blocks {
+                                if let crate::proxy::mappers::openai::models::OpenAIContentBlock::Text { text } = block {
+                                    let cleaned = CavemanCleaner::clean(text);
+                                    if cleaned != *text {
+                                        *text = cleaned;
+                                        modified = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
         modified
@@ -425,8 +553,17 @@ impl ContextManager {
         keep_last_n_rounds: usize,
     ) -> bool {
         let tool_rounds = identify_openai_tool_rounds(messages);
+        let mut modified = false;
+
+        // Clean retained tool messages using RtkCleaner
+        for msg in messages.iter_mut() {
+            if Self::clean_openai_tool_message(msg) {
+                modified = true;
+            }
+        }
+
         if tool_rounds.len() <= keep_last_n_rounds {
-            return false;
+            return modified;
         }
 
         let rounds_to_remove = tool_rounds.len() - keep_last_n_rounds;
@@ -575,7 +712,317 @@ fn has_tool_result(content: &MessageContent) -> bool {
         false
     }
 }
+impl ContextManager {
+    /// Estimate token usage for an OpenAI Request
+    pub fn estimate_openai_token_usage(request: &OpenAIRequest) -> u32 {
+        let mut total = 0;
 
+        // System or developer messages, tools definitions, prompt
+        if let Some(prompt) = &request.prompt {
+            total += estimate_tokens_from_str(prompt);
+        }
+        if let Some(instructions) = &request.instructions {
+            total += estimate_tokens_from_str(instructions);
+        }
+
+        for msg in &request.messages {
+            total += 4; // msg overhead
+
+            if let Some(ref content) = msg.content {
+                match content {
+                    crate::proxy::mappers::openai::models::OpenAIContent::String(s) => {
+                        total += estimate_tokens_from_str(s);
+                    }
+                    crate::proxy::mappers::openai::models::OpenAIContent::Array(blocks) => {
+                        for block in blocks {
+                            match block {
+                                crate::proxy::mappers::openai::models::OpenAIContentBlock::Text { text } => {
+                                    total += estimate_tokens_from_str(text);
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Some(ref reasoning) = msg.reasoning_content {
+                total += estimate_tokens_from_str(reasoning);
+                total += 100; // signature/thinking overhead
+            }
+
+            if let Some(ref tool_calls) = msg.tool_calls {
+                for tc in tool_calls {
+                    total += 20;
+                    if let Some(ref func) = tc.function {
+                        total += estimate_tokens_from_str(&func.name);
+                        total += estimate_tokens_from_str(&func.arguments);
+                    }
+                }
+            }
+
+            if let Some(ref name) = msg.name {
+                total += estimate_tokens_from_str(name);
+            }
+        }
+
+        if let Some(tools) = &request.tools {
+            for tool in tools {
+                if let Ok(json_str) = serde_json::to_string(tool) {
+                    total += estimate_tokens_from_str(&json_str);
+                }
+            }
+        }
+
+        if let Some(thinking) = &request.thinking {
+            if let Some(budget) = thinking.budget_tokens {
+                total += budget;
+            }
+        }
+
+        total
+    }
+
+    /// Compress thinking content in OpenAI request while keeping it in a lightweight representation
+    pub fn compress_openai_thinking_preserve_signature(
+        messages: &mut Vec<OpenAIMessage>,
+        protected_last_n: usize,
+    ) -> bool {
+        let total_msgs = messages.len();
+        if total_msgs == 0 {
+            return false;
+        }
+
+        let start_protection_idx = total_msgs.saturating_sub(protected_last_n);
+        let mut compressed_count = 0;
+
+        for (i, msg) in messages.iter_mut().enumerate() {
+            if i >= start_protection_idx {
+                continue;
+            }
+
+            if msg.role == "assistant" {
+                if let Some(ref mut reasoning) = msg.reasoning_content {
+                    // [FIX] If the assistant message contains tool calls, do NOT strip its reasoning_content/signature.
+                    let has_tool_calls = msg.tool_calls.as_ref().map(|tc| !tc.is_empty()).unwrap_or(false);
+                    if !has_tool_calls && reasoning.len() > 10 {
+                        *reasoning = "...".to_string();
+                        compressed_count += 1;
+                    }
+                }
+            }
+        }
+
+        compressed_count > 0
+    }
+
+    /// Estimate token usage for a Gemini Request represented as serde_json::Value
+    pub fn estimate_gemini_token_usage(body: &Value) -> u32 {
+        let mut total = 0;
+
+        // systemInstruction
+        if let Some(sys_inst) = body.get("systemInstruction") {
+            if let Some(parts) = sys_inst.get("parts").and_then(|p| p.as_array()) {
+                for part in parts {
+                    if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
+                        total += estimate_tokens_from_str(text);
+                    }
+                }
+            }
+        }
+
+        // contents
+        if let Some(contents) = body.get("contents").and_then(|c| c.as_array()) {
+            for msg in contents {
+                total += 4; // msg overhead
+                if let Some(parts) = msg.get("parts").and_then(|p| p.as_array()) {
+                    for part in parts {
+                        if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
+                            total += estimate_tokens_from_str(text);
+                        }
+                        if let Some(thought) = part.get("thought").and_then(|t| t.as_bool()) {
+                            if thought {
+                                total += 100; // thinking overhead
+                            }
+                        }
+                        if let Some(fc) = part.get("functionCall") {
+                            total += 20;
+                            if let Some(name) = fc.get("name").and_then(|n| n.as_str()) {
+                                total += estimate_tokens_from_str(name);
+                            }
+                            if let Some(args) = fc.get("args") {
+                                if let Ok(json_str) = serde_json::to_string(args) {
+                                    total += estimate_tokens_from_str(&json_str);
+                                }
+                            }
+                        }
+                        if let Some(fr) = part.get("functionResponse") {
+                            total += 10;
+                            if let Some(name) = fr.get("name").and_then(|n| n.as_str()) {
+                                total += estimate_tokens_from_str(name);
+                            }
+                            if let Some(resp) = fr.get("response") {
+                                if let Ok(json_str) = serde_json::to_string(resp) {
+                                    total += estimate_tokens_from_str(&json_str);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // tools
+        if let Some(tools) = body.get("tools").and_then(|t| t.as_array()) {
+            for tool in tools {
+                if let Ok(json_str) = serde_json::to_string(tool) {
+                    total += estimate_tokens_from_str(&json_str);
+                }
+            }
+        }
+
+        total
+    }
+
+    /// Trim old tool messages in Gemini request body, keeping only the last N rounds
+    pub fn trim_gemini_tool_messages(body: &mut Value, keep_last_n_rounds: usize) -> bool {
+        if let Some(contents) = body.get_mut("contents").and_then(|c| c.as_array_mut()) {
+            let mut tool_rounds = Vec::new();
+            let mut current_round: Option<OpenAIToolRound> = None;
+
+            for (i, msg) in contents.iter().enumerate() {
+                let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("unknown");
+                let has_function_call = msg.get("parts")
+                    .and_then(|p| p.as_array())
+                    .map(|arr| arr.iter().any(|part| part.get("functionCall").is_some()))
+                    .unwrap_or(false);
+                let has_function_response = msg.get("parts")
+                    .and_then(|p| p.as_array())
+                    .map(|arr| arr.iter().any(|part| part.get("functionResponse").is_some()))
+                    .unwrap_or(false);
+
+                if role == "model" && has_function_call {
+                    if let Some(round) = current_round.take() {
+                        tool_rounds.push(round);
+                    }
+                    current_round = Some(OpenAIToolRound {
+                        _assistant_index: i,
+                        _tool_indices: Vec::new(),
+                        indices: vec![i],
+                    });
+                } else if role == "user" && has_function_response {
+                    if let Some(ref mut round) = current_round {
+                        round._tool_indices.push(i);
+                        round.indices.push(i);
+                    }
+                } else if role == "user" {
+                    if let Some(round) = current_round.take() {
+                        tool_rounds.push(round);
+                    }
+                }
+            }
+            if let Some(round) = current_round {
+                tool_rounds.push(round);
+            }
+
+            // 对保留下来的工具消息部分进行 RTK 日志降噪 (就地修改)
+            for msg in contents.iter_mut() {
+                if let Some(parts) = msg.get_mut("parts").and_then(|p| p.as_array_mut()) {
+                    for part in parts {
+                        if let Some(fr) = part.get_mut("functionResponse") {
+                            if let Some(resp_obj) = fr.get_mut("response").and_then(|r| r.as_object_mut()) {
+                                for (_key, val) in resp_obj.iter_mut() {
+                                    if let Some(s) = val.as_str() {
+                                        let cleaned = RtkCleaner::clean(s, 48);
+                                        if cleaned != s {
+                                            *val = json!(cleaned);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if tool_rounds.len() <= keep_last_n_rounds {
+                return false;
+            }
+
+            let rounds_to_remove = tool_rounds.len() - keep_last_n_rounds;
+            let mut indices_to_remove = std::collections::HashSet::new();
+
+            for round in tool_rounds.iter().take(rounds_to_remove) {
+                for idx in &round.indices {
+                    indices_to_remove.insert(*idx);
+                }
+            }
+
+            let mut removed_count = 0;
+            for idx in (0..contents.len()).rev() {
+                if indices_to_remove.contains(&idx) {
+                    contents.remove(idx);
+                    removed_count += 1;
+                }
+            }
+
+            if removed_count > 0 {
+                info!(
+                    "[ContextManager] [Gemini] Trimmed {} tool messages, kept last {} rounds",
+                    removed_count, keep_last_n_rounds
+                );
+            }
+            removed_count > 0
+        } else {
+            false
+        }
+    }
+
+    /// Compress thinking in Gemini request body, keeping it in a lightweight representation
+    pub fn compress_gemini_thinking_preserve_signature(
+        body: &mut Value,
+        protected_last_n: usize,
+    ) -> bool {
+        if let Some(contents) = body.get_mut("contents").and_then(|c| c.as_array_mut()) {
+            let total_turns = contents.len();
+            if total_turns == 0 {
+                return false;
+            }
+
+            let start_protection_idx = total_turns.saturating_sub(protected_last_n);
+            let mut compressed_count = 0;
+
+            for (i, msg) in contents.iter_mut().enumerate() {
+                if i >= start_protection_idx {
+                    continue;
+                }
+
+                let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("unknown");
+                if role == "model" {
+                    if let Some(parts) = msg.get_mut("parts").and_then(|p| p.as_array_mut()) {
+                        for part in parts {
+                            if let Some(obj) = part.as_object_mut() {
+                                if let Some(thought) = obj.get("thought").and_then(|t| t.as_bool()) {
+                                    if thought {
+                                        if let Some(text) = obj.get_mut("text").and_then(|t| t.as_str()) {
+                                            if text.len() > 10 {
+                                                obj.insert("text".to_string(), json!("..."));
+                                                compressed_count += 1;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            compressed_count > 0
+        } else {
+            false
+        }
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -500,9 +500,8 @@ pub fn transform_claude_request_in(
         || mapped_model.contains("gemini-2.0-pro")
         || (mapped_model.contains("gemini-3-pro") && !mapped_model.contains("-high") && !mapped_model.contains("-low"))
         || (mapped_model.contains("gemini-3.1-pro") && !mapped_model.contains("-high") && !mapped_model.contains("-low"))
-        // [FIX #2167] gemini-3-flash / gemini-3.1-flash 支持 thinking，必须纳入识别范围
-        || mapped_model.contains("gemini-3-flash")
-        || mapped_model.contains("gemini-3.1-flash");
+        // [FIX #2167] gemini-*-flash 支持 thinking，必须纳入识别范围
+        || (mapped_model.contains("gemini") && (mapped_model.contains("flash") || mapped_model.contains("-flash-")));
 
     if is_thinking_enabled && !target_model_supports_thinking {
         tracing::warn!(
@@ -760,9 +759,9 @@ fn should_enable_thinking_by_default(model: &str) -> bool {
         return true;
     }
 
-    // [FEATURE] 为 gemini-3-flash / gemini-3.1-flash 自动开启 thinking
+    // [FEATURE] 为 gemini-*-flash 自动开启 thinking
     // 让 Cherry Studio 等客户端即使未显式传 thinking.type 也能获取思维链内容
-    if model_lower.contains("gemini-3-flash") || model_lower.contains("gemini-3.1-flash") {
+    if model_lower.contains("gemini") && (model_lower.contains("flash") || model_lower.contains("-flash-")) {
         tracing::debug!(
             "[Thinking-Mode] Auto-enabling thinking for Flash model: {}",
             model

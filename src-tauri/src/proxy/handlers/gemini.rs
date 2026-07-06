@@ -13,7 +13,7 @@ use crate::proxy::debug_logger;
 use crate::proxy::handlers::common::{
     apply_retry_strategy, determine_retry_strategy, should_rotate_account,
 };
-use crate::proxy::mappers::gemini::{unwrap_response, wrap_request};
+use crate::proxy::mappers::gemini::{unwrap_response, wrap_request, wrap_request_v2};
 use crate::proxy::server::AppState;
 use crate::proxy::session_manager::SessionManager;
 use crate::proxy::upstream::client::mask_email;
@@ -162,13 +162,14 @@ pub async fn handle_generate(
         // [FIX #765] Pass session_id to wrap_request for signature injection
         // [NEW] 获取完整 Token 对象以注入动态规格 (dynamic > static default > 65535)
         let token_obj = token_manager.get_token_by_id(&account_id);
-        let wrapped_body = wrap_request(
+        let wrapped_body = wrap_request_v2(
             &body,
             &project_id,
             &mapped_model,
             Some(account_id.as_str()),
             Some(&session_id),
             token_obj.as_ref(),
+            Some(&token_manager),
         );
 
         if debug_logger::is_enabled(&debug_cfg) {

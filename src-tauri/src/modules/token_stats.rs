@@ -8,6 +8,7 @@ pub struct TokenStatsAggregated {
     pub period: String, // e.g., "2024-01-15 14:00" for hourly, "2024-01-15" for daily
     pub total_input_tokens: u64,
     pub total_output_tokens: u64,
+    pub total_cached_tokens: u64,
     pub total_tokens: u64,
     pub request_count: u64,
 }
@@ -18,6 +19,7 @@ pub struct AccountTokenStats {
     pub account_email: String,
     pub total_input_tokens: u64,
     pub total_output_tokens: u64,
+    pub total_cached_tokens: u64,
     pub total_tokens: u64,
     pub request_count: u64,
 }
@@ -27,6 +29,7 @@ pub struct AccountTokenStats {
 pub struct TokenStatsSummary {
     pub total_input_tokens: u64,
     pub total_output_tokens: u64,
+    pub total_cached_tokens: u64,
     pub total_tokens: u64,
     pub total_requests: u64,
     pub unique_accounts: u64,
@@ -38,6 +41,7 @@ pub struct ModelTokenStats {
     pub model: String,
     pub total_input_tokens: u64,
     pub total_output_tokens: u64,
+    pub total_cached_tokens: u64,
     pub total_tokens: u64,
     pub request_count: u64,
 }
@@ -75,6 +79,15 @@ fn connect_db() -> Result<Connection, String> {
     Ok(conn)
 }
 
+fn add_column_if_missing(conn: &Connection, table: &str, column_def: &str) -> Result<(), String> {
+    let sql = format!("ALTER TABLE {} ADD COLUMN {}", table, column_def);
+    match conn.execute(&sql, []) {
+        Ok(_) => Ok(()),
+        Err(e) if e.to_string().contains("duplicate column name") => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// Initialize the token stats database
 pub fn init_db() -> Result<(), String> {
     let conn = connect_db()?;
@@ -88,6 +101,7 @@ pub fn init_db() -> Result<(), String> {
             model TEXT NOT NULL,
             input_tokens INTEGER NOT NULL DEFAULT 0,
             output_tokens INTEGER NOT NULL DEFAULT 0,
+            cached_tokens INTEGER NOT NULL DEFAULT 0,
             total_tokens INTEGER NOT NULL DEFAULT 0
         )",
         [],
@@ -114,6 +128,7 @@ pub fn init_db() -> Result<(), String> {
             account_email TEXT NOT NULL,
             total_input_tokens INTEGER NOT NULL DEFAULT 0,
             total_output_tokens INTEGER NOT NULL DEFAULT 0,
+            total_cached_tokens INTEGER NOT NULL DEFAULT 0,
             total_tokens INTEGER NOT NULL DEFAULT 0,
             request_count INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (hour_bucket, account_email)
@@ -121,6 +136,17 @@ pub fn init_db() -> Result<(), String> {
         [],
     )
     .map_err(|e| e.to_string())?;
+
+    add_column_if_missing(
+        &conn,
+        "token_usage",
+        "cached_tokens INTEGER NOT NULL DEFAULT 0",
+    )?;
+    add_column_if_missing(
+        &conn,
+        "token_stats_hourly",
+        "total_cached_tokens INTEGER NOT NULL DEFAULT 0",
+    )?;
 
     Ok(())
 }
@@ -131,6 +157,7 @@ pub fn record_usage(
     model: &str,
     input_tokens: u32,
     output_tokens: u32,
+    cached_tokens: u32,
 ) -> Result<(), String> {
     let conn = connect_db()?;
     let timestamp = chrono::Local::now().timestamp();
@@ -138,21 +165,22 @@ pub fn record_usage(
 
     // Insert into raw usage table
     conn.execute(
-        "INSERT INTO token_usage (timestamp, account_email, model, input_tokens, output_tokens, total_tokens)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![timestamp, account_email, model, input_tokens, output_tokens, total_tokens],
+        "INSERT INTO token_usage (timestamp, account_email, model, input_tokens, output_tokens, cached_tokens, total_tokens)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![timestamp, account_email, model, input_tokens, output_tokens, cached_tokens, total_tokens],
     ).map_err(|e| e.to_string())?;
 
     let hour_bucket = chrono::Local::now().format("%Y-%m-%d %H:00").to_string();
     conn.execute(
-        "INSERT INTO token_stats_hourly (hour_bucket, account_email, total_input_tokens, total_output_tokens, total_tokens, request_count)
-         VALUES (?1, ?2, ?3, ?4, ?5, 1)
+        "INSERT INTO token_stats_hourly (hour_bucket, account_email, total_input_tokens, total_output_tokens, total_cached_tokens, total_tokens, request_count)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1)
          ON CONFLICT(hour_bucket, account_email) DO UPDATE SET
             total_input_tokens = total_input_tokens + ?3,
             total_output_tokens = total_output_tokens + ?4,
-            total_tokens = total_tokens + ?5,
+            total_cached_tokens = total_cached_tokens + ?5,
+            total_tokens = total_tokens + ?6,
             request_count = request_count + 1",
-        params![hour_bucket, account_email, input_tokens, output_tokens, total_tokens],
+        params![hour_bucket, account_email, input_tokens, output_tokens, cached_tokens, total_tokens],
     ).map_err(|e| e.to_string())?;
 
     Ok(())
@@ -169,6 +197,7 @@ pub fn get_hourly_stats(hours: i64) -> Result<Vec<TokenStatsAggregated>, String>
             "SELECT hour_bucket, 
                 SUM(total_input_tokens) as input, 
                 SUM(total_output_tokens) as output,
+                SUM(total_cached_tokens) as cached,
                 SUM(total_tokens) as total,
                 SUM(request_count) as count
          FROM token_stats_hourly 
@@ -184,8 +213,9 @@ pub fn get_hourly_stats(hours: i64) -> Result<Vec<TokenStatsAggregated>, String>
                 period: row.get(0)?,
                 total_input_tokens: row.get(1)?,
                 total_output_tokens: row.get(2)?,
-                total_tokens: row.get(3)?,
-                request_count: row.get(4)?,
+                total_cached_tokens: row.get(3)?,
+                total_tokens: row.get(4)?,
+                request_count: row.get(5)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -208,6 +238,7 @@ pub fn get_daily_stats(days: i64) -> Result<Vec<TokenStatsAggregated>, String> {
             "SELECT substr(hour_bucket, 1, 10) as day_bucket, 
                 SUM(total_input_tokens) as input, 
                 SUM(total_output_tokens) as output,
+                SUM(total_cached_tokens) as cached,
                 SUM(total_tokens) as total,
                 SUM(request_count) as count
          FROM token_stats_hourly 
@@ -223,8 +254,9 @@ pub fn get_daily_stats(days: i64) -> Result<Vec<TokenStatsAggregated>, String> {
                 period: row.get(0)?,
                 total_input_tokens: row.get(1)?,
                 total_output_tokens: row.get(2)?,
-                total_tokens: row.get(3)?,
-                request_count: row.get(4)?,
+                total_cached_tokens: row.get(3)?,
+                total_tokens: row.get(4)?,
+                request_count: row.get(5)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -247,6 +279,7 @@ pub fn get_weekly_stats(weeks: i64) -> Result<Vec<TokenStatsAggregated>, String>
             "SELECT strftime('%Y-W%W', datetime(timestamp, 'unixepoch', 'localtime')) as week_bucket,
                 SUM(input_tokens) as input, 
                 SUM(output_tokens) as output,
+                SUM(cached_tokens) as cached,
                 SUM(total_tokens) as total,
                 COUNT(*) as count
          FROM token_usage 
@@ -262,8 +295,9 @@ pub fn get_weekly_stats(weeks: i64) -> Result<Vec<TokenStatsAggregated>, String>
                 period: row.get(0)?,
                 total_input_tokens: row.get(1)?,
                 total_output_tokens: row.get(2)?,
-                total_tokens: row.get(3)?,
-                request_count: row.get(4)?,
+                total_cached_tokens: row.get(3)?,
+                total_tokens: row.get(4)?,
+                request_count: row.get(5)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -286,6 +320,7 @@ pub fn get_account_stats(hours: i64) -> Result<Vec<AccountTokenStats>, String> {
             "SELECT account_email,
                 SUM(total_input_tokens) as input, 
                 SUM(total_output_tokens) as output,
+                SUM(total_cached_tokens) as cached,
                 SUM(total_tokens) as total,
                 SUM(request_count) as count
          FROM token_stats_hourly 
@@ -301,8 +336,9 @@ pub fn get_account_stats(hours: i64) -> Result<Vec<AccountTokenStats>, String> {
                 account_email: row.get(0)?,
                 total_input_tokens: row.get(1)?,
                 total_output_tokens: row.get(2)?,
-                total_tokens: row.get(3)?,
-                request_count: row.get(4)?,
+                total_cached_tokens: row.get(3)?,
+                total_tokens: row.get(4)?,
+                request_count: row.get(5)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -320,16 +356,25 @@ pub fn get_summary_stats(hours: i64) -> Result<TokenStatsSummary, String> {
     let cutoff = chrono::Local::now() - chrono::Duration::hours(hours);
     let cutoff_bucket = cutoff.format("%Y-%m-%d %H:00").to_string();
 
-    let (total_input, total_output, total, requests): (u64, u64, u64, u64) = conn
-        .query_row(
+    let (total_input, total_output, total_cached, total, requests): (u64, u64, u64, u64, u64) =
+        conn.query_row(
             "SELECT COALESCE(SUM(total_input_tokens), 0),
                 COALESCE(SUM(total_output_tokens), 0),
+                COALESCE(SUM(total_cached_tokens), 0),
                 COALESCE(SUM(total_tokens), 0),
                 COALESCE(SUM(request_count), 0)
          FROM token_stats_hourly 
          WHERE hour_bucket >= ?1",
             [&cutoff_bucket],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
         )
         .map_err(|e| e.to_string())?;
 
@@ -344,6 +389,7 @@ pub fn get_summary_stats(hours: i64) -> Result<TokenStatsSummary, String> {
     Ok(TokenStatsSummary {
         total_input_tokens: total_input,
         total_output_tokens: total_output,
+        total_cached_tokens: total_cached,
         total_tokens: total,
         total_requests: requests,
         unique_accounts,
@@ -359,6 +405,7 @@ pub fn get_model_stats(hours: i64) -> Result<Vec<ModelTokenStats>, String> {
             "SELECT model,
                 SUM(input_tokens) as input,
                 SUM(output_tokens) as output,
+                SUM(cached_tokens) as cached,
                 SUM(total_tokens) as total,
                 COUNT(*) as count
          FROM token_usage
@@ -374,8 +421,9 @@ pub fn get_model_stats(hours: i64) -> Result<Vec<ModelTokenStats>, String> {
                 model: row.get(0)?,
                 total_input_tokens: row.get(1)?,
                 total_output_tokens: row.get(2)?,
-                total_tokens: row.get(3)?,
-                request_count: row.get(4)?,
+                total_cached_tokens: row.get(3)?,
+                total_tokens: row.get(4)?,
+                request_count: row.get(5)?,
             })
         })
         .map_err(|e| e.to_string())?;
