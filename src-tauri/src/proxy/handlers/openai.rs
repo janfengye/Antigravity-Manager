@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use tracing::{debug, error, info}; // Import Engine trait for encode method
 
 use crate::proxy::mappers::openai::{
-    transform_openai_request, transform_openai_response, OpenAIRequest, OpenAIMessage,
+    transform_openai_request, transform_openai_response, OpenAIMessage, OpenAIRequest,
 };
 // use crate::proxy::upstream::client::UpstreamClient; // 通过 state 获取
 use crate::proxy::debug_logger;
@@ -23,6 +23,7 @@ use crate::modules::account;
 use crate::proxy::common::client_adapter::CLIENT_ADAPTERS; // [NEW] Adapter Registry
 use crate::proxy::session_manager::SessionManager;
 use axum::http::HeaderMap;
+use std::collections::VecDeque;
 use tokio::time::Duration;
 
 fn compact_apply_patch_failure_output(
@@ -49,6 +50,59 @@ fn compact_apply_patch_failure_output(
     }
 
     output
+}
+
+fn codex_ledger_from_body(
+    body: &Value,
+) -> (
+    Option<crate::proxy::mappers::openai::interaction_ledger::InteractionLedger>,
+    VecDeque<String>,
+) {
+    let ledger = crate::proxy::mappers::openai::interaction_ledger::build_codex_interaction_ledger(
+        body.get("input"),
+        body.get("instructions").and_then(|v| v.as_str()),
+        body.get("session_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        body.get("previous_response_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+    );
+
+    let mut markers = VecDeque::new();
+    if let Some(ledger) = &ledger {
+        for step in ledger.turns.iter().flat_map(|turn| turn.steps.iter()) {
+            if step.raw_item.get("type").and_then(|v| v.as_str()) != Some("instructions") {
+                markers.push_back(
+                    crate::proxy::mappers::openai::interaction_ledger::step_marker(step),
+                );
+            }
+        }
+    }
+
+    (ledger, markers)
+}
+
+fn strip_codex_step_markers(content: &str) -> String {
+    let mut cleaned = Vec::new();
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("[codex-turn:")
+            && trimmed.contains(" step:")
+            && trimmed.contains(" type:")
+            && trimmed.ends_with(']')
+        {
+            continue;
+        }
+        cleaned.push(line);
+    }
+    cleaned.join("\n").trim().to_string()
+}
+
+fn prefix_with_step_marker(_marker: Option<String>, content: String) -> String {
+    // Step markers are useful in debug ledgers, but must not be visible to
+    // Gemini. If they enter the prompt, the model learns to emit them as text.
+    strip_codex_step_markers(&content)
 }
 
 pub async fn handle_chat_completions(
@@ -132,8 +186,13 @@ pub async fn handle_chat_completions(
                 messages.push(user_msg);
             }
         }
+
+        if let Some(obj) = body.as_object_mut() {
+            obj.remove("instructions");
+        }
     }
 
+    let normalized_interaction_ledger = body.get("_interaction_ledger").cloned();
     let mut openai_req: OpenAIRequest = serde_json::from_value(body)
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid request: {}", e)))?;
 
@@ -168,6 +227,23 @@ pub async fn handle_chat_completions(
     let mut force_rotate = false;
 
     if debug_logger::is_enabled(&debug_cfg) {
+        if let Some(ledger) = normalized_interaction_ledger {
+            let payload = json!({
+                "kind": "normalized_interaction_ledger",
+                "protocol": "openai",
+                "trace_id": trace_id.clone(),
+                "original_model": openai_req.model.clone(),
+                "interaction_ledger": ledger,
+            });
+            debug_logger::write_exchange_payload(
+                &debug_cfg,
+                Some(&trace_id),
+                "normalized_interaction_ledger",
+                &payload,
+            )
+            .await;
+        }
+
         // [FIX] 使用原始 body 副本记录日志，确保不丢失任何字段
         let original_payload = json!({
             "kind": "original_request",
@@ -194,7 +270,8 @@ pub async fn handle_chat_completions(
         debug!("[{}] Client Adapter detected", trace_id);
     }
 
-    let client_tool_names = crate::proxy::mappers::openai::request::extract_client_tool_names(&openai_req.tools);
+    let client_tool_names =
+        crate::proxy::mappers::openai::request::extract_client_tool_names(&openai_req.tools);
 
     // 1. 获取 UpstreamClient (Clone handle)
     let upstream = state.upstream.clone();
@@ -652,8 +729,12 @@ pub async fn handle_chat_completions(
                 }
             }
 
-            let openai_response =
-                transform_openai_response(&gemini_resp, Some(&session_id), message_count, Some(&client_tool_names));
+            let openai_response = transform_openai_response(
+                &gemini_resp,
+                Some(&session_id),
+                message_count,
+                Some(&client_tool_names),
+            );
             if debug_logger::is_enabled(&debug_cfg) {
                 let converted_response = serde_json::to_value(&openai_response)
                     .unwrap_or_else(|e| json!({ "serialization_error": e.to_string() }));
@@ -1115,6 +1196,7 @@ pub async fn handle_completions(
             .and_then(|v| v.as_str())
             .unwrap_or_default();
         let input_items = body.get("input").and_then(|v| v.as_array());
+        let (interaction_ledger, mut step_markers) = codex_ledger_from_body(&body);
 
         let mut messages = Vec::new();
 
@@ -1176,6 +1258,7 @@ pub async fn handle_completions(
         if let Some(items) = input_items {
             for item in items {
                 let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                let step_marker = step_markers.pop_front();
                 if item_type == "custom_tool_call"
                     && item.get("status").and_then(|v| v.as_str()) == Some("incomplete")
                 {
@@ -1224,16 +1307,20 @@ pub async fn handle_completions(
 
                         // 构造消息内容：如果有图像则使用数组格式
                         if image_parts.is_empty() {
+                            let content =
+                                prefix_with_step_marker(step_marker, text_parts.join("\n"));
                             messages.push(json!({
                                 "role": role,
-                                "content": text_parts.join("\n")
+                                "content": content
                             }));
                         } else {
                             let mut content_blocks: Vec<Value> = Vec::new();
-                            if !text_parts.is_empty() {
+                            let marker_text =
+                                prefix_with_step_marker(step_marker, text_parts.join("\n"));
+                            if !marker_text.is_empty() {
                                 content_blocks.push(json!({
                                     "type": "text",
-                                    "text": text_parts.join("\n")
+                                    "text": marker_text
                                 }));
                             }
                             content_blocks.extend(image_parts);
@@ -1306,6 +1393,7 @@ pub async fn handle_completions(
 
                         messages.push(json!({
                             "role": "assistant",
+                            "content": "",
                             "tool_calls": [
                                 {
                                     "id": call_id,
@@ -1369,6 +1457,7 @@ pub async fn handle_completions(
                                 &mut apply_patch_failure_distinct_count,
                             );
                         }
+                        output_str = prefix_with_step_marker(step_marker, output_str);
 
                         messages.push(json!({
                             "role": "tool",
@@ -1384,6 +1473,9 @@ pub async fn handle_completions(
 
         if let Some(obj) = body.as_object_mut() {
             obj.insert("messages".to_string(), json!(messages));
+            if let Some(ledger) = interaction_ledger {
+                obj.insert("_interaction_ledger".to_string(), json!(ledger));
+            }
         }
     } else if let Some(prompt_val) = body.get("prompt") {
         // Legacy OpenAI Style: prompt -> Chat
@@ -1586,6 +1678,11 @@ pub async fn handle_completions(
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
+    let normalized_interaction_ledger = body.get("_interaction_ledger").cloned();
+
+    if let Some(obj) = body.as_object_mut() {
+        obj.remove("instructions");
+    }
 
     let mut openai_req: OpenAIRequest = match serde_json::from_value(body.clone()) {
         Ok(req) => req,
@@ -1614,7 +1711,8 @@ pub async fn handle_completions(
     // [NEW v4.2.0] Context Management & Reasoning Replay
     let session_id_str = SessionManager::extract_openai_session_id(&openai_req);
 
-    let client_tool_names = crate::proxy::mappers::openai::request::extract_client_tool_names(&openai_req.tools);
+    let client_tool_names =
+        crate::proxy::mappers::openai::request::extract_client_tool_names(&openai_req.tools);
 
     crate::proxy::mappers::context_manager::ContextManager::restore_openai_reasoning_content(
         &mut openai_req.messages,
@@ -1637,6 +1735,25 @@ pub async fn handle_completions(
         &*state.custom_mapping.read().await,
     );
     let trace_id = format!("req_{}", chrono::Utc::now().timestamp_subsec_millis());
+    if debug_logger::is_enabled(&debug_cfg) {
+        if let Some(ledger) = normalized_interaction_ledger {
+            let payload = json!({
+                "kind": "normalized_interaction_ledger",
+                "protocol": "openai",
+                "trace_id": trace_id.clone(),
+                "request_path": uri.path(),
+                "original_model": openai_req.model.clone(),
+                "interaction_ledger": ledger,
+            });
+            debug_logger::write_exchange_payload(
+                &debug_cfg,
+                Some(&trace_id),
+                "normalized_interaction_ledger",
+                &payload,
+            )
+            .await;
+        }
+    }
     let token_manager = state.token_manager.clone();
 
     let mut compression_applied = false;
@@ -1649,7 +1766,10 @@ pub async fn handle_completions(
             2_000_000
         };
 
-        let raw_estimated = crate::proxy::mappers::context_manager::ContextManager::estimate_openai_token_usage(&openai_req);
+        let raw_estimated =
+            crate::proxy::mappers::context_manager::ContextManager::estimate_openai_token_usage(
+                &openai_req,
+            );
         let calibrator = crate::proxy::mappers::estimation_calibrator::get_calibrator();
         let mut estimated_usage = calibrator.calibrate(raw_estimated);
         let mut usage_ratio = estimated_usage as f32 / context_limit as f32;
@@ -1665,7 +1785,10 @@ pub async fn handle_completions(
 
         // ===== Layer 1: Tool Message Trimming =====
         if usage_ratio > threshold_l1 && !compression_applied {
-            if crate::proxy::mappers::context_manager::ContextManager::trim_openai_tool_messages(&mut openai_req.messages, 5) {
+            if crate::proxy::mappers::context_manager::ContextManager::trim_openai_tool_messages(
+                &mut openai_req.messages,
+                5,
+            ) {
                 tracing::info!(
                     "[{}] [Layer-1] [OpenAI] Tool trimming triggered (usage: {:.1}%, threshold: {:.1}%)",
                     trace_id, usage_ratio * 100.0, threshold_l1 * 100.0
@@ -1678,7 +1801,10 @@ pub async fn handle_completions(
 
                 tracing::info!(
                     "[{}] [Layer-1] [OpenAI] Compression result: {:.1}% → {:.1}% (saved {} tokens)",
-                    trace_id, usage_ratio * 100.0, new_ratio * 100.0, estimated_usage - new_usage
+                    trace_id,
+                    usage_ratio * 100.0,
+                    new_ratio * 100.0,
+                    estimated_usage - new_usage
                 );
 
                 if new_ratio < 0.7 {
@@ -1738,7 +1864,9 @@ pub async fn handle_completions(
                 Ok(forked_req) => {
                     tracing::info!(
                         "[{}] [Layer-3] [OpenAI] Fork successful: {} → {} messages",
-                        trace_id, openai_req.messages.len(), forked_req.messages.len()
+                        trace_id,
+                        openai_req.messages.len(),
+                        forked_req.messages.len()
                     );
 
                     openai_req = forked_req;
@@ -1760,8 +1888,9 @@ pub async fn handle_completions(
                     );
                     return (
                         StatusCode::BAD_REQUEST,
-                        format!("Context too long and automatic compression failed: {}", e)
-                    ).into_response();
+                        format!("Context too long and automatic compression failed: {}", e),
+                    )
+                        .into_response();
                 }
             }
         }
@@ -2386,7 +2515,12 @@ pub async fn handle_completions(
                 }
             };
 
-            let chat_resp = transform_openai_response(&gemini_resp, Some("session-123"), 1, Some(&client_tool_names));
+            let chat_resp = transform_openai_response(
+                &gemini_resp,
+                Some("session-123"),
+                1,
+                Some(&client_tool_names),
+            );
 
             let is_responses_api = uri.path() == "/v1/responses";
 
@@ -4193,6 +4327,7 @@ fn convert_codex_to_openai_request(mut body: Value) -> Value {
         .and_then(|v| v.as_str())
         .unwrap_or_default();
     let input_items = body.get("input").and_then(|v| v.as_array());
+    let (interaction_ledger, mut step_markers) = codex_ledger_from_body(&body);
 
     let mut messages = Vec::new();
     if !instructions.is_empty() {
@@ -4246,6 +4381,7 @@ fn convert_codex_to_openai_request(mut body: Value) -> Value {
         let mut apply_patch_failure_distinct_count = 0usize;
         for item in items {
             let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            let step_marker = step_markers.pop_front();
             if item_type == "custom_tool_call"
                 && item.get("status").and_then(|v| v.as_str()) == Some("incomplete")
             {
@@ -4280,13 +4416,14 @@ fn convert_codex_to_openai_request(mut body: Value) -> Value {
                     }
 
                     if image_parts.is_empty() {
-                        messages.push(json!({ "role": role, "content": text_parts.join("
-") }));
+                        let content = prefix_with_step_marker(step_marker, text_parts.join("\n"));
+                        messages.push(json!({ "role": role, "content": content }));
                     } else {
                         let mut content_blocks = Vec::new();
-                        if !text_parts.is_empty() {
-                            content_blocks.push(json!({ "type": "text", "text": text_parts.join("
-") }));
+                        let marker_text =
+                            prefix_with_step_marker(step_marker, text_parts.join("\n"));
+                        if !marker_text.is_empty() {
+                            content_blocks.push(json!({ "type": "text", "text": marker_text }));
                         }
                         content_blocks.extend(image_parts);
                         messages.push(json!({ "role": role, "content": content_blocks }));
@@ -4349,6 +4486,7 @@ fn convert_codex_to_openai_request(mut body: Value) -> Value {
 
                     messages.push(json!({
                         "role": "assistant",
+                        "content": "",
                         "tool_calls": [{
                             "id": call_id,
                             "type": "function",
@@ -4408,6 +4546,7 @@ fn convert_codex_to_openai_request(mut body: Value) -> Value {
                             &mut apply_patch_failure_distinct_count,
                         );
                     }
+                    output_str = prefix_with_step_marker(step_marker, output_str);
 
                     messages.push(json!({
                         "role": "tool",
@@ -4423,6 +4562,10 @@ fn convert_codex_to_openai_request(mut body: Value) -> Value {
 
     if let Some(obj) = body.as_object_mut() {
         obj.insert("messages".to_string(), json!(messages));
+        if let Some(ledger) = interaction_ledger {
+            obj.insert("_interaction_ledger".to_string(), json!(ledger));
+        }
+        obj.remove("instructions");
     }
     body
 }
@@ -4829,12 +4972,8 @@ async fn call_openai_gemini_sync(
 
     let token_obj = token_manager.get_token_by_id(&account_id);
     let session_id = format!("bg_sid_{}", chrono::Utc::now().timestamp_subsec_millis());
-    let (gemini_body, _, _, _) = transform_openai_request(
-        request,
-        &project_id,
-        &session_id,
-        token_obj.as_ref(),
-    );
+    let (gemini_body, _, _, _) =
+        transform_openai_request(request, &project_id, &session_id, token_obj.as_ref());
 
     let upstream_url = format!(
         "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
@@ -4888,7 +5027,10 @@ async fn try_compress_openai_with_summary(
         trace_id
     );
 
-    let last_signature = crate::proxy::mappers::context_manager::ContextManager::extract_last_openai_valid_signature(session_id_str);
+    let last_signature =
+        crate::proxy::mappers::context_manager::ContextManager::extract_last_openai_valid_signature(
+            session_id_str,
+        );
 
     if let Some(ref sig) = last_signature {
         debug!(
@@ -4908,10 +5050,12 @@ async fn try_compress_openai_with_summary(
 
     summary_messages.push(OpenAIMessage {
         role: "user".to_string(),
-        content: Some(crate::proxy::mappers::openai::models::OpenAIContent::String(format!(
-            "{}{}",
-            CONTEXT_SUMMARY_PROMPT, signature_instruction
-        ))),
+        content: Some(
+            crate::proxy::mappers::openai::models::OpenAIContent::String(format!(
+                "{}{}",
+                CONTEXT_SUMMARY_PROMPT, signature_instruction
+            )),
+        ),
         refusal: None,
         reasoning_content: None,
         tool_calls: None,
@@ -4973,7 +5117,8 @@ async fn try_compress_openai_with_summary(
 
     if let Some(last_msg) = original_request.messages.last() {
         if last_msg.role == "user" {
-            if !matches!(&last_msg.content, Some(crate::proxy::mappers::openai::models::OpenAIContent::String(s)) if s.contains(CONTEXT_SUMMARY_PROMPT)) {
+            if !matches!(&last_msg.content, Some(crate::proxy::mappers::openai::models::OpenAIContent::String(s)) if s.contains(CONTEXT_SUMMARY_PROMPT))
+            {
                 forked_messages.push(last_msg.clone());
             }
         }

@@ -2,6 +2,8 @@
 // 负责 OpenAI ↔ Gemini 协议转换
 
 pub mod collector; // [NEW]
+pub mod context_blocks;
+pub mod interaction_ledger;
 pub mod models;
 pub mod request;
 pub mod response;

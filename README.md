@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> 专业级 AI 账号管理与协议代理系统 (v4.3.5)
+> 专业级 AI 账号管理与协议代理系统 (v4.3.6)
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
 
@@ -8,7 +8,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.3.5-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.3.6-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -143,7 +143,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **支持的格式**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **高级用法**: 安装指定版本 `curl -fsSL ... | bash -s -- --version 4.3.5`，预览模式 `curl -fsSL ... | bash -s -- --dry-run`
+> **高级用法**: 安装指定版本 `curl -fsSL ... | bash -s -- --version 4.3.6`，预览模式 `curl -fsSL ... | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 如果您已安装 [Homebrew](https://brew.sh/)，也可以通过以下命令安装：
@@ -439,6 +439,22 @@ response = client.chat.completions.create(
 ## 📝 开发者与社区
 
 *   **版本演进 (Changelog)**:
+    *   **v4.3.6 (2026-07-08)**:
+        -   **[核心重构] Request 转换逻辑重构与系统提示词对齐 (Request Conversion Refactor & Prompt Alignment)**:
+            -   **标准 XML 结构对齐**: 重构了 Codex 的多段 `system`/`developer` 提示词转换逻辑，将其自动归类并整理为符合官方 Antigravity 风格的标准 XML 标签结构（包含 `<identity>`、`<user_information>`、`<environment_permissions>`、`<skills>`、`<planning_mode>` 等），并以 `role = "system"` 单个 `part` 形式统一发送。
+            -   **杜绝二次注入**: 在 `convert_codex_to_openai_request` 完成转换后，删除 `body.instructions` 以免在映射器中被二次加载，并在 `request.rs` 层加入规范化去重；检测到 `You are Codex` 身份时自动跳过注入 `You are Antigravity...` 身份。
+            -   **历史裁剪保护**: 优化了 `apply_patch` 相关参数、失败输出等敏感块的裁剪逻辑，避免按消息数量粗暴截断。
+        -   **[核心修复] 解决多轮对话中 Markdown Base64 图片导致的 Token 暴涨与乱码问题 (Markdown Base64 Image Bloat Fix)**:
+            -   **正则拦截提取**: 在 OpenAI 和 Claude 映射器中新增正则拦截器，精准剥离多轮历史文本中残留的 `![image](data:...)` Base64 图片数据，避免上下文 Token 数极度膨胀。
+            -   **原生 Vision 还原**: 将剥离出的 Base64 数据还原为大模型原生的 `inlineData`（Vision 图像块），既极大地节省了 Token 成本，又消除了模型将乱码文本识别为垃圾信息所引发的幻觉。
+        -   **[核心修复] 解决非原生模型（如 Gemini）拒绝调用本地 Skill 技能的问题 (Gemini Skill Invocation Fix)**:
+            -   **提示词劫持引导**: 针对 Gemini 找不到原生文件读取工具（如 `view_file`）且长上下文稀释注意力导致无法调用本地 Skill 的问题，在反代网关层实现了“提示词劫持（Prompt Injection）”机制。
+            -   **警告级指令注入**: 在 `<skills>` 标签闭合前强制注入警告级强逻辑引导，指引模型通过 `shell_command` 调用系统的 `Get-Content` 或 `cat` 命令来读取本地 `SKILL.md`，修复了本地技能链断裂的 Bug。
+        -   **[多轮对话] 引入 Interaction Ledger 恢复多轮对话映射 (Interaction Ledger Integration)**:
+            -   新增 `interaction_ledger.rs` 模块，不再将 Codex 交互直接“拍平”，而是统一管理多步交互，在请求和流式响应中保留完整的 step 与 call 映射，确保多轮对话上下文精准对齐。
+        -   **[模型配置] 修复 Web-Search 许可白名单缺失 gemini-pro-agent 的 Bug**:
+            -   在 web-search 的许可白名单内补充添加了 `gemini-pro-agent` 模型。
+            -   *相关 PR*: 详见 [PR #3230](https://github.com/lbjlaq/Antigravity-Manager/pull/3230)。
     *   **v4.3.5 (2026-07-07)**:
         -   **[核心修复] 解决 OpenAI 格式代理流式响应下思维链内容重复输出的 Bug (OpenAI SSE Streaming Reasoning Duplicate Output Fix)**:
             -   **规整思维链块输出**: 修复了在 OpenAI 兼容模式下（使用 `/v1/chat/completions`）调用 Gemini 3.5 Flash 系列或 Gemini 3.1 Pro Low 等思维模型时，代理层在流式输出中将思考片段同时推送到 `reasoning_content` 和 `content` 的问题。现在，思考过程只输出到 `reasoning_content` 字段中，有效杜绝了客户端 UI 渲染重复的问题。

@@ -965,7 +965,7 @@ fn build_contents(
             if text != "(no content)" {
                 let trimmed = text.trim();
                 if !trimmed.is_empty() {
-                    parts.push(json!({"text": trimmed}));
+                    parts.extend(crate::proxy::mappers::common_utils::parse_markdown_images_to_parts(trimmed));
                 }
             }
         }
@@ -989,7 +989,7 @@ fn build_contents(
                                 }
                             }
 
-                            parts.push(json!({"text": text}));
+                            parts.extend(crate::proxy::mappers::common_utils::parse_markdown_images_to_parts(text));
                             saw_non_thinking = true;
 
                             // 记录最近一次 User 任务文本用于后续比对

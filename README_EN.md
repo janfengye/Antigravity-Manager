@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> Professional AI Account Management & Protocol Proxy System (v4.3.5)
+> Professional AI Account Management & Protocol Proxy System (v4.3.6)
 
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
@@ -9,7 +9,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.3.5-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.3.6-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -134,7 +134,7 @@ Automatically detects your OS, architecture, and package manager — one command
 
 **Linux / macOS:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.3.5/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.3.6/install.sh | bash
 ```
 
 **Windows (PowerShell):**
@@ -144,7 +144,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **Supported formats**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **Advanced usage**: Install a specific version `curl -fsSL ... | bash -s -- --version 4.3.5`，dry-run mode `curl -fsSL ... | bash -s -- --dry-run`
+> **Advanced usage**: Install a specific version `curl -fsSL ... | bash -s -- --version 4.3.6`，dry-run mode `curl -fsSL ... | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 If you have [Homebrew](https://brew.sh/) installed, you can also install via:
@@ -427,6 +427,22 @@ In clients that support OpenAI protocol (e.g., Cherry Studio), you can configure
 ## 📝 Developer & Community
 
 *   **Changelog**:
+    *   **v4.3.6 (2026-07-08)**:
+        -   **[Core Refactor] Request Conversion Refactoring & Prompt Alignment**:
+            -   **Standard XML Structure Alignment**: Refactored the conversion logic of Codex's multi-turn `system`/`developer` prompts, automatically classifying and organizing them into standard XML tag structures matching official Antigravity style (containing `<identity>`, `<user_information>`, `<environment_permissions>`, `<skills>`, `<planning_mode>`, etc.), and sending them uniformly as a single `role = "system"` part.
+            -   **Prevent Secondary Injection**: After `convert_codex_to_openai_request` completes conversion, deleted `body.instructions` to prevent duplicate loading in mappers, and added deduplication at the `request.rs` layer. If a `You are Codex` identity is detected, the injection of `You are Antigravity...` is automatically skipped.
+            -   **History Pruning Protection**: Optimized the pruning logic for `apply_patch` parameters and error outputs to avoid abrupt truncation by message count.
+        -   **[Core Fix] Resolve Markdown Base64 Image Token Inflation & Garbled Outputs (Markdown Base64 Image Bloat Fix)**:
+            -   **Regex Interception & Extraction**: Added regex interceptors in OpenAI and Claude mappers to clean up large `![image](data:...)` Base64 image strings embedded in history texts, avoiding massive token inflation.
+            -   **Native Vision Restoration**: Converted the extracted Base64 data back into native `inlineData` image blocks, saving thousands of tokens and eliminating model hallucinations caused by decoding Base64 text.
+        -   **[Core Fix] Resolve Non-Native Model (e.g. Gemini) Reluctance to Invoke Local Skills (Gemini Skill Invocation Fix)**:
+            -   **Prompt Injection Guidance**: Solved the issue where Gemini fails to read local `SKILL.md` files because it lacks a native `view_file` tool and its attention gets diluted in long context lists.
+            -   **Critical Instruction Injection**: Injected a high-priority warning block right before closing the `<skills>` tag, directing the model to run `Get-Content` or `cat` commands via `shell_command` tool to read the skill files, successfully restoring the local skill execution chain.
+        -   **[Multi-turn Dialog] Introduce Interaction Ledger for Accurate Multi-turn Dialogue (Interaction Ledger Integration)**:
+            -   Added `interaction_ledger.rs` to manage Codex multi-turn steps, preserving the mapping between steps and tool calls in the request and streaming pipelines.
+        -   **[Model Config] Fix Missing gemini-pro-agent in Web-Search Permission Whitelist**:
+            -   Added `gemini-pro-agent` to the web-search capability whitelist.
+            -   *Related PR*: See [PR #3230](https://github.com/lbjlaq/Antigravity-Manager/pull/3230).
     *   **v4.3.5 (2026-07-07)**:
         -   **[Core Fix] Resolve OpenAI Format Proxy SSE Streaming Reasoning Content Duplication**:
             -   **Clean Reasoning Stream**: Fixed an issue where the proxy streamed reasoning/thinking process chunks to both `reasoning_content` and `content` fields when proxying Gemini 3.5 Flash series or Gemini 3.1 Pro Low under the OpenAI chat completions protocol (`/v1/chat/completions`). The thinking process now strictly streams to `reasoning_content`, resolving duplicate message bubble rendering in clients.

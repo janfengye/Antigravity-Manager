@@ -101,6 +101,11 @@ pub fn resolve_request_config(
         || mapped_model.starts_with("gemini-2.0-flash")
         || mapped_model.starts_with("gemini-3-")
         || mapped_model.starts_with("gemini-3.")
+        || mapped_model.starts_with("gemini-3.5-")
+        || mapped_model.starts_with("gemini-pro-")
+        || mapped_model.starts_with("gemini-3-flash")
+        || mapped_model.starts_with("gemini-3.5-flash")
+        || mapped_model.starts_with("agent")
         || mapped_model.contains("claude-3-5-sonnet")
         || mapped_model.contains("claude-3-opus")
         || mapped_model.contains("claude-sonnet")
@@ -934,4 +939,71 @@ pub fn sanitize_system_prompt_for_tokens(text: &str) -> String {
     }
 
     cleaned
+}
+
+
+/// [FIX] Parse markdown base64 images from text and split into Gemini parts
+/// This prevents base64 reflection bloat where generated images are sent back as huge text strings
+pub fn parse_markdown_images_to_parts(text: &str) -> Vec<Value> {
+    let mut parts = Vec::new();
+    // Match ![...](data:image/...;base64,...)
+    if let Ok(re) = regex::Regex::new(r"!\[.*?\]\(data:(image/[^;]+);base64,([a-zA-Z0-9+/=]+)\)") {
+        let mut last_match = 0;
+        
+        for cap in re.captures_iter(text) {
+            let m = cap.get(0).unwrap();
+            
+            // Add preceding text
+            if m.start() > last_match {
+                let preceding = &text[last_match..m.start()];
+                if !preceding.trim().is_empty() {
+                    parts.push(json!({"text": preceding}));
+                }
+            }
+            
+            // Add inlineData image
+            let mime = cap.get(1).unwrap().as_str();
+            let b64 = cap.get(2).unwrap().as_str();
+            parts.push(json!({
+                "inlineData": { "mimeType": mime, "data": b64 }
+            }));
+            
+            last_match = m.end();
+        }
+        
+        // Add remaining text
+        if last_match < text.len() {
+            let remaining = &text[last_match..];
+            if !remaining.trim().is_empty() {
+                parts.push(json!({"text": remaining}));
+            }
+        }
+        
+        if parts.is_empty() && !text.trim().is_empty() {
+            parts.push(json!({"text": text}));
+        }
+        
+        return parts;
+    }
+    
+    if !text.trim().is_empty() {
+        parts.push(json!({"text": text}));
+    }
+    
+    parts
+}
+
+/// [FIX] Inject explicit tool mapping instructions for Gemini to read SKILL.md
+pub fn enhance_gemini_skills_prompt(text: &str) -> String {
+    let mut enhanced = text.to_string();
+    let warning_note = "\n\n**[CRITICAL INSTRUCTION FOR GEMINI - HOW TO READ SKILL.md]**\nYou do NOT have a direct `view_file` or `read_file` tool.\nTo \"open and read its SKILL.md completely\" as instructed above, you MUST use the `shell_command` tool.\nFor example, run the following command in PowerShell:\n`Get-Content -Raw -Path \"C:\\Users\\...\\SKILL.md\"`\nDo NOT guess other non-existent reading tools. You must use `shell_command`!\n\n";
+
+    // Inject before </skills_instructions> or </skills>
+    if enhanced.contains("</skills_instructions>") {
+        enhanced = enhanced.replace("</skills_instructions>", &format!("{}</skills_instructions>", warning_note));
+    } else if enhanced.contains("</skills>") {
+        enhanced = enhanced.replace("</skills>", &format!("{}</skills>", warning_note));
+    }
+
+    enhanced
 }

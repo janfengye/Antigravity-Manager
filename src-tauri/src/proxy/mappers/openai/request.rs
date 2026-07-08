@@ -78,6 +78,25 @@ fn sanitize_system_instruction_for_cache(text: &str) -> String {
     cleaned.trim().to_string()
 }
 
+fn system_instruction_dedupe_key(text: &str) -> String {
+    sanitize_system_instruction_for_cache(text)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn is_apply_patch_tool_name(name: &str) -> bool {
+    name == "apply_patch" || name == "apply_patch_v2"
+}
+
+fn should_preserve_tool_output(tool_name: &str, output: &str) -> bool {
+    is_apply_patch_tool_name(tool_name)
+        || output.contains("apply_patch verification failed")
+        || output.contains("Failed to find expected lines")
+        || output.contains("Failed to find context")
+        || output.contains("Expected update hunk")
+}
+
 fn qualify_namespace_tool_name(namespace_name: &str, child_name: &str) -> String {
     let child = child_name.trim();
     let ns = namespace_name.trim();
@@ -288,6 +307,14 @@ pub fn transform_openai_request(
         })
         .collect();
 
+    // Codex Responses carries `instructions` separately from converted system messages.
+    // Insert it before sanitizing so cache-normalized text can be deduplicated once.
+    if let Some(inst) = &request.instructions {
+        if !inst.trim().is_empty() {
+            system_instructions.insert(0, inst.clone());
+        }
+    }
+
     // [CACHE:L1] 清洗 system instructions 中的动态内容（时间戳/UUID/随机ID）
     // 确保跨请求的前缀字节一致，触发 Gemini 隐式前缀缓存命中
     // 多层级缓存: Layer 1 缓存 sanitized 结果，跨 session 复用
@@ -308,6 +335,11 @@ pub fn transform_openai_request(
             }
         })
         .collect();
+    let mut seen_system_instruction_keys = std::collections::HashSet::new();
+    system_instructions.retain(|inst| {
+        let key = system_instruction_dedupe_key(inst);
+        !key.is_empty() && seen_system_instruction_keys.insert(key)
+    });
     if si_layer_stats.0 > 0 || si_layer_stats.1 > 0 {
         tracing::debug!(
             "[Cache-Opt:L1-SI] hits={} misses={} total={}",
@@ -315,13 +347,6 @@ pub fn transform_openai_request(
             si_layer_stats.1,
             si_layer_stats.0 + si_layer_stats.1
         );
-    }
-
-    // [NEW] 如果请求中包含 instructions 字段，优先使用它，并避免重复
-    if let Some(inst) = &request.instructions {
-        if !inst.is_empty() && !system_instructions.contains(inst) {
-            system_instructions.insert(0, inst.clone());
-        }
     }
 
     // Pre-scan to map tool_call_id to function name (for Codex)
@@ -390,13 +415,14 @@ pub fn transform_openai_request(
 
     // 2. 构建 Gemini contents (过滤掉 system/developer 指令)
     let total_messages = request.messages.len();
+    let recent_message_window = 24usize;
     let contents: Vec<Value> = request
         .messages
         .iter()
         .enumerate()
         .filter(|(_, msg)| msg.role != "system" && msg.role != "developer")
         .map(|(msg_index, msg)| {
-            let is_latest = msg_index >= total_messages.saturating_sub(4);
+            let is_latest = msg_index >= total_messages.saturating_sub(recent_message_window);
             let role = match msg.role.as_str() {
                 "assistant" => "model",
                 "tool" | "function" => "user",
@@ -445,14 +471,14 @@ pub fn transform_openai_request(
                 match content {
                     OpenAIContent::String(s) => {
                         if !s.is_empty() {
-                            parts.push(json!({"text": s}));
+                            parts.extend(crate::proxy::mappers::common_utils::parse_markdown_images_to_parts(s));
                         }
                     }
                     OpenAIContent::Array(blocks) => {
                         for block in blocks {
                             match block {
                                 OpenAIContentBlock::Text { text } => {
-                                    parts.push(json!({"text": text}));
+                                    parts.extend(crate::proxy::mappers::common_utils::parse_markdown_images_to_parts(text));
                                 }
                                 OpenAIContentBlock::ImageUrl { image_url } => {
                                     if image_url.url.starts_with("data:") {
@@ -544,7 +570,8 @@ pub fn transform_openai_request(
                         continue;
                     }
 
-                    if !is_latest && args_str.len() > 1000 {
+                    if !is_latest && args_str.len() > 1000 && !is_apply_patch_tool_name(&func_name)
+                    {
                         args_str = "{\"_truncated\": \"Arguments truncated to save context window.\"}".to_string();
                     }
                     let mut args = serde_json::from_str::<Value>(&args_str).unwrap_or(json!({}));
@@ -592,7 +619,10 @@ pub fn transform_openai_request(
 
                 let content_val = match &msg.content {
                     Some(OpenAIContent::String(s)) => {
-                        if !is_latest && s.len() > 1000 {
+                        if !is_latest
+                            && s.len() > 1000
+                            && !should_preserve_tool_output(final_name, s)
+                        {
                             format!("[Tool output truncated to save context. Original length: {}]", s.len())
                         } else {
                             s.clone()
@@ -1025,38 +1055,46 @@ pub fn transform_openai_request(
         });
     }
 
-    // [NEW] Antigravity 身份指令 (原始简化版)
-    let antigravity_identity = "You are Antigravity, a powerful agentic AI coding assistant designed by the Google Deepmind team working on Advanced Agentic Coding.\n\
+    // Fallback identity only. Codex system/developer prompts are preserved by
+    // context_blocks and must not be overwritten or summarized by the proxy.
+    let fallback_antigravity_identity = "You are Antigravity, a powerful agentic AI coding assistant designed by the Google Deepmind team working on Advanced Agentic Coding.\n\
     You are pair programming with a USER to solve their coding task. The task may require creating a new codebase, modifying or debugging an existing codebase, or simply answering a question.\n\
     **Absolute paths only**\n\
     **Proactiveness**";
+    let fallback_web_search_identity = "You are a search engine bot. You will be given a query from a user. Your task is to search the web for relevant information that will help the user. You MUST perform a web search. Do not respond or interact with the user, please respond as if they typed the query into a search bar.";
+    let fallback_identity = if config.request_type == "web_search" {
+        fallback_web_search_identity
+    } else {
+        fallback_antigravity_identity
+    };
 
-    // [HYBRID] 检查用户是否已提供 Antigravity 身份
-    let user_has_antigravity = system_instructions
-        .iter()
-        .any(|s| s.contains("You are Antigravity"));
-
-    let mut parts = Vec::new();
-
-    // 1. Antigravity 身份 (如果需要, 作为独立 Part 插入)
-    if !user_has_antigravity {
-        parts.push(json!({"text": antigravity_identity}));
-    }
-
-    // 2. [NEW] 注入全局系统提示词 (紧跟 Antigravity 身份之后)
+    // Gemini/Antigravity-style section tags, with Codex prompt text preserved.
+    // This is classification only: no summarization, no skill rewrites, no
+    // injected behavior except the fallback identity when the request has no
+    // system/developer instructions at all.
     let global_prompt_config = crate::proxy::config::get_global_system_prompt();
-    if global_prompt_config.enabled && !global_prompt_config.content.trim().is_empty() {
-        parts.push(json!({"text": global_prompt_config.content}));
-    }
+    let global_prompt =
+        if global_prompt_config.enabled && !global_prompt_config.content.trim().is_empty() {
+            Some(global_prompt_config.content.as_str())
+        } else {
+            None
+        };
+    let mut structured_system_instruction =
+        super::context_blocks::build_official_style_system_instruction(
+            &system_instructions,
+            Some(fallback_identity),
+            global_prompt,
+            &config.request_type,
+            mapped_model,
+            &session_id,
+        );
 
-    // 3. 追加用户指令 (作为独立 Parts)
-    for inst in system_instructions {
-        parts.push(json!({"text": inst}));
-    }
+    // [FIX] Inject explicit tool mapping instructions for Gemini to read SKILL.md
+    structured_system_instruction = crate::proxy::mappers::common_utils::enhance_gemini_skills_prompt(&structured_system_instruction);
 
     inner_request["systemInstruction"] = json!({
-        "role": "user",
-        "parts": parts
+        "role": "system",
+        "parts": [{ "text": structured_system_instruction }]
     });
 
     if config.inject_google_search {
