@@ -41,7 +41,13 @@
     "create_success": "생성 성공",
     "update_success": "업데이트 성공",
     "delete_success": "삭제 성공",
-    "copied": "클립보드에 복사됨"
+    "copied": "클립보드에 복사됨",
+    "empty": "없음",
+    "retry": "다시 시도",
+    "back": "뒤로",
+    "reason": "사유",
+    "show_raw": "원본 보기",
+    "show_parsed": "파싱 결과 보기"
   },
   "nav": {
     "dashboard": "대시보드",
@@ -154,7 +160,11 @@
     "status": {
       "forbidden": "403 금지됨",
       "disabled": "계정 비활성화됨",
-      "proxy_disabled": "프록시 비활성화됨"
+      "proxy_disabled": "프록시 비활성화됨",
+      "validation_required": "확인 필요",
+      "risk_controlled": "위험 제어 / 속도 제한",
+      "oauth_reauth_required": "OAuth 재인증 필요",
+      "violation_blocked": "위반으로 차단됨"
     },
     "error_details": "오류 상세 정보",
     "error_status": "오류 상태",
@@ -309,7 +319,25 @@
       "batch_warmup_title": "일괄 수동 웜업",
       "batch_warmup_msg": "선택한 {{count}}개 계정에 대해 즉시 웜업을 트리거하시겠습니까?"
     },
-    "switch_to_agy": "Switch to Antigravity CLI (agy)"
+    "switch_to_agy": "Switch to Antigravity CLI (agy)",
+    "copy_validation_url": "확인 링크 복사",
+    "validation_url_copied": "확인 링크가 클립보드에 복사되었습니다",
+    "fix_guide": {
+      "title": "터미널 원클릭 해결 가이드 (일부 403 차단 해결)",
+      "step1_title": "🚀 가장 빠른 해결책",
+      "step1_desc": "터미널을 열고 다음 명령어를 실행하여 Google에게 \"본인 확인\"을 시켜주면 대부분의 403 차단을 해결할 수 있습니다:",
+      "step1_li1": "엔터를 눌러 실행하고, 계속할지 물으면 <1>Y</1>를 입력하세요.",
+      "step1_li2": "브라우저가 자동으로 열리면 계정을 선택하고 \"허용\"을 클릭하세요.",
+      "step1_li3": "<1>You are now authenticated</1> 메시지가 보이면 완료된 것입니다!",
+      "step2_title": "🧹 안 될 경우 (캐시 지우기)",
+      "step2_li1_prefix": "다음 명령으로 기존 인증 정보를 지우세요:",
+      "step2_li2_prefix": "그런 다음 다시 로그인하세요:",
+      "tips_title": "💡 자주 묻는 팁",
+      "tip1": "여전히 403이 발생한다면, 터미널에서 먼저 <1>unset GOOGLE_APPLICATION_CREDENTIALS</1>를 실행해 보세요.",
+      "tip2": "프로덕션 환경에서는 안정성과 무인 운영을 위해 <1>서비스 계정(Service Account)</1> JSON 키 사용을 강력히 권장합니다.",
+      "tip3": "그래도 실패한다면 <1>Google Cloud Console</1>에서 Generative Language API의 권한이 정지되었는지 확인하세요. 정지되었다면 계정이 위험 제어(risk control) 상태이므로 72시간 정도 대기한 후 다시 시도해 주세요.",
+      "tip4": "<1>npm install -g @google/gemini-cli</1>를 실행해 볼 수도 있습니다. 오류가 발생하지 않는다면, 앱에서 계정을 삭제하고 다시 인증하는 것만으로 해결될 가능성이 높습니다."
+    }
   },
   "settings": {
     "save": "설정 저장",
@@ -510,7 +538,24 @@
       "support_desc": "이 프로젝트가 도움이 되었다면 커피 한 잔 사주세요! 여러분의 후원은 프로젝트를 유지하는 데 큰 힘이 됩니다.",
       "support_alipay": "알리페이",
       "support_wechat": "위챗 페이",
-      "support_buymeacoffee": "Buy Me a Coffee"
+      "support_buymeacoffee": "Buy Me a Coffee",
+      "telegram": "Telegram 채널",
+      "brew_upgrade": "Homebrew로 업데이트",
+      "brew_upgrading": "업그레이드 중...",
+      "brew_confirm_title": "Homebrew로 업데이트",
+      "brew_confirm_desc": "앱을 업데이트하기 위해 다음 명령을 실행합니다. 업그레이드 후 재시작이 필요합니다.",
+      "brew_quarantine_hint": "업데이트 후 \"App is damaged\" 오류가 표시되면 터미널에서 다음을 실행하세요:",
+      "brew_confirm_btn": "업데이트 시작",
+      "brew_success_title": "업그레이드 완료",
+      "brew_upgrade_success": "Homebrew 업그레이드에 성공했습니다. 새 버전을 적용하려면 앱을 재시작해 주세요.",
+      "brew_restart_btn": "지금 재시작",
+      "brew_restart_failed": "자동 재시작에 실패했습니다. 앱을 수동으로 닫았다가 다시 열어주세요",
+      "brew_upgrade_failed": "Homebrew 업그레이드에 실패했습니다. 터미널에서 직접 실행해 보세요: brew upgrade --cask antigravity-tools",
+      "brew_error_brew_not_found": "Homebrew를 찾을 수 없습니다. brew가 설치되어 있는지 확인해 주세요",
+      "brew_error_brew_exec_failed": "brew 명령 실행에 실패했습니다. 터미널에서 직접 실행해 보세요",
+      "brew_error_brew_timeout": "Homebrew 업그레이드가 시간 초과되었습니다(3분). 터미널에서 직접 실행해 보세요: brew upgrade --cask antigravity-tools",
+      "brew_error_brew_already_latest": "이미 최신 버전이며 업그레이드가 필요하지 않습니다",
+      "brew_error_brew_not_supported": "이 플랫폼에서는 Homebrew 업데이트를 지원하지 않습니다"
     },
     "advanced_thinking": {
       "title": "고급 사고 및 전역 설정",
@@ -523,12 +568,20 @@
       "mode": {
         "auto": "자동 제한",
         "passthrough": "패스스루",
-        "custom": "사용자 정의"
+        "custom": "사용자 정의",
+        "adaptive": "적응형"
       },
       "auto_hint": "자동 모드: Flash 모델, -thinking 접미사 모델 및 웹 검색이 활성화된 요청에 대해 API 오류를 방지하기 위해 자동으로 24576으로 제한합니다.",
       "passthrough_warning": "패스스루: 호출자의 원래 값을 직접 사용하며, 높은 값은 실패로 이어질 수 있습니다.",
       "custom_value_hint": "권장: 24576 (Flash) 또는 51200 (성능)",
-      "tokens": "tokens"
+      "tokens": "tokens",
+      "effort_label": "사고 강도",
+      "effort": {
+        "low": "낮음",
+        "medium": "중간",
+        "high": "높음"
+      },
+      "adaptive_hint": "적응형 모드: 모델이 작업 복잡도에 따라 사고 예산을 자동으로 조정합니다. Claude 4.6 이상에 권장합니다."
     },
     "image_thinking_mode": {
       "title": "이미지 사고 모드 (Image Thinking Mode)",
@@ -546,6 +599,24 @@
       "placeholder": "전역 시스템 프롬프트를 입력하세요...\n예: 당신은 React와 Rust에 능숙한 시니어 풀스택 개발자입니다. 한국어로 답변해 주세요.",
       "char_count": "{{count}} 자",
       "long_prompt_warning": "프롬프트가 너무 깁니다 (2000자 초과). 컨텍스트 공간을 많이 차지할 수 있습니다."
+    },
+    "debug": {
+      "title": "디버그 콘솔",
+      "desc": "디버깅을 위해 애플리케이션 로그를 실시간으로 확인합니다",
+      "enabled": "활성화됨",
+      "disabled": "비활성화됨",
+      "disabled_hint": "디버그 콘솔이 꺼져 있습니다",
+      "disabled_desc": "활성화하면 애플리케이션 로그 기록을 시작합니다",
+      "console_title": "디버그 콘솔",
+      "console_desc": "실시간 애플리케이션 로그를 확인하여 문제를 해결합니다.",
+      "enable_desc": "활성화하면 백엔드 로그를 수집하여 표시합니다.",
+      "open_btn": "콘솔 열기",
+      "debug_logging": "디버그 로깅",
+      "debug_logging_desc": "활성화하면 전체 요청 및 응답 체인을 기록합니다. 문제 해결 시에만 활성화하는 것을 권장합니다."
+    },
+    "branding": {
+      "title": "Antigravity Tools",
+      "subtitle": "전문적인 계정 관리"
     }
   },
   "tray": {
@@ -739,7 +810,66 @@
         "context_compression_threshold_l2": "L2 압축 임계값 (Thinking 압축)",
         "context_compression_threshold_l2_tooltip": "서명을 보존하면서 초기 생각 블록을 압축합니다. 권장: 0.55 (55%)",
         "context_compression_threshold_l3": "L3 압축 임계값 (요약 피벗)",
-        "context_compression_threshold_l3_tooltip": "궁극적인 재설정: XML 상태 요약을 생성하고 새 세션으로 피벗합니다. 가장 효율적인 토큰 사용. 권장: 0.7 (70%)"
+        "context_compression_threshold_l3_tooltip": "궁극적인 재설정: XML 상태 요약을 생성하고 새 세션으로 피벗합니다. 가장 효율적인 토큰 사용. 권장: 0.7 (70%)",
+        "compression_level_label": "컨텍스트 압축 레벨",
+        "compression_level_tooltip": "활성화할 컨텍스트 압축 레벨을 선택하세요. 로그 정리와 언어 순화는 30k 토큰 제한과 무관하게 항상 작동합니다.",
+        "compression_level_desc": "낮음: 터미널 출력 로그만 정리/중복 제거; 중간: Caveman 스타일 자연어 순화 추가; 높음: 매우 큰 컨텍스트에 대해 L1-L3 단계별 임계값 재설정을 추가로 활성화합니다.",
+        "level_disabled": "비활성화",
+        "level_low": "낮음 (로그 중복 제거)",
+        "level_medium": "중간 (로그 + 언어)",
+        "level_high": "높음 (동적 재설정)"
+      },
+      "opencode_sync": {
+        "card_title": "OpenCode",
+        "status": {
+          "detecting": "감지 중...",
+          "installed": "설치됨 ({{version}})",
+          "not_installed": "설치되지 않음",
+          "synced": "동기화됨",
+          "not_synced": "동기화되지 않음",
+          "current_base_url": "현재 기본 URL"
+        },
+        "sync_accounts": "계정을 antigravity-accounts.json에 동기화",
+        "btn_sync": "설정 동기화",
+        "btn_view": "설정 보기",
+        "btn_restore": "복원",
+        "btn_restore_backup": "백업 복원",
+        "btn_clear": "설정 지우기",
+        "clear_confirm_title": "설정 삭제 확인",
+        "clear_confirm_message": "OpenCode 설정을 지우시겠습니까? 설정 파일이 삭제됩니다.",
+        "toast": {
+          "config_missing": "먼저 API 키를 생성하고 서비스를 시작해 주세요",
+          "sync_success": "OpenCode 설정이 성공적으로 동기화되었습니다",
+          "sync_error": "OpenCode 동기화 실패: {{error}}",
+          "clear_success": "OpenCode 설정이 삭제되었습니다",
+          "clear_error": "OpenCode 설정 삭제 실패: {{error}}"
+        },
+        "modal": {
+          "view_title": "OpenCode 설정 보기",
+          "copy_success": "설정이 복사되었습니다"
+        },
+        "sync_confirm_title": "동기화 확인",
+        "sync_confirm_message": "현재 프록시 설정에 따라 OpenCode 설정이 덮어쓰기됩니다. 계속하시겠습니까?",
+        "restore_confirm": "OpenCode를 기본 설정으로 복원하시겠습니까?",
+        "restore_backup_confirm": "백업에서 OpenCode 설정을 복원하시겠습니까?",
+        "modal_title": "OpenCode 모델 선택",
+        "select_models": "동기화할 모델 선택",
+        "auth_plugin_warning": "opencode-antigravity-auth 플러그인이 감지되었습니다. 동기화는 antigravity-manager provider만 생성하며 google provider/플러그인은 덮어쓰지 않습니다.",
+        "btn_confirm_sync": "동기화 확인",
+        "custom_base_url_label": "사용자 지정 Manager BaseURL",
+        "custom_base_url_desc": "Docker Compose 네트워킹용",
+        "custom_base_url_reset": "초기화"
+      },
+      "droid_sync": {
+        "modal_title": "Droid에 모델 추가",
+        "modal_desc": "선택한 모델이 settings.json에 customModels로 추가됩니다",
+        "selected": "선택됨",
+        "btn_confirm_sync": "선택한 모델 추가",
+        "toast": {
+          "no_models_selected": "최소 하나 이상의 모델을 선택해 주세요",
+          "sync_success_count": "Droid에 {{count}}개 모델을 추가했습니다",
+          "sync_error": "동기화 실패: {{error}}"
+        }
       }
     },
     "cloudflared": {
@@ -826,7 +956,10 @@
       "pro_image_1_1": "이미지 생성 (1:1)",
       "claude_sonnet": "코드 추론 (Sonnet)",
       "claude_sonnet_thinking": "생각의 사슬 (Thinking)",
-      "claude_opus_thinking": "가장 강력한 추론 (Opus Thinking)"
+      "claude_opus_thinking": "가장 강력한 추론 (Opus Thinking)",
+      "gemini_2_5_flash": "빠른 모델 (2.5 Flash)",
+      "gemini_2_5_pro": "고성능 (2.5 Pro)",
+      "claude_4_6": "최신 추론 모델 (4.6)"
     },
     "mapping": {
       "title": "Claude Code 모델 매핑",
@@ -920,7 +1053,11 @@
       "original_id": "원본 ID",
       "route_to": "라우팅 대상",
       "select_target_model": "대상 모델 선택",
-      "original_placeholder": "원본 (예: gpt-4 또는 gpt-4*)"
+      "original_placeholder": "원본 (예: gpt-4 또는 gpt-4*)",
+      "gemini3_group_label": "Gemini 3 (권장)",
+      "gemini3_option_high": "gemini-3.1-pro-high (고품질)",
+      "gemini3_option_low": "gemini-3.1-pro-low (균형)",
+      "gemini3_option_flash": "gemini-3-flash (빠름)"
     },
     "multi_protocol": {
       "title": "다중 프로토콜 지원",
@@ -970,7 +1107,20 @@
         "sync_error": "동기화 실패: {{error}}"
       },
       "sync_confirm_title": "동기화 확인",
-      "sync_confirm_message": "{{name}} 구성을 동기화할 준비가 되었습니다. ⚠️ 경고: 이 작업은 기존 로컬 구성 파일(예: 로그인 토큰, API 키)을 덮어씁니다. 계속하시겠습니까?"
+      "sync_confirm_message": "{{name}} 구성을 동기화할 준비가 되었습니다. ⚠️ 경고: 이 작업은 기존 로컬 구성 파일(예: 로그인 토큰, API 키)을 덮어씁니다. 계속하시겠습니까?",
+      "model_select": "모델 선택"
+    },
+    "error": {
+      "load_failed": "설정을 불러오지 못했습니다"
+    },
+    "models": {
+      "flash": "초고속",
+      "flash_thinking": "사고 능력",
+      "pro_high": "최고의 추론",
+      "pro_low": "낮은 할당량",
+      "sonnet": "코드 추론",
+      "sonnet_thinking": "생각의 사슬",
+      "opus_thinking": "가장 강력한 사고"
     }
   },
   "monitor": {
@@ -1030,6 +1180,34 @@
     "dialog": {
       "clear_title": "프록시 로그 지우기",
       "clear_msg": "모든 프록시 로그를 지우시겠습니까? 이 작업은 되돌릴 수 없습니다."
+    },
+    "network": {
+      "title": "네트워크 모니터",
+      "open": "네트워크 모니터 열기",
+      "requests_count": "{{count}}개 요청",
+      "start_recording": "기록 시작",
+      "stop_recording": "기록 중지",
+      "clear_requests": "요청 지우기",
+      "empty": "기록된 요청이 없습니다",
+      "waiting": "응답 대기 중...",
+      "badge_error": "오류",
+      "table": {
+        "status": "상태",
+        "command": "명령",
+        "time": "시간",
+        "duration": "소요 시간"
+      },
+      "sections": {
+        "general": "일반",
+        "request_args": "요청 인자",
+        "error_details": "오류 상세 정보",
+        "response": "응답"
+      },
+      "fields": {
+        "status": "상태",
+        "start_time": "시작 시간",
+        "duration": "소요 시간"
+      }
     }
   },
   "update_notification": {
@@ -1042,7 +1220,10 @@
     "toast": {
       "not_ready": "자동 업데이트 패키지가 준비되지 않았습니다. 다운로드 페이지로 이동합니다...",
       "failed": "자동 업데이트에 실패했습니다. 다운로드 페이지로 이동합니다..."
-    }
+    },
+    "restart_prompt": "업데이트가 다운로드되어 설치할 준비가 되었습니다. 지금 재시작하시겠습니까?",
+    "btn_restart": "재시작",
+    "btn_later": "나중에"
   },
   "login": {
     "title": "안전한 액세스 제어",

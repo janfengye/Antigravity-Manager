@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> 专业级 AI 账号管理与协议代理系统 (v4.3.6)
+> 专业级 AI 账号管理与协议代理系统 (v4.3.7)
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
 
@@ -8,7 +8,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.3.6-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.3.7-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -143,7 +143,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **支持的格式**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **高级用法**: 安装指定版本 `curl -fsSL ... | bash -s -- --version 4.3.6`，预览模式 `curl -fsSL ... | bash -s -- --dry-run`
+> **高级用法**: 安装指定版本 `curl -fsSL ... | bash -s -- --version 4.3.7`，预览模式 `curl -fsSL ... | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 如果您已安装 [Homebrew](https://brew.sh/)，也可以通过以下命令安装：
@@ -439,6 +439,12 @@ response = client.chat.completions.create(
 ## 📝 开发者与社区
 
 *   **版本演进 (Changelog)**:
+    *   **v4.3.7 (2026-07-09)**:
+        -   **[本地化] 补全韩语 (ko) 本地化词条 (Korean Translation Completion)**:
+            -   **补全 149 个缺失词条**: 在 `src/locales/ko.json` 中补全了自 v4.3.0 以来新增的 149 个翻译键值对，彻底消除韩语界面下部分词条回退至英文的问题。
+            -   **覆盖关键功能模块**: 覆盖包括终端 403 自动修复指南、Homebrew 升级流程、深度思考模型预算（低/中/高/自适应）、OpenCode/Droid 同步配置、Gemini 3 路由映射、网络监视器面板、应用自动更新提示等。
+            -   **保持翻译一致性**: 翻译质量与原有韩语词条语调（-습니다/-니다）一致，并保证了 `{{count}}` 等关键插值占位符未被破坏。
+            -   *相关 PR*: 详见 [PR #3233](https://github.com/lbjlaq/Antigravity-Manager/pull/3233)，由贡献者 [@moduvoice](https://github.com/moduvoice) 提交。
     *   **v4.3.6 (2026-07-08)**:
         -   **[核心重构] Request 转换逻辑重构与系统提示词对齐 (Request Conversion Refactor & Prompt Alignment)**:
             -   **标准 XML 结构对齐**: 重构了 Codex 的多段 `system`/`developer` 提示词转换逻辑，将其自动归类并整理为符合官方 Antigravity 风格的标准 XML 标签结构（包含 `<identity>`、`<user_information>`、`<environment_permissions>`、`<skills>`、`<planning_mode>` 等），并以 `role = "system"` 单个 `part` 形式统一发送。

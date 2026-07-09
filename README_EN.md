@@ -1,15 +1,15 @@
 # Antigravity Tools 🚀
-> Professional AI Account Management & Protocol Proxy System (v4.3.6)
+> Professional AI Account Management & Protocol Proxy System (v4.3.7)
 
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
 
-  <h3>Your Personal High-Performance AI Dispatch Gateway</h3>
-  <p>Seamlessly proxy Gemini & Claude. OpenAI-Compatible. Privacy First.</p>
+  <h3>Your Personal High-Performance AI Gateway</h3>
+  <p>More than account management—the ultimate solution to breaking down API call barriers.</p>
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.3.6-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.3.7-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -134,7 +134,7 @@ Automatically detects your OS, architecture, and package manager — one command
 
 **Linux / macOS:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.3.6/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.3.7/install.sh | bash
 ```
 
 **Windows (PowerShell):**
@@ -144,7 +144,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **Supported formats**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **Advanced usage**: Install a specific version `curl -fsSL ... | bash -s -- --version 4.3.6`，dry-run mode `curl -fsSL ... | bash -s -- --dry-run`
+> **Advanced usage**: Install a specific version `curl -fsSL ... | bash -s -- --version 4.3.7`，dry-run mode `curl -fsSL ... | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 If you have [Homebrew](https://brew.sh/) installed, you can also install via:
@@ -427,6 +427,12 @@ In clients that support OpenAI protocol (e.g., Cherry Studio), you can configure
 ## 📝 Developer & Community
 
 *   **Changelog**:
+    *   **v4.3.7 (2026-07-09)**:
+        -   **[i18n] Complete Korean (ko) Translations**:
+            -   **Filled 149 Missing Keys**: Updated `src/locales/ko.json` to fill in 149 translation keys added since v4.3.0, ensuring a fully localized UI for Korean-speaking users.
+            -   **Addressed Key Areas**: Covered Terminal 403 self-fix guide, Homebrew update flow, thinking budget options (low/medium/high/adaptive effort), OpenCode and Droid sync options, Gemini 3 routing, network monitor details, and auto-update prompts.
+            -   **Maintained Consistency**: Kept the formal polite tone (`-습니다/-니다`) consistent with the existing translation, ensuring all dynamic interpolation placeholders are intact.
+            -   *Related PR*: See [PR #3233](https://github.com/lbjlaq/Antigravity-Manager/pull/3233), contributed by [@moduvoice](https://github.com/moduvoice).
     *   **v4.3.6 (2026-07-08)**:
         -   **[Core Refactor] Request Conversion Refactoring & Prompt Alignment**:
             -   **Standard XML Structure Alignment**: Refactored the conversion logic of Codex's multi-turn `system`/`developer` prompts, automatically classifying and organizing them into standard XML tag structures matching official Antigravity style (containing `<identity>`, `<user_information>`, `<environment_permissions>`, `<skills>`, `<planning_mode>`, etc.), and sending them uniformly as a single `role = "system"` part.
