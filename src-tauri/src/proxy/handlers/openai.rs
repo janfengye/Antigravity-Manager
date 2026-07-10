@@ -16,6 +16,7 @@ use crate::proxy::server::AppState;
 use crate::proxy::upstream::client::mask_email;
 
 const MAX_RETRY_ATTEMPTS: usize = 3;
+const CODEX_VISIBLE_THOUGHT_MESSAGE_PREFIX: &str = "msg_thought_";
 use super::common::{
     apply_retry_strategy, determine_retry_strategy, should_rotate_account, RetryStrategy,
 };
@@ -25,6 +26,133 @@ use crate::proxy::session_manager::SessionManager;
 use axum::http::HeaderMap;
 use std::collections::VecDeque;
 use tokio::time::Duration;
+
+/// Return true only when a streamed chunk contains an actual error event.
+///
+/// Responses lifecycle envelopes legitimately contain `"error": null`, and
+/// assistant text may also mention the word "error". A substring search would
+/// misclassify both as failures and rotate otherwise healthy accounts.
+fn stream_chunk_has_error_event(bytes: &[u8]) -> bool {
+    String::from_utf8_lossy(bytes).lines().any(|line| {
+        let Some(data) = line.trim_start().strip_prefix("data:") else {
+            return false;
+        };
+        let Ok(payload) = serde_json::from_str::<Value>(data.trim()) else {
+            return false;
+        };
+
+        matches!(
+            payload.get("type").and_then(Value::as_str),
+            Some("error" | "response.failed")
+        ) || payload.get("error").is_some_and(|error| !error.is_null())
+    })
+}
+
+/// Visible Codex commentary is part of the local transcript, not Gemini
+/// conversation history. Codex omits output item IDs when it replays a task, so
+/// `phase=commentary` is the durable discriminator. The text-prefix fallback
+/// heals tasks written by builds that accidentally finalized a thought blob as
+/// a normal answer.
+fn is_codex_transcript_only_assistant_message(item: &Value, text: &str) -> bool {
+    if item.get("type").and_then(Value::as_str) != Some("message")
+        || item.get("role").and_then(Value::as_str) != Some("assistant")
+    {
+        return false;
+    }
+
+    item.get("phase").and_then(Value::as_str) == Some("commentary")
+        || item
+            .get("id")
+            .and_then(Value::as_str)
+            .is_some_and(|id| id.starts_with(CODEX_VISIBLE_THOUGHT_MESSAGE_PREFIX))
+        || text.trim_start().starts_with("**Thinking**")
+}
+
+#[cfg(test)]
+mod stream_peek_tests {
+    use super::is_codex_transcript_only_assistant_message;
+    use super::stream_chunk_has_error_event;
+    use serde_json::json;
+
+    #[test]
+    fn responses_created_with_null_error_is_not_an_error_event() {
+        let chunk = br#"event: response.created
+data: {"type":"response.created","response":{"status":"in_progress","error":null}}
+
+"#;
+        assert!(!stream_chunk_has_error_event(chunk));
+    }
+
+    #[test]
+    fn response_failed_is_an_error_event() {
+        let chunk = br#"event: response.failed
+data: {"type":"response.failed","response":{"status":"failed","error":{"code":"upstream_error"}}}
+
+"#;
+        assert!(stream_chunk_has_error_event(chunk));
+    }
+
+    #[test]
+    fn legacy_top_level_error_is_an_error_event() {
+        let chunk = br#"data: {"error":{"message":"quota exceeded"}}
+
+"#;
+        assert!(stream_chunk_has_error_event(chunk));
+    }
+
+    #[test]
+    fn normal_text_containing_error_is_not_an_error_event() {
+        let chunk = br#"data: {"type":"response.output_text.delta","delta":"The JSON key is called \"error\"."}
+
+"#;
+        assert!(!stream_chunk_has_error_event(chunk));
+    }
+
+    #[test]
+    fn identifies_codex_transcript_only_assistant_messages() {
+        let thought = json!({
+            "type": "message",
+            "id": "msg_thought_abc_0",
+            "role": "assistant",
+            "phase": "commentary",
+            "content": [{"type": "output_text", "text": "thinking"}],
+        });
+        let normal_commentary = json!({
+            "type": "message",
+            "role": "assistant",
+            "phase": "commentary",
+            "content": [{"type": "output_text", "text": "progress"}],
+        });
+        let contaminated_final = json!({
+            "type": "message",
+            "role": "assistant",
+            "phase": "final_answer",
+            "content": [{"type": "output_text", "text": "**Thinking**\n\nlegacy thought"}],
+        });
+        let clean_final = json!({
+            "type": "message",
+            "role": "assistant",
+            "phase": "final_answer",
+            "content": [{"type": "output_text", "text": "done"}],
+        });
+
+        assert!(is_codex_transcript_only_assistant_message(
+            &thought, "thinking"
+        ));
+        assert!(is_codex_transcript_only_assistant_message(
+            &normal_commentary,
+            "progress"
+        ));
+        assert!(is_codex_transcript_only_assistant_message(
+            &contaminated_final,
+            "**Thinking**\n\nlegacy thought"
+        ));
+        assert!(!is_codex_transcript_only_assistant_message(
+            &clean_final,
+            "done"
+        ));
+    }
+}
 
 fn compact_apply_patch_failure_output(
     output: String,
@@ -527,7 +655,7 @@ pub async fn handle_chat_completions(
                             }
 
                             // Check for error events
-                            if text.contains("\"error\"") {
+                            if stream_chunk_has_error_event(&bytes) {
                                 tracing::warn!("[OpenAI] Error detected during peek, retrying...");
                                 last_error = "Error event during peek".to_string();
                                 retry_this_account = true;
@@ -1254,7 +1382,9 @@ pub async fn handle_completions(
         let mut seen_apply_patch_failures = std::collections::HashSet::new();
         let mut apply_patch_failure_distinct_count = 0usize;
 
-        // Pass 2: Map Input Items to Messages
+        // Pass 2: Map durable conversation items to Gemini messages. Visible
+        // assistant commentary stays in Codex's local transcript and must not
+        // be replayed as model history.
         if let Some(items) = input_items {
             for item in items {
                 let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
@@ -1305,18 +1435,22 @@ pub async fn handle_completions(
                             }
                         }
 
+                        let joined_text = text_parts.join("\n");
+                        if is_codex_transcript_only_assistant_message(item, &joined_text) {
+                            continue;
+                        }
+
                         // 构造消息内容：如果有图像则使用数组格式
                         if image_parts.is_empty() {
-                            let content =
-                                prefix_with_step_marker(step_marker, text_parts.join("\n"));
-                            messages.push(json!({
+                            let content = prefix_with_step_marker(step_marker, joined_text);
+                            let message = json!({
                                 "role": role,
                                 "content": content
-                            }));
+                            });
+                            messages.push(message);
                         } else {
                             let mut content_blocks: Vec<Value> = Vec::new();
-                            let marker_text =
-                                prefix_with_step_marker(step_marker, text_parts.join("\n"));
+                            let marker_text = prefix_with_step_marker(step_marker, joined_text);
                             if !marker_text.is_empty() {
                                 content_blocks.push(json!({
                                     "type": "text",
@@ -1324,10 +1458,11 @@ pub async fn handle_completions(
                                 }));
                             }
                             content_blocks.extend(image_parts);
-                            messages.push(json!({
+                            let message = json!({
                                 "role": role,
                                 "content": content_blocks
-                            }));
+                            });
+                            messages.push(message);
                         }
                     }
                     "function_call" | "custom_tool_call" | "local_shell_call"
@@ -1391,7 +1526,7 @@ pub async fn handle_completions(
                             }
                         }
 
-                        messages.push(json!({
+                        let message = json!({
                             "role": "assistant",
                             "content": "",
                             "tool_calls": [
@@ -1404,7 +1539,8 @@ pub async fn handle_completions(
                                     }
                                 }
                             ]
-                        }));
+                        });
+                        messages.push(message);
                     }
                     "function_call_output" | "custom_tool_call_output" => {
                         let call_id = item
@@ -1470,7 +1606,6 @@ pub async fn handle_completions(
                 }
             }
         }
-
         if let Some(obj) = body.as_object_mut() {
             obj.insert("messages".to_string(), json!(messages));
             if let Some(ledger) = interaction_ledger {
@@ -2168,7 +2303,7 @@ pub async fn handle_completions(
                                 {
                                     continue;
                                 }
-                                if text.contains("\"error\"") {
+                                if stream_chunk_has_error_event(&bytes) {
                                     last_error = "Error event during peek".to_string();
                                     retry_this_account = true;
                                     break;
@@ -2283,7 +2418,7 @@ pub async fn handle_completions(
                                 {
                                     continue;
                                 }
-                                if text.contains("\"error\"") {
+                                if stream_chunk_has_error_event(&bytes) {
                                     last_error = "Error event in internal stream".to_string();
                                     retry_this_account = true;
                                     break;
@@ -3849,6 +3984,9 @@ async fn handle_websocket_session(mut socket: WebSocket, headers: HeaderMap, sta
         let mut translation_state = TranslationState {
             response_id: format!("resp-{}", &Uuid::new_v4().to_string()[..24]),
             item_id: format!("item-{}", &Uuid::new_v4().to_string()[..16]),
+            message_output_index: None,
+            next_output_index: 0,
+            tool_output_indices: std::collections::HashMap::new(),
             message_item_added: false,
             content_part_added: false,
             accumulated_text: String::new(),
@@ -4573,6 +4711,9 @@ fn convert_codex_to_openai_request(mut body: Value) -> Value {
 struct TranslationState {
     response_id: String,
     item_id: String,
+    message_output_index: Option<u32>,
+    next_output_index: u32,
+    tool_output_indices: std::collections::HashMap<u32, u32>,
     message_item_added: bool,
     content_part_added: bool,
     accumulated_text: String,
@@ -4596,11 +4737,20 @@ async fn translate_openai_chunk_to_ws(
             if let Some(delta) = choice.get("delta") {
                 if let Some(reasoning) = delta.get("reasoning_content").and_then(|v| v.as_str()) {
                     if !reasoning.is_empty() {
+                        let message_output_index = match state.message_output_index {
+                            Some(idx) => idx,
+                            None => {
+                                let idx = state.next_output_index;
+                                state.next_output_index += 1;
+                                state.message_output_index = Some(idx);
+                                idx
+                            }
+                        };
                         let reasoning_ev = json!({
                             "type": "response.reasoning_summary_text.delta",
                             "sequence_number": 0,
                             "item_id": &state.item_id,
-                            "output_index": 0,
+                            "output_index": message_output_index,
                             "summary_index": 0,
                             "delta": reasoning
                         });
@@ -4609,11 +4759,12 @@ async fn translate_openai_chunk_to_ws(
                         if !state.message_item_added {
                             let item_added = json!({
                                 "type": "response.output_item.added",
-                                "output_index": 0,
+                                "output_index": message_output_index,
                                 "item": {
                                     "id": &state.item_id,
                                     "type": "message",
                                     "role": "assistant",
+                                    "phase": "commentary",
                                     "status": "in_progress",
                                     "content": []
                                 }
@@ -4623,7 +4774,7 @@ async fn translate_openai_chunk_to_ws(
                             let part_added = json!({
                                 "type": "response.content_part.added",
                                 "item_id": &state.item_id,
-                                "output_index": 0,
+                                "output_index": message_output_index,
                                 "content_index": 0,
                                 "part": {
                                     "type": "output_text",
@@ -4638,7 +4789,7 @@ async fn translate_openai_chunk_to_ws(
                         let delta_ev = json!({
                             "type": "response.output_text.delta",
                             "item_id": &state.item_id,
-                            "output_index": 0,
+                            "output_index": message_output_index,
                             "content_index": 0,
                             "delta": reasoning
                         });
@@ -4649,14 +4800,24 @@ async fn translate_openai_chunk_to_ws(
 
                 if let Some(content) = delta.get("content").and_then(|v| v.as_str()) {
                     if !content.is_empty() {
+                        let message_output_index = match state.message_output_index {
+                            Some(idx) => idx,
+                            None => {
+                                let idx = state.next_output_index;
+                                state.next_output_index += 1;
+                                state.message_output_index = Some(idx);
+                                idx
+                            }
+                        };
                         if !state.message_item_added {
                             let item_added = json!({
                                 "type": "response.output_item.added",
-                                "output_index": 0,
+                                "output_index": message_output_index,
                                 "item": {
                                     "id": &state.item_id,
                                     "type": "message",
                                     "role": "assistant",
+                                    "phase": "commentary",
                                     "status": "in_progress",
                                     "content": []
                                 }
@@ -4666,7 +4827,7 @@ async fn translate_openai_chunk_to_ws(
                             let part_added = json!({
                                 "type": "response.content_part.added",
                                 "item_id": &state.item_id,
-                                "output_index": 0,
+                                "output_index": message_output_index,
                                 "content_index": 0,
                                 "part": {
                                     "type": "output_text",
@@ -4681,7 +4842,7 @@ async fn translate_openai_chunk_to_ws(
                         let delta_ev = json!({
                             "type": "response.output_text.delta",
                             "item_id": &state.item_id,
-                            "output_index": 0,
+                            "output_index": message_output_index,
                             "content_index": 0,
                             "delta": content
                         });
@@ -4732,6 +4893,15 @@ async fn translate_openai_chunk_to_ws(
                             state.tool_calls.get_mut(&tc_idx)
                         {
                             args.push_str(tc_args);
+                            let tool_output_index = match state.tool_output_indices.get(&tc_idx) {
+                                Some(idx) => *idx,
+                                None => {
+                                    let idx = state.next_output_index;
+                                    state.next_output_index += 1;
+                                    state.tool_output_indices.insert(tc_idx, idx);
+                                    idx
+                                }
+                            };
 
                             if !state.tool_calls_added.contains(&tc_idx) {
                                 let (actual_name, namespace) = split_namespace_tool_name(name);
@@ -4748,7 +4918,7 @@ async fn translate_openai_chunk_to_ws(
                                 }
                                 let tool_added = json!({
                                     "type": "response.output_item.added",
-                                    "output_index": 0,
+                                    "output_index": tool_output_index,
                                     "item": item_obj
                                 });
                                 send_ws_event(socket, ws_events, &tool_added).await;
@@ -4759,7 +4929,7 @@ async fn translate_openai_chunk_to_ws(
                                 let args_delta = json!({
                                     "type": "response.function_call_arguments.delta",
                                     "item_id": tool_item_id,
-                                    "output_index": 0,
+                                    "output_index": tool_output_index,
                                     "delta": tc_args
                                 });
                                 send_ws_event(socket, ws_events, &args_delta).await;
@@ -4784,10 +4954,19 @@ async fn finalize_ws_events(
 
     for tc_idx in tool_keys {
         if let Some((tool_item_id, call_id, name, args)) = state.tool_calls.get(&tc_idx) {
+            let tool_output_index = match state.tool_output_indices.get(&tc_idx) {
+                Some(idx) => *idx,
+                None => {
+                    let idx = state.next_output_index;
+                    state.next_output_index += 1;
+                    state.tool_output_indices.insert(tc_idx, idx);
+                    idx
+                }
+            };
             let args_done = json!({
                 "type": "response.function_call_arguments.done",
                 "item_id": tool_item_id,
-                "output_index": 0,
+                "output_index": tool_output_index,
                 "arguments": args
             });
             send_ws_event(socket, ws_events, &args_done).await;
@@ -4807,7 +4986,7 @@ async fn finalize_ws_events(
 
             let tool_done = json!({
                 "type": "response.output_item.done",
-                "output_index": 0,
+                "output_index": tool_output_index,
                 "item": item_obj
             });
             send_ws_event(socket, ws_events, &tool_done).await;
@@ -4823,10 +5002,11 @@ async fn finalize_ws_events(
     }
 
     if state.message_item_added {
+        let message_output_index = state.message_output_index.unwrap_or(0);
         let text_done = json!({
             "type": "response.output_text.done",
             "item_id": &state.item_id,
-            "output_index": 0,
+            "output_index": message_output_index,
             "content_index": 0,
             "text": &state.accumulated_text
         });
@@ -4835,7 +5015,7 @@ async fn finalize_ws_events(
         let part_done = json!({
             "type": "response.content_part.done",
             "item_id": &state.item_id,
-            "output_index": 0,
+            "output_index": message_output_index,
             "content_index": 0,
             "part": {
                 "type": "output_text",
@@ -4846,11 +5026,12 @@ async fn finalize_ws_events(
 
         let message_done = json!({
             "type": "response.output_item.done",
-            "output_index": 0,
+            "output_index": message_output_index,
             "item": {
                 "id": &state.item_id,
                 "type": "message",
                 "role": "assistant",
+                "phase": "final_answer",
                 "status": "completed",
                 "content": [{
                     "type": "output_text",
@@ -4864,6 +5045,7 @@ async fn finalize_ws_events(
             "id": &state.item_id,
             "type": "message",
             "role": "assistant",
+            "phase": "final_answer",
             "status": "completed",
             "content": [{
                 "type": "output_text",

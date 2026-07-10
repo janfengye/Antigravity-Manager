@@ -221,12 +221,16 @@ pub fn transform_openai_request(
         && (mapped_model_lower.contains("-thinking")
             || mapped_model_lower.contains("gemini-2.0-pro")
             || mapped_model_lower.contains("gemini-3-pro")
-            || mapped_model_lower.contains("gemini-3.1-pro"))
+            || mapped_model_lower.contains("gemini-3.1-pro")
+            || mapped_model_lower.contains("gemini-pro")
+            || mapped_model_lower.contains("-pro-agent"))
         && !mapped_model_lower.contains("claude");
     // [FIX #2167] gemini-*-flash 支持 thinking，functionCall 必须携带 thoughtSignature
     // [FEATURE] 同时注入 includeThoughts:true 使 Gemini 返回 thought:true chunk，客户端可显示思维链
     let is_gemini_flash_thinking = mapped_model_lower.contains("gemini")
-        && (mapped_model_lower.contains("flash") || mapped_model_lower.contains("-flash-"))
+        && (mapped_model_lower.contains("flash") 
+        || mapped_model_lower.contains("-flash-") 
+        || mapped_model_lower.contains("-flash-agent"))
         && !mapped_model_lower.contains("claude");
     let is_claude_thinking = mapped_model_lower.ends_with("-thinking");
     let is_thinking_model = is_gemini_3_thinking || is_claude_thinking || is_gemini_flash_thinking;
