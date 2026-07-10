@@ -174,9 +174,14 @@ build_download_url() {
             esac
             ;;
         macos)
-            # Prefer universal DMG, fallback to arch-specific
-            DOWNLOAD_URL="${base_url}/Antigravity.Tools_${RELEASE_VERSION}_universal.dmg"
-            FILENAME="Antigravity.Tools_${RELEASE_VERSION}_universal.dmg"
+            local mac_arch
+            if [[ "$ARCH_LABEL" == "x86_64" ]]; then
+                mac_arch="x64"
+            else
+                mac_arch="aarch64"
+            fi
+            DOWNLOAD_URL="${base_url}/Antigravity.Tools_${RELEASE_VERSION}_${mac_arch}.dmg"
+            FILENAME="Antigravity.Tools_${RELEASE_VERSION}_${mac_arch}.dmg"
             ;;
     esac
 

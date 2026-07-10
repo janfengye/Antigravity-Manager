@@ -100,9 +100,14 @@ fn extract_output_tokens(usage: &Value) -> Option<u32> {
             .get("total_output_tokens")
             .or_else(|| usage.get("candidatesTokenCount")),
     )?;
-    let reasoning = extract_reasoning_tokens(usage).unwrap_or(0);
-    let tool_use = value_as_u32(usage.get("total_tool_use_tokens")).unwrap_or(0);
-    Some(base + reasoning + tool_use)
+    let has_new_format = usage.get("total_output_tokens").is_some();
+    if has_new_format {
+        let reasoning = extract_reasoning_tokens(usage).unwrap_or(0);
+        let tool_use = value_as_u32(usage.get("total_tool_use_tokens")).unwrap_or(0);
+        Some(base + reasoning + tool_use)
+    } else {
+        Some(base)
+    }
 }
 
 pub async fn monitor_middleware(

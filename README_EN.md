@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> Professional AI Account Management & Protocol Proxy System (v4.3.7)
+> Professional AI Account Management & Protocol Proxy System (v4.3.8)
 
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
@@ -9,7 +9,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.3.7-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.3.8-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -134,7 +134,7 @@ Automatically detects your OS, architecture, and package manager — one command
 
 **Linux / macOS:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.3.7/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.3.8/install.sh | bash
 ```
 
 **Windows (PowerShell):**
@@ -144,7 +144,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **Supported formats**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **Advanced usage**: Install a specific version `curl -fsSL ... | bash -s -- --version 4.3.7`，dry-run mode `curl -fsSL ... | bash -s -- --dry-run`
+> **Advanced usage**: Install a specific version `curl -fsSL ... | bash -s -- --version 4.3.8`，dry-run mode `curl -fsSL ... | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 If you have [Homebrew](https://brew.sh/) installed, you can also install via:
@@ -427,6 +427,16 @@ In clients that support OpenAI protocol (e.g., Cherry Studio), you can configure
 ## 📝 Developer & Community
 
 *   **Changelog**:
+    *   **v4.3.8 (2026-07-10)**:
+        -   **[Core Fix] Resolve Gemini Token Usage Double-Counting & Inflation**:
+            -   **Precise Format Differentiation**: Accurately differentiated between direct Gemini API (`candidatesTokenCount` which already includes thinking/reasoning tokens) and new Interactions API (`total_output_tokens` which excludes thinking tokens).
+            -   **Prevent Double Counting**: Fixed a bug where `candidatesTokenCount` was incorrectly added together with `thoughtsTokenCount` in both SSE streaming and standard responses, double-counting the reasoning tokens.
+            -   **Middleware Sync**: Aligned the monitor middleware tracker (`monitor.rs` -> `extract_output_tokens`) to ensure logs, database records, and dashboard metrics reflect correct token usage.
+            -   *Related Issue*: See [Issue #3237](https://github.com/lbjlaq/Antigravity-Manager/issues/3237).
+        -   **[Deploy Fix] Resolve Missing universal.dmg Causing macOS Installation & Homebrew Failures**:
+            -   **Dynamic Architecture Detection**: Since the `universal` target DMG packaging is skipped on CI to prevent workflow failures, we refactored `Casks/antigravity-tools.rb` and the one-line install script `install.sh`.
+            -   **Architecture-Aware Resolution**: The installers now detect the actual hardware architecture and download the corresponding `aarch64` (Apple Silicon) or `x64` (Intel) DMG package instead of throwing a 404 error looking for `universal.dmg`.
+            -   *Related Issue*: See [Issue #3238](https://github.com/lbjlaq/Antigravity-Manager/issues/3238).
     *   **v4.3.7 (2026-07-09)**:
         -   **[i18n] Complete Korean (ko) Translations**:
             -   **Filled 149 Missing Keys**: Updated `src/locales/ko.json` to fill in 149 translation keys added since v4.3.0, ensuring a fully localized UI for Korean-speaking users.

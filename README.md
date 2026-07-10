@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> 专业级 AI 账号管理与协议代理系统 (v4.3.7)
+> 专业级 AI 账号管理与协议代理系统 (v4.3.8)
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
 
@@ -8,7 +8,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.3.7-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.3.8-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -439,6 +439,16 @@ response = client.chat.completions.create(
 ## 📝 开发者与社区
 
 *   **版本演进 (Changelog)**:
+    *   **v4.3.8 (2026-07-10)**:
+        -   **[核心修复] 解决 Gemini 接口 Token 统计虚高与双倍计算问题 (Gemini Token Usage Double-Counting Fix)**:
+            -   **精确格式区分**: 针对 Gemini 官方 API (AI Studio 平台) 的 `candidatesTokenCount` (已包含思维 Token) 与新版 Interactions API (Vertex AI 等) 的 `total_output_tokens` (不包含思维 Token) 两个不同格式进行了精准区分。
+            -   **杜绝思维 Token 重复计算**: 修复了在流式传输 (SSE Stream) 与常规 JSON 响应中，错误地将 `candidatesTokenCount` 与 `thoughtsTokenCount` 累加，导致思维 Token 在本地统计被重复计算一倍的 Bug。
+            -   **中间件追踪器同步对齐**: 同步修正了请求监视监控层 (`monitor.rs`) 的 `extract_output_tokens` 逻辑，确保界面展示、后台日志以及数据库中记录的 Token 指标完全准确。
+            -   *相关 Issue*: 详见 [Issue #3237](https://github.com/lbjlaq/Antigravity-Manager/issues/3237)。
+        -   **[部署修复] 解决 macOS 平台缺少 universal.dmg 导致 Homebrew 升级与一键安装失败的 Bug (macOS Homebrew Cask / Install Script Fix)**:
+            -   **动态架构分流**: 由于 CI 流程中跳过了 universal 架构的 DMG 打包（防止 CI 构建失败），我们重构了 `Casks/antigravity-tools.rb` 以及一键安装脚本 `install.sh`。
+            -   **按硬件架构按需下载**: 不再强行下载已不存在的 `universal.dmg`，而是根据用户实际机型自动下载并安装对应的 `aarch64`（Apple Silicon 芯片）或 `x64`（Intel 芯片）独立架构的 DMG 安装包。
+            -   *相关 Issue*: 详见 [Issue #3238](https://github.com/lbjlaq/Antigravity-Manager/issues/3238)。
     *   **v4.3.7 (2026-07-09)**:
         -   **[本地化] 补全韩语 (ko) 本地化词条 (Korean Translation Completion)**:
             -   **补全 149 个缺失词条**: 在 `src/locales/ko.json` 中补全了自 v4.3.0 以来新增的 149 个翻译键值对，彻底消除韩语界面下部分词条回退至英文的问题。

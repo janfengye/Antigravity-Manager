@@ -73,9 +73,13 @@ fn extract_usage_metadata(u: &Value) -> Option<super::models::OpenAIUsage> {
         .map(|v| v as u32);
     let input_tokens_by_modality = u.get("input_tokens_by_modality").cloned();
 
-    // 新格式下 output_tokens 不含 thought/tool-use, 需要加回来
-    let completion_tokens =
-        raw_output_tokens + reasoning_tokens.unwrap_or(0) + tool_use_tokens.unwrap_or(0);
+    // 新格式下 output_tokens 不含 thought/tool-use, 需要加回来。旧格式 candidatesTokenCount 已经包含它们
+    let has_new_format = u.get("total_output_tokens").is_some();
+    let completion_tokens = if has_new_format {
+        raw_output_tokens + reasoning_tokens.unwrap_or(0) + tool_use_tokens.unwrap_or(0)
+    } else {
+        raw_output_tokens
+    };
 
     // cached_tokens is a subset of prompt_tokens. Keep prompt_tokens in the same
     // raw-input-token unit as Gemini usageMetadata so downstream logs can reconcile it.

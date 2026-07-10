@@ -1,5 +1,5 @@
 cask "antigravity-tools" do
-  version "4.3.7"
+  version "4.3.8"
   sha256 :no_check
 
   name "Antigravity Tools"
@@ -7,7 +7,9 @@ cask "antigravity-tools" do
   homepage "https://github.com/lbjlaq/Antigravity-Manager"
 
   on_macos do
-    url "https://github.com/lbjlaq/Antigravity-Manager/releases/download/v#{version}/Antigravity.Tools_#{version}_universal.dmg"
+    arch intel: "x64", arm: "aarch64"
+
+    url "https://github.com/lbjlaq/Antigravity-Manager/releases/download/v#{version}/Antigravity.Tools_#{version}_#{arch}.dmg"
 
     app "Antigravity Tools.app"
 
