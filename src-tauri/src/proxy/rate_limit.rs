@@ -129,10 +129,21 @@ impl RateLimitTracker {
         model: Option<String>,
     ) {
         let now = SystemTime::now();
-        let retry_sec = reset_time
+        let mut retry_sec = reset_time
             .duration_since(now)
             .map(|d| d.as_secs())
             .unwrap_or(60); // 如果时间已过,使用默认 60 秒
+
+        if retry_sec > 300 {
+            tracing::info!(
+                "Capping lockout time for {} from {}s to 300s (5 minutes)",
+                account_id,
+                retry_sec
+            );
+            retry_sec = 300;
+        }
+
+        let reset_time = now + Duration::from_secs(retry_sec);
 
         let info = RateLimitInfo {
             reset_time,
@@ -305,8 +316,19 @@ impl RateLimitTracker {
                     }
                     RateLimitReason::RateLimitExceeded => {
                         // 速率限制 (TPM/RPM)
-                        tracing::debug!("检测到速率限制 (RATE_LIMIT_EXCEEDED)，使用默认值 5秒");
-                        5
+                        let body_lower = body.to_lowercase();
+                        let lockout = if body_lower.contains("resource has been exhausted")
+                            || body_lower.contains("resource_exhausted")
+                        {
+                            30
+                        } else {
+                            5
+                        };
+                        tracing::debug!(
+                            "检测到速率限制 (RATE_LIMIT_EXCEEDED)，使用默认值 {}秒",
+                            lockout
+                        );
+                        lockout
                     }
                     RateLimitReason::ModelCapacityExhausted => {
                         // 模型容量耗尽
@@ -335,6 +357,16 @@ impl RateLimitTracker {
                 }
             }
         };
+
+        let mut retry_sec = retry_sec;
+        if retry_sec > 300 {
+            tracing::info!(
+                "Capping retry lockout time for {} from {}s to 300s (5 minutes)",
+                account_id,
+                retry_sec
+            );
+            retry_sec = 300;
+        }
 
         let info = RateLimitInfo {
             reset_time: SystemTime::now() + Duration::from_secs(retry_sec),
@@ -407,9 +439,19 @@ impl RateLimitTracker {
         // 如果无法从 JSON 解析，尝试从消息文本判断
         let body_lower = body.to_lowercase();
         // [FIX] 优先判断分钟级限制，避免将 TPM 误判为 Quota
+        let generic_resource_exhausted = body_lower.contains("resource has been exhausted")
+            || body_lower.contains("resource_exhausted");
+        let explicit_quota_exhausted = body_lower.contains("quota_exhausted")
+            || body_lower.contains("quotaresetdelay")
+            || body_lower.contains("quota reset")
+            || body_lower.contains("quota limit")
+            || body_lower.contains("per day")
+            || body_lower.contains("daily quota");
+
         if body_lower.contains("per minute")
             || body_lower.contains("rate limit")
             || body_lower.contains("too many requests")
+            || (generic_resource_exhausted && !explicit_quota_exhausted)
         {
             RateLimitReason::RateLimitExceeded
         } else if body_lower.contains("exhausted") || body_lower.contains("quota") {
@@ -705,6 +747,20 @@ mod tests {
         let body = "Resource has been exhausted (e.g. check quota). Quota limit 'Tokens per minute' exceeded.";
         let reason = tracker.parse_rate_limit_reason(body);
         // 应该被识别为 RateLimitExceeded，而不是 QuotaExhausted
+        assert_eq!(reason, RateLimitReason::RateLimitExceeded);
+    }
+
+    #[test]
+    fn test_generic_resource_exhausted_is_short_rate_limit() {
+        let tracker = RateLimitTracker::new();
+        let body = r#"{
+            "error": {
+                "code": 429,
+                "message": "Resource has been exhausted (e.g. check quota).",
+                "status": "RESOURCE_EXHAUSTED"
+            }
+        }"#;
+        let reason = tracker.parse_rate_limit_reason(body);
         assert_eq!(reason, RateLimitReason::RateLimitExceeded);
     }
 

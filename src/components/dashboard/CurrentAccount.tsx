@@ -1,4 +1,4 @@
-import { CheckCircle, Mail, Diamond, Gem, Circle, Tag, Lock } from 'lucide-react';
+import { CheckCircle, Mail, Diamond, Gem, Circle, Tag, Lock, Clock } from 'lucide-react';
 import { Account } from '../../types/account';
 import { formatTimeRemaining } from '../../utils/format';
 
@@ -36,7 +36,15 @@ function CurrentAccount({ account, onSwitch }: CurrentAccountProps) {
 
     const geminiFlashModel = account.quota?.models.find(m => m.name.toLowerCase() === 'gemini-3-flash');
 
-    const geminiImageModel = account.quota?.models.find(m => m.name.toLowerCase() === 'gemini-3-pro-image');
+    const geminiImageModel = account.quota?.models.find(m => {
+        const name = m.name.toLowerCase();
+        return name === 'gemini-3.1-flash-image' || name === 'gemini-3-pro-image';
+    });
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const liveImageLimit =
+        account.live_limited_models?.['gemini-3.1-flash-image'] ||
+        account.live_limited_models?.['gemini-3-pro-image'];
+    const isImageLiveLimited = Boolean(liveImageLimit && liveImageLimit.until > nowSeconds);
 
     const claudeGroupNames = [
         'claude-opus-4-6-thinking',
@@ -129,8 +137,9 @@ function CurrentAccount({ account, onSwitch }: CurrentAccountProps) {
                     <div className="space-y-1.5">
                         <div className="flex justify-between items-baseline">
                             <span className="text-xs font-medium text-gray-600 dark:text-gray-400 flex items-center gap-1">
-                                {account.protected_models?.includes('gemini-3-pro-image') && <Lock className="w-2.5 h-2.5 text-rose-500" />}
-                                Gemini 3 Pro Image
+                                {isImageLiveLimited && <Clock className="w-2.5 h-2.5 text-amber-500" />}
+                                {(account.protected_models?.includes('gemini-3.1-flash-image') || account.protected_models?.includes('gemini-3-pro-image')) && <Lock className="w-2.5 h-2.5 text-rose-500" />}
+                                Gemini 3.1 Flash Image
                             </span>
                             <div className="flex items-center gap-2">
                                 <span className="text-[10px] text-gray-400 dark:text-gray-500" title={`${t('accounts.reset_time')}: ${new Date(geminiImageModel.reset_time).toLocaleString()}`}>

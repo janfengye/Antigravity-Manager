@@ -7,6 +7,7 @@ import { useConfigStore } from '../../stores/useConfigStore';
 import { QuotaItem } from './QuotaItem';
 import { MODEL_CONFIG, sortModels } from '../../config/modelConfig';
 import { getValidationBlockedStatusLabel } from './accountValidationStatus';
+import { getLiveLimitForModel } from '../../utils/liveLimit';
 
 interface AccountCardProps {
     account: Account;
@@ -247,6 +248,7 @@ function AccountCard({ account, selected, onSelect, isCurrent: propIsCurrent, is
                                 percentage={model.data?.percentage || 0}
                                 resetTime={model.data?.reset_time}
                                 isProtected={isModelProtected(model.protectedKey)}
+                                liveLimit={getLiveLimitForModel(account, model.id, model.protectedKey)}
                                 Icon={model.Icon}
                             />
                         ))}

@@ -542,6 +542,7 @@ impl TokenManager {
         {
             for (k, v) in rules {
                 if let Some(new_model) = v.as_str() {
+                    // Register dynamic forwarding rules (including those mapping to gemini-pro-agent)
                     crate::proxy::common::model_mapping::update_dynamic_forwarding_rules(
                         k.to_string(),
                         new_model.to_string(),
@@ -825,6 +826,7 @@ impl TokenManager {
             "gemini-3.1-pro-preview",
             "gemini-3.1-pro-high",
             "gemini-3.1-pro-low",
+            "gemini-pro-agent",
         ];
 
         if !pro_family.contains(&model.as_str()) {
@@ -842,6 +844,7 @@ impl TokenManager {
 
         // Keep requested model as top priority, then fallback across the same family.
         push(&model);
+        push("gemini-pro-agent");
         push("gemini-3.1-pro-preview");
         push("gemini-3-pro-preview");
         push("gemini-3.1-pro-high");
@@ -1719,7 +1722,16 @@ impl TokenManager {
                     // 计算最短等待时间
                     let min_wait = tokens_snapshot
                         .iter()
-                        .filter_map(|t| self.rate_limit_tracker.get_reset_seconds(&t.account_id))
+                        .filter_map(|t| {
+                            let wait = self
+                                .rate_limit_tracker
+                                .get_remaining_wait(&t.account_id, Some(&normalized_target));
+                            if wait > 0 {
+                                Some(wait)
+                            } else {
+                                None
+                            }
+                        })
                         .min();
 
                     // Layer 1: 如果最短等待时间 <= 2秒,执行缓冲延迟
@@ -2583,19 +2595,64 @@ impl TokenManager {
                 model_to_track.map(|s| s.to_string()),
                 &config.backoff_steps, // [NEW] 传入配置
             );
+            let reason = if error_body.to_lowercase().contains("quota") {
+                crate::proxy::rate_limit::RateLimitReason::QuotaExhausted
+            } else {
+                crate::proxy::rate_limit::RateLimitReason::RateLimitExceeded
+            };
+            self.persist_live_limit(&account_id, model_to_track, status, reason, error_body);
             return;
         }
 
         // 确定限流原因
-        let reason = if error_body.to_lowercase().contains("model_capacity") {
+        let error_body_lower = error_body.to_lowercase();
+        let generic_resource_exhausted = error_body_lower.contains("resource has been exhausted")
+            || error_body_lower.contains("resource_exhausted");
+        let explicit_quota_exhausted = error_body_lower.contains("quota_exhausted")
+            || error_body_lower.contains("quotaresetdelay")
+            || error_body_lower.contains("quota reset")
+            || error_body_lower.contains("quota limit")
+            || error_body_lower.contains("per day")
+            || error_body_lower.contains("daily quota");
+
+        let reason = if error_body_lower.contains("model_capacity") {
             crate::proxy::rate_limit::RateLimitReason::ModelCapacityExhausted
-        } else if error_body.to_lowercase().contains("exhausted")
-            || error_body.to_lowercase().contains("quota")
+        } else if error_body_lower.contains("per minute")
+            || error_body_lower.contains("rate limit")
+            || error_body_lower.contains("too many requests")
+            || (generic_resource_exhausted && !explicit_quota_exhausted)
+        {
+            crate::proxy::rate_limit::RateLimitReason::RateLimitExceeded
+        } else if explicit_quota_exhausted
+            || error_body_lower.contains("exhausted")
+            || error_body_lower.contains("quota")
         {
             crate::proxy::rate_limit::RateLimitReason::QuotaExhausted
         } else {
             crate::proxy::rate_limit::RateLimitReason::Unknown
         };
+
+        if !matches!(
+            reason,
+            crate::proxy::rate_limit::RateLimitReason::QuotaExhausted
+        ) {
+            tracing::info!(
+                "账号 {} 的 {} 响应被识别为 {:?},使用短退避而不是配额重置锁定",
+                account_id,
+                status,
+                reason
+            );
+            self.rate_limit_tracker.parse_from_error(
+                &account_id,
+                status,
+                retry_after_header,
+                error_body,
+                model_to_track.map(|s| s.to_string()),
+                &config.backoff_steps,
+            );
+            self.persist_live_limit(&account_id, model_to_track, status, reason, error_body);
+            return;
+        }
 
         // API 未返回 quotaResetDelay,需要实时刷新配额获取精确锁定时间
         if let Some(m) = model_to_track {
@@ -2621,12 +2678,14 @@ impl TokenManager {
             .await
         {
             tracing::info!("账号 {} 已使用实时配额精确锁定", email);
+            self.persist_live_limit(&account_id, model_to_track, status, reason, error_body);
             return;
         }
 
         // 实时刷新失败,尝试使用本地缓存的配额刷新时间
         if self.set_precise_lockout(&account_id, reason, model_to_track.map(|s| s.to_string())) {
             tracing::info!("账号 {} 已使用本地缓存配额锁定", account_id);
+            self.persist_live_limit(&account_id, model_to_track, status, reason, error_body);
             return;
         }
 
@@ -2640,6 +2699,102 @@ impl TokenManager {
             model_to_track.map(|s| s.to_string()),
             &config.backoff_steps, // [NEW] 传入配置
         );
+        self.persist_live_limit(&account_id, model_to_track, status, reason, error_body);
+    }
+
+    fn persist_live_limit(
+        &self,
+        account_id: &str,
+        model: Option<&str>,
+        status: u16,
+        reason: crate::proxy::rate_limit::RateLimitReason,
+        error_body: &str,
+    ) {
+        let Some(model_key) = model.filter(|m| !m.is_empty()) else {
+            return;
+        };
+
+        let wait_sec = self
+            .rate_limit_tracker
+            .get_remaining_wait(account_id, Some(model_key));
+        if wait_sec == 0 {
+            return;
+        }
+
+        let path = if let Some(entry) = self.tokens.get(account_id) {
+            entry.account_path.clone()
+        } else {
+            self.data_dir
+                .join("accounts")
+                .join(format!("{}.json", account_id))
+        };
+
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            return;
+        };
+        let Ok(mut content) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            return;
+        };
+
+        if !content
+            .get("live_limited_models")
+            .and_then(|v| v.as_object())
+            .is_some()
+        {
+            content["live_limited_models"] = serde_json::Value::Object(serde_json::Map::new());
+        }
+
+        let now = chrono::Utc::now().timestamp();
+        content["live_limited_models"][model_key] = serde_json::json!({
+            "model": model_key,
+            "status": status,
+            "reason": format!("{:?}", reason),
+            "until": now + wait_sec as i64,
+            "detected_at": now,
+            "message": truncate_reason(error_body, 500),
+        });
+
+        if let Err(e) = std::fs::write(&path, serde_json::to_string_pretty(&content).unwrap()) {
+            tracing::debug!("Failed to persist live limit for {}: {}", account_id, e);
+        }
+    }
+
+    pub async fn clear_persisted_live_limit(&self, account_id: &str, model: Option<&str>) {
+        let Some(model_key) = model.filter(|m| !m.is_empty()) else {
+            return;
+        };
+
+        let path = if let Some(entry) = self.tokens.get(account_id) {
+            entry.account_path.clone()
+        } else {
+            self.data_dir
+                .join("accounts")
+                .join(format!("{}.json", account_id))
+        };
+
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            return;
+        };
+        let Ok(mut content) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            return;
+        };
+
+        let Some(live_limits) = content
+            .get_mut("live_limited_models")
+            .and_then(|value| value.as_object_mut())
+        else {
+            return;
+        };
+
+        live_limits.remove(model_key);
+        if model_key.contains("image") {
+            live_limits.remove("gemini-3.1-flash-image");
+            live_limits.remove("gemini-3-pro-image");
+        }
+
+        if let Err(e) = std::fs::write(&path, serde_json::to_string_pretty(&content).unwrap()) {
+            tracing::debug!("Failed to clear live limit for {}: {}", account_id, e);
+        }
     }
 
     // ===== 调度配置相关方法 =====
@@ -2841,6 +2996,17 @@ impl TokenManager {
         let mut all_models = std::collections::HashSet::new();
         for entry in self.tokens.iter() {
             let token = entry.value();
+
+            // Keep the raw quota model IDs for /v1/models discovery. `model_quotas`
+            // intentionally stores normalized protection buckets (e.g. gemini-3-flash),
+            // but clients need concrete usable IDs such as gemini-3-flash-agent.
+            if let Some(raw_models) = Self::get_available_models_from_json(&token.account_path) {
+                for model_id in raw_models {
+                    all_models.insert(model_id);
+                }
+            }
+
+            // Also keep normalized bucket IDs for existing quota/protection behavior.
             for model_id in token.model_quotas.keys() {
                 all_models.insert(model_id.clone());
             }
@@ -3018,6 +3184,17 @@ mod tests {
     use super::*;
     use std::cmp::Ordering;
 
+    #[test]
+    fn test_build_dynamic_model_candidates_agent() {
+        let candidates = TokenManager::build_dynamic_model_candidates("gemini-pro-agent").unwrap();
+        assert_eq!(candidates[0], "gemini-pro-agent");
+        assert!(candidates.contains(&"gemini-3.1-pro-low".to_string()));
+        
+        let candidates_high = TokenManager::build_dynamic_model_candidates("gemini-3.1-pro-high").unwrap();
+        assert_eq!(candidates_high[0], "gemini-3.1-pro-high");
+        assert!(candidates_high.contains(&"gemini-pro-agent".to_string()));
+    }
+
     #[tokio::test]
     async fn test_reload_account_purges_cache_when_account_becomes_proxy_disabled() {
         let tmp_root = std::env::temp_dir().join(format!(
@@ -3108,6 +3285,11 @@ mod tests {
                     "expiry_timestamp": now + 3600,
                     "project_id": format!("pid-{}", id)
                 },
+                "quota": {
+                    "models": [
+                        { "name": "gemini-1.5-flash", "percentage": 100 }
+                    ]
+                },
                 "disabled": false,
                 "proxy_disabled": proxy_disabled,
                 "proxy_disabled_reason": if proxy_disabled { "manual" } else { "" },
@@ -3147,6 +3329,53 @@ mod tests {
         assert_eq!(email, "b@test.com");
         assert!(manager.tokens.get("acc1").is_none());
         assert!(manager.get_preferred_account().await.is_none());
+
+        let _ = std::fs::remove_dir_all(&tmp_root);
+    }
+
+    #[tokio::test]
+    async fn test_collected_models_preserve_raw_quota_model_names_for_model_listing() {
+        let tmp_root = std::env::temp_dir().join(format!(
+            "antigravity-token-manager-test-raw-models-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let accounts_dir = tmp_root.join("accounts");
+        std::fs::create_dir_all(&accounts_dir).unwrap();
+
+        let now = chrono::Utc::now().timestamp();
+        let account_path = accounts_dir.join("acc1.json");
+        let account_json = serde_json::json!({
+            "id": "acc1",
+            "email": "a@test.com",
+            "token": {
+                "access_token": "atk",
+                "refresh_token": "rtk",
+                "expires_in": 3600,
+                "expiry_timestamp": now + 3600
+            },
+            "quota": {
+                "models": [
+                    { "name": "gemini-3-flash-agent", "percentage": 88 }
+                ]
+            },
+            "disabled": false,
+            "proxy_disabled": false,
+            "created_at": now,
+            "last_used": now
+        });
+        std::fs::write(
+            &account_path,
+            serde_json::to_string_pretty(&account_json).unwrap(),
+        )
+        .unwrap();
+
+        let manager = TokenManager::new(tmp_root.clone());
+        manager.load_accounts().await.unwrap();
+
+        let collected_models = manager.get_all_collected_models();
+        assert!(collected_models.contains("gemini-3-flash-agent"));
+        // Keep the normalized quota bucket too; it is used for quota/protection checks.
+        assert!(collected_models.contains("gemini-3-flash"));
 
         let _ = std::fs::remove_dir_all(&tmp_root);
     }

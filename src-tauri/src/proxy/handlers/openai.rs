@@ -3047,7 +3047,6 @@ pub async fn handle_images_generations(
         Ok((email_header, openai_response)) => Ok((
             StatusCode::OK,
             [
-                ("X-Mapped-Model", "dall-e-3"),
                 ("X-Account-Email", email_header.as_str()),
             ],
             Json(openai_response),
@@ -3076,7 +3075,7 @@ pub async fn handle_images_generations_internal(
     let model = body
         .get("model")
         .and_then(|v| v.as_str())
-        .unwrap_or("gemini-3-pro-image");
+        .unwrap_or("gemini-3.1-flash-image");
 
     let n = body.get("n").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
 
@@ -3262,6 +3261,11 @@ pub async fn handle_images_generations_internal(
                             // Other errors: return
                             return Err(last_error);
                         }
+                        token_manager.mark_account_success(&account_id);
+                        token_manager
+                            .clear_persisted_live_limit(&account_id, Some(&model_to_use))
+                            .await;
+
                         match response.json::<Value>().await {
                             Ok(json) => return Ok((json, email)),
                             Err(e) => return Err(format!("Parse error: {}", e)),
@@ -3396,14 +3400,14 @@ pub async fn handle_images_edits(
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     tracing::info!("[Images] Received edit request");
 
-    let mut image_data = None;
-    let mut mask_data = None;
-    let mut reference_images: Vec<String> = Vec::new(); // Store base64 data of reference images
+    let mut image_data: Option<(String, String)> = None;
+    let mut mask_data: Option<(String, String)> = None;
+    let mut reference_images: Vec<(String, String)> = Vec::new(); // Store (base64 data, mime type) reference images
     let mut prompt = String::new();
     let mut n = 1;
     let mut size = "1024x1024".to_string();
     let mut response_format = "b64_json".to_string();
-    let mut model = "gemini-3-pro-image".to_string();
+    let mut model = "gemini-3.1-flash-image".to_string();
     let mut aspect_ratio: Option<String> = None;
     let mut image_size_param: Option<String> = None;
     let mut style: Option<String> = None;
@@ -3416,26 +3420,47 @@ pub async fn handle_images_edits(
         let name = field.name().unwrap_or("").to_string();
 
         if name == "image" {
+            let mime_type = field
+                .content_type()
+                .map(|content_type| content_type.to_string())
+                .unwrap_or_else(|| "image/png".to_string());
             let data = field
                 .bytes()
                 .await
                 .map_err(|e| (StatusCode::BAD_REQUEST, format!("Image read error: {}", e)))?;
-            image_data = Some(base64::engine::general_purpose::STANDARD.encode(data));
+            image_data = Some((
+                base64::engine::general_purpose::STANDARD.encode(data),
+                mime_type,
+            ));
         } else if name == "mask" {
+            let mime_type = field
+                .content_type()
+                .map(|content_type| content_type.to_string())
+                .unwrap_or_else(|| "image/png".to_string());
             let data = field
                 .bytes()
                 .await
                 .map_err(|e| (StatusCode::BAD_REQUEST, format!("Mask read error: {}", e)))?;
-            mask_data = Some(base64::engine::general_purpose::STANDARD.encode(data));
+            mask_data = Some((
+                base64::engine::general_purpose::STANDARD.encode(data),
+                mime_type,
+            ));
         } else if name.starts_with("image") && name != "image_size" {
             // Support image1, image2, etc.
+            let mime_type = field
+                .content_type()
+                .map(|content_type| content_type.to_string())
+                .unwrap_or_else(|| "image/jpeg".to_string());
             let data = field.bytes().await.map_err(|e| {
                 (
                     StatusCode::BAD_REQUEST,
                     format!("Reference image read error: {}", e),
                 )
             })?;
-            reference_images.push(base64::engine::general_purpose::STANDARD.encode(data));
+            reference_images.push((
+                base64::engine::general_purpose::STANDARD.encode(data),
+                mime_type,
+            ));
         } else if name == "prompt" {
             prompt = field
                 .text()
@@ -3508,12 +3533,13 @@ pub async fn handle_images_edits(
         _ => None, // Fallback to standard
     };
 
-    let (image_config, _) = crate::proxy::mappers::common_utils::parse_image_config_with_params(
-        &model,
-        size_input,
-        quality_input,
-        image_size_param.as_deref(), // [NEW] Pass direct image_size param
-    );
+    let (image_config, clean_model_name) =
+        crate::proxy::mappers::common_utils::parse_image_config_with_params(
+            &model,
+            size_input,
+            quality_input,
+            image_size_param.as_deref(), // [NEW] Pass direct image_size param
+        );
 
     // 3. Construct Contents
     let mut contents_parts = Vec::new();
@@ -3528,30 +3554,30 @@ pub async fn handle_images_edits(
     }));
 
     // Add Main Image (if standard edit)
-    if let Some(data) = image_data {
+    if let Some((data, mime_type)) = image_data {
         contents_parts.push(json!({
             "inlineData": {
-                "mimeType": "image/png",
+                "mimeType": mime_type,
                 "data": data
             }
         }));
     }
 
     // Add Mask (if standard edit)
-    if let Some(data) = mask_data {
+    if let Some((data, mime_type)) = mask_data {
         contents_parts.push(json!({
             "inlineData": {
-                "mimeType": "image/png",
+                "mimeType": mime_type,
                 "data": data
             }
         }));
     }
 
     // Add Reference Images (Image-to-Image)
-    for ref_data in reference_images {
+    for (ref_data, mime_type) in reference_images {
         contents_parts.push(json!({
             "inlineData": {
-                "mimeType": "image/jpeg", // Assume JPEG for refs as per spec suggestion, or auto-detect
+                "mimeType": mime_type,
                 "data": ref_data
             }
         }));
@@ -3573,7 +3599,7 @@ pub async fn handle_images_edits(
         let contents_parts = contents_parts.clone();
         let image_config = image_config.clone();
         let response_format = response_format.clone();
-        let model = model.clone();
+        let model_to_use = clean_model_name.clone();
 
         tasks.push(tokio::spawn(async move {
             let mut last_error = String::new();
@@ -3601,7 +3627,7 @@ pub async fn handle_images_edits(
                 let gemini_body = json!({
                     "project": project_id,
                     "requestId": format!("img-edit-{}", uuid::Uuid::new_v4()),
-                    "model": model,
+                    "model": model_to_use,
                     "userAgent": "antigravity",
                     "requestType": "image_gen",
                     "request": {
@@ -3658,13 +3684,18 @@ pub async fn handle_images_edits(
                                         status_code,
                                         None,
                                         &err_text,
-                                        Some("dall-e-3"),
+                                        Some(&model_to_use),
                                     )
                                     .await;
                                 continue; // Retry loop
                             }
                             return Err(last_error);
                         }
+                        token_manager.mark_account_success(&account_id);
+                        token_manager
+                            .clear_persisted_live_limit(&account_id, Some(&model_to_use))
+                            .await;
+
                         match response.json::<Value>().await {
                             Ok(json) => return Ok((json, response_format.clone(), email)),
                             Err(e) => return Err(format!("Parse error: {}", e)),
@@ -3747,7 +3778,15 @@ pub async fn handle_images_edits(
             n,
             error_msg
         );
-        return Err((StatusCode::BAD_GATEWAY, error_msg));
+        let status = if error_msg.contains("429") || error_msg.contains("Quota exhausted") {
+            StatusCode::TOO_MANY_REQUESTS
+        } else if error_msg.contains("503") || error_msg.contains("Service Unavailable") {
+            StatusCode::SERVICE_UNAVAILABLE
+        } else {
+            StatusCode::BAD_GATEWAY
+        };
+
+        return Err((status, error_msg));
     }
 
     if !errors.is_empty() {
@@ -3770,11 +3809,15 @@ pub async fn handle_images_edits(
         "data": images
     });
 
+    tokio::spawn(async move {
+        let _ = account::refresh_all_quotas_logic().await;
+    });
+
     let email_header = used_email.unwrap_or_default();
     Ok((
         StatusCode::OK,
         [
-            ("X-Mapped-Model", "dall-e-3"),
+            ("X-Mapped-Model", clean_model_name.as_str()),
             ("X-Account-Email", email_header.as_str()),
         ],
         Json(openai_response),

@@ -54,6 +54,7 @@ import { useConfigStore } from '../../stores/useConfigStore';
 import { QuotaItem } from './QuotaItem';
 import { MODEL_CONFIG, sortModels } from '../../config/modelConfig';
 import { getValidationBlockedStatusLabel } from './accountValidationStatus';
+import { getLiveLimitForModel } from '../../utils/liveLimit';
 
 // ============================================================================
 // 类型定义
@@ -556,6 +557,7 @@ function AccountRowContent({
                                     percentage={modelData?.percentage || 0}
                                     resetTime={modelData?.reset_time}
                                     isProtected={isModelProtected(account.protected_models, model.protectedKey)}
+                                    liveLimit={getLiveLimitForModel(account, model.id, model.protectedKey)}
                                     Icon={MODEL_CONFIG[model.id]?.Icon || Bot}
                                 />
                             );

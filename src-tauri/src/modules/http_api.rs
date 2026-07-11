@@ -11,6 +11,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 // 预留 HTTP API 模块，当前未在主流程中启用
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
@@ -115,6 +116,7 @@ struct AccountResponse {
     name: Option<String>,
     is_current: bool,
     disabled: bool,
+    live_limited_models: HashMap<String, crate::models::account::LiveLimitStatus>,
     quota: Option<QuotaResponse>,
     device_bound: bool,
     last_used: i64,
@@ -262,6 +264,7 @@ async fn list_accounts() -> Result<impl IntoResponse, (StatusCode, Json<ErrorRes
                 name: acc.name,
                 is_current,
                 disabled: acc.disabled,
+                live_limited_models: acc.live_limited_models,
                 quota,
                 device_bound: acc.device_profile.is_some(),
                 last_used: acc.last_used,
@@ -305,6 +308,7 @@ async fn get_current_account() -> Result<impl IntoResponse, (StatusCode, Json<Er
             name: acc.name,
             is_current: true,
             disabled: acc.disabled,
+            live_limited_models: acc.live_limited_models,
             quota,
             device_bound: acc.device_profile.is_some(),
             last_used: acc.last_used,

@@ -9,7 +9,7 @@ use axum::{
     Router,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -139,6 +139,7 @@ struct AccountResponse {
     proxy_disabled_reason: Option<String>,
     proxy_disabled_at: Option<i64>,
     protected_models: Vec<String>,
+    live_limited_models: HashMap<String, crate::models::account::LiveLimitStatus>,
     /// [NEW] 403 验证阻止状态
     validation_blocked: bool,
     validation_blocked_until: Option<i64>,
@@ -227,6 +228,7 @@ fn to_account_response(
         proxy_disabled_reason: account.proxy_disabled_reason.clone(),
         proxy_disabled_at: account.proxy_disabled_at,
         protected_models: account.protected_models.iter().cloned().collect(),
+        live_limited_models: account.live_limited_models.clone(),
         quota: account.quota.as_ref().map(|q| QuotaResponse {
             models: q
                 .models
@@ -955,6 +957,7 @@ async fn admin_list_accounts(
                 proxy_disabled_reason: acc.proxy_disabled_reason,
                 proxy_disabled_at: acc.proxy_disabled_at,
                 protected_models: acc.protected_models.into_iter().collect(),
+                live_limited_models: acc.live_limited_models,
                 validation_blocked: acc.validation_blocked,
                 validation_blocked_until: acc.validation_blocked_until,
                 validation_blocked_reason: acc.validation_blocked_reason,
@@ -1035,6 +1038,7 @@ async fn admin_get_current_account(
                 proxy_disabled_reason: acc.proxy_disabled_reason,
                 proxy_disabled_at: acc.proxy_disabled_at,
                 protected_models: acc.protected_models.into_iter().collect(),
+                live_limited_models: acc.live_limited_models,
                 validation_blocked: acc.validation_blocked,
                 validation_blocked_until: acc.validation_blocked_until,
                 validation_blocked_reason: acc.validation_blocked_reason,

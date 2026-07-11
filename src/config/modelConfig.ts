@@ -63,7 +63,7 @@ export const MODEL_CONFIG: Record<string, ModelConfig> = {
     'gemini-3.1-flash-image': {
         label: 'Gemini 3.1 Flash Image',
         shortLabel: 'G3.1 Image',
-        protectedKey: 'gemini-3-pro-image',
+        protectedKey: 'gemini-3.1-flash-image',
         Icon: Gemini.Color,
         i18nKey: 'proxy.model.pro_image',
         i18nDescKey: 'proxy.model.pro_image_1_1',

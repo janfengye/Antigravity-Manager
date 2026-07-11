@@ -785,9 +785,16 @@ pub fn transform_openai_request(
                 crate::proxy::config::ThinkingBudgetMode::Adaptive => user_budget,
             };
 
+            let model_lower = mapped_model.to_lowercase();
+            let mut final_budget = budget;
+            if model_lower.contains("claude-opus-4-6-thinking") {
+                tracing::debug!("[Opus-Alignment] Enforcing fixed thinkingBudget 24576 for Opus 4.6 (OpenAI)");
+                final_budget = 24576;
+            }
+
             gen_config["thinkingConfig"] = json!({
                 "includeThoughts": true,
-                "thinkingBudget": budget
+                "thinkingBudget": final_budget
             });
 
             // [CRITICAL] 思维模型的 maxOutputTokens 必须大于 thinkingBudget
@@ -803,34 +810,61 @@ pub fn transform_openai_request(
                 8192
             };
 
-            if let Some(max_tokens) = request.max_tokens {
-                if (max_tokens as i64) <= budget {
-                    gen_config["maxOutputTokens"] = json!(budget + min_overhead);
+            if model_lower.contains("claude-opus-4-6-thinking") {
+                gen_config["maxOutputTokens"] = json!(57344);
+                tracing::debug!("[Opus-Alignment] Enforcing maxOutputTokens 57344 for Opus 4.6 (OpenAI)");
+            } else if let Some(max_tokens) = request.max_tokens {
+                if (max_tokens as i64) <= final_budget {
+                    gen_config["maxOutputTokens"] = json!(final_budget + min_overhead);
                 }
             } else {
                 // [FIX #1592] Use a more conservative default to avoid 400 error on 128k context models
-                gen_config["maxOutputTokens"] = json!(budget + overhead);
+                gen_config["maxOutputTokens"] = json!(final_budget + overhead);
             }
 
             let new_max = gen_config["maxOutputTokens"].as_i64().unwrap_or(0);
             tracing::debug!(
                 "[OpenAI-Request] Adjusted maxOutputTokens to {} for thinking model (budget={})",
                 new_max,
-                budget
+                final_budget
             );
 
             tracing::debug!(
                 "[OpenAI-Request] Injected thinkingConfig for model {}: thinkingBudget={} (mode={:?})",
-                mapped_model, budget, tb_config.mode
+                mapped_model, final_budget, tb_config.mode
             );
         }
     }
 
+    // [FIX] Cap maxOutputTokens to prevent 400 Invalid Argument
+    if let Some(val) = gen_config["maxOutputTokens"].as_i64() {
+        let model_lower = mapped_model.to_lowercase();
+        let safe_limit = if model_lower.contains("claude") {
+            64000
+        } else {
+            65536
+        };
+        if val > safe_limit {
+            tracing::warn!(
+                "[Generation-Config] Capping maxOutputTokens from {} to {} to prevent 400 Invalid Argument",
+                val, safe_limit
+            );
+            gen_config["maxOutputTokens"] = json!(safe_limit);
+        }
+    }
+
     if let Some(stop) = &request.stop {
-        if stop.is_string() {
-            gen_config["stopSequences"] = json!([stop]);
-        } else if stop.is_array() {
-            gen_config["stopSequences"] = stop.clone();
+        let model_lower = mapped_model.to_lowercase();
+        if !model_lower.contains("claude-opus-4-6-thinking") {
+            if stop.is_string() {
+                gen_config["stopSequences"] = json!([stop]);
+            } else if stop.is_array() {
+                gen_config["stopSequences"] = stop.clone();
+            }
+        } else {
+            tracing::debug!(
+                "[Opus-Alignment] Skipping stopSequences for Opus 4.6 to match OpenAI protocol"
+            );
         }
     }
 

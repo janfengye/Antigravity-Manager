@@ -230,7 +230,7 @@ pub fn update_tray_menus(app: &tauri::AppHandle) {
                             if name == "gemini-3.1-pro-high" || name == "gemini-3-pro-high" {
                                 gemini_high = m.percentage;
                             }
-                            if name == "gemini-3-pro-image" {
+                            if name == "gemini-3.1-flash-image" || name == "gemini-3-pro-image" {
                                 gemini_image = m.percentage;
                             }
                             if name == "claude-sonnet-4-6" || name == "claude-sonnet-4-5" {

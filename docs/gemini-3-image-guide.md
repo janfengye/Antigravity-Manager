@@ -112,7 +112,7 @@ print(response.json())
 | `image_size` | String | 否 | 显式指定分辨率，如 `"2K"`, `"4K"` (优先级高于 `quality`) |
 | `style` | String | 否 | 风格描述，会自动追加到 Prompt 中 |
 | `n` | Integer | 否 | 生成数量 (默认 1) |
-| `model` | String | 否 | 模型名称 (默认 `gemini-3-pro-image`) |
+| `model` | String | 否 | 模型名称 (默认 `gemini-3.1-flash-image`) |
 
 ### 调用示例 (Python)
 

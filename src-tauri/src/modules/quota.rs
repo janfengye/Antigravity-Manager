@@ -397,6 +397,7 @@ pub async fn fetch_quota_with_cache(
                     // Parse deprecated model routing rules
                     if let Some(deprecated) = quota_response.deprecated_model_ids {
                         for (old_id, info) in deprecated {
+                            // Register forwarding rules (including those mapping to gemini-pro-agent)
                             quota_data
                                 .model_forwarding_rules
                                 .insert(old_id, info.new_model_id);

@@ -115,6 +115,56 @@ fn increase_nofile_limit() {
     }
 }
 
+/// Windows FFI calls to disable Efficiency Mode (EcoQoS / Power Throttling)
+/// to prevent background freezes when minimized/hidden.
+#[cfg(target_os = "windows")]
+mod windows_api {
+    type Bool = i32;
+    type Handle = *mut std::ffi::c_void;
+
+    #[repr(C)]
+    struct ProcessPowerThrottlingState {
+        version: u32,
+        control_mask: u32,
+        state_mask: u32,
+    }
+
+    #[link(name = "Kernel32")]
+    extern "system" {
+        fn GetCurrentProcess() -> Handle;
+        fn SetProcessInformation(
+            h_process: Handle,
+            process_information_class: u32,
+            process_information: *mut std::ffi::c_void,
+            process_information_size: u32,
+        ) -> Bool;
+    }
+
+    pub fn disable_efficiency_mode() {
+        unsafe {
+            let mut state = ProcessPowerThrottlingState {
+                version: 1, // PROCESS_POWER_THROTTLING_STATE::VERSION
+                control_mask: 0x1, // PROCESS_POWER_THROTTLING_CURRENT_EXECUTION_SPEED
+                state_mask: 0,
+            };
+            let process_handle = GetCurrentProcess();
+            // ProcessPowerThrottling = 4
+            let res = SetProcessInformation(
+                process_handle,
+                4,
+                &mut state as *mut _ as *mut std::ffi::c_void,
+                std::mem::size_of::<ProcessPowerThrottlingState>() as u32,
+            );
+            if res == 0 {
+                let err = std::io::Error::last_os_error();
+                tracing::warn!("Failed to disable Windows Power Throttling / EcoQoS: {}", err);
+            } else {
+                tracing::info!("Successfully disabled Windows Power Throttling / EcoQoS for the process.");
+            }
+        }
+    }
+}
+
 // Test command
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -123,6 +173,10 @@ fn greet(name: &str) -> String {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Disable Windows background throttling/EcoQoS
+    #[cfg(target_os = "windows")]
+    windows_api::disable_efficiency_mode();
+
     // Check for headless mode
     let args: Vec<String> = std::env::args().collect();
     let is_headless = args.iter().any(|arg| arg == "--headless");

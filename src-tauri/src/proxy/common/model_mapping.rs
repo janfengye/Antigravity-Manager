@@ -40,6 +40,8 @@ static CLAUDE_TO_GEMINI: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|
     // Claude Opus 4.6
     m.insert("claude-opus-4-6-thinking", "claude-opus-4-6-thinking");
     m.insert("claude-opus-4-6", "claude-opus-4-6-thinking");
+    m.insert("claude-opus-4.6-thinking", "claude-opus-4-6-thinking");
+    m.insert("claude-opus-4.6", "claude-opus-4-6-thinking");
     m.insert("claude-opus-4-6-20260201", "claude-opus-4-6-thinking");
 
     m.insert("claude-haiku-4", "claude-sonnet-4-6");
@@ -73,11 +75,11 @@ static CLAUDE_TO_GEMINI: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|
     // - Concrete model IDs should pass through unchanged.
     // - Generic aliases (without tier) still route to preview as fallback entrypoint.
     m.insert("gemini-3.1-pro-low", "gemini-3.1-pro-low");
-    m.insert("gemini-3.1-pro-high", "gemini-3.1-pro-high");
+    m.insert("gemini-3.1-pro-high", "gemini-pro-agent");
     m.insert("gemini-3.1-pro-preview", "gemini-3.1-pro-preview");
     m.insert("gemini-3.1-pro", "gemini-3.1-pro-preview");
     m.insert("gemini-3-pro-low", "gemini-3-pro-low");
-    m.insert("gemini-3-pro-high", "gemini-3-pro-high");
+    m.insert("gemini-3-pro-high", "gemini-pro-agent");
     m.insert("gemini-3-pro-preview", "gemini-3-pro-preview");
     m.insert("gemini-3-pro", "gemini-3-pro-preview");
     m.insert("gemini-2.5-flash", "gemini-2.5-flash");
@@ -105,7 +107,8 @@ static CLAUDE_TO_GEMINI: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|
 /// 映射后的目标模型名称
 ///
 /// # 示例
-/// ```
+/// ```ignore
+/// use antigravity_tools_lib::proxy::common::model_mapping::map_claude_model_to_gemini;
 /// // 精确匹配
 /// assert_eq!(map_claude_model_to_gemini("claude-opus-4"), "claude-opus-4-5-thinking");
 ///
@@ -313,15 +316,22 @@ pub fn resolve_model_route(
 ///
 /// Standard IDs:
 /// - `gemini-3-flash`: All Flash variants (1.5-flash, 2.5-flash, 3-flash, etc.)
+/// - `gemini-3.1-flash-image`: Flash image generation/edit quota.
 /// - `gemini-3-pro-high`: All Pro variants (1.5-pro, 2.5-pro, etc.)
+/// - `gemini-3-pro-image`: Pro image generation quota.
 /// - `claude-sonnet-4-5`: All Claude Sonnet variants (3-5-sonnet, sonnet-4-5, etc.)
 ///
 /// Returns `None` if the model doesn't match any of the 3 protected categories.
 pub fn normalize_to_standard_id(model_name: &str) -> Option<String> {
     let lower = model_name.to_lowercase();
 
-    // 1. image 资源 (优先匹配，使用 contains 匹配以支持任何变体，如 gemini-3.1-flash-image)
+    // 1. Image resources must keep Flash image and Pro image in separate quota buckets.
+    // The quota API exposes `gemini-3.1-flash-image` separately, so grouping it under
+    // `gemini-3-pro-image` makes available Flash image quota look exhausted.
     if lower.contains("image") {
+        if lower.contains("flash") {
+            return Some("gemini-3.1-flash-image".to_string());
+        }
         return Some("gemini-3-pro-image".to_string());
     }
 
@@ -379,7 +389,7 @@ mod tests {
         // Gemini Pro concrete IDs should pass through unchanged.
         assert_eq!(
             map_claude_model_to_gemini("gemini-3-pro-high"),
-            "gemini-3-pro-high"
+            "gemini-pro-agent"
         );
         assert_eq!(
             map_claude_model_to_gemini("gemini-3-pro-low"),
@@ -387,7 +397,7 @@ mod tests {
         );
         assert_eq!(
             map_claude_model_to_gemini("gemini-3.1-pro-high"),
-            "gemini-3.1-pro-high"
+            "gemini-pro-agent"
         );
         assert_eq!(
             map_claude_model_to_gemini("gemini-3.1-pro-low"),
@@ -438,11 +448,11 @@ mod tests {
         );
         assert_eq!(
             normalize_to_standard_id("gemini-3.1-flash-image"),
-            Some("gemini-3-pro-image".to_string())
+            Some("gemini-3.1-flash-image".to_string())
         );
         assert_eq!(
             normalize_to_standard_id("gemini-3.1-flash-image-4k"),
-            Some("gemini-3-pro-image".to_string())
+            Some("gemini-3.1-flash-image".to_string())
         );
     }
 

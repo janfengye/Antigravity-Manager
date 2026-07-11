@@ -13,6 +13,7 @@ export interface Account {
     proxy_disabled_reason?: string;
     proxy_disabled_at?: number;
     protected_models?: string[];
+    live_limited_models?: Record<string, LiveLimitStatus>;
     custom_label?: string;  // 用户自定义标签
     validation_blocked?: boolean;
     validation_blocked_until?: number;
@@ -20,6 +21,15 @@ export interface Account {
     validation_url?: string;
     created_at: number;
     last_used: number;
+}
+
+export interface LiveLimitStatus {
+    model: string;
+    status: number;
+    reason: string;
+    until: number;
+    detected_at: number;
+    message?: string;
 }
 
 export interface TokenData {
@@ -86,4 +96,3 @@ export interface DeviceProfileVersion {
     profile: DeviceProfile;
     is_current?: boolean;
 }
-
