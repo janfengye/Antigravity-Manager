@@ -53,11 +53,11 @@ pub struct SignatureCache {
     /// Value: Model family identifier (e.g., "claude-3-5-sonnet", "gemini-2.0-flash")
     thinking_families: Mutex<HashMap<String, CacheEntry<String>>>,
 
-    /// Layer 3: Session ID -> Latest Thinking Signature (NEW)
+    /// Layer 3: Session ID -> Map of Message Count -> Thinking Signature (NEW)
     /// Key: session fingerprint (e.g., "sid-a1b2c3d4...")
-    /// Value: The most recent valid thought signature for this session
-    /// This prevents signature pollution between different conversations
-    session_signatures: Mutex<HashMap<String, CacheEntry<SessionSignatureEntry>>>,
+    /// Value: A map of message count to thought signature
+    /// This prevents signature pollution between different conversations and preserves history
+    session_signatures: Mutex<HashMap<String, CacheEntry<HashMap<usize, SessionSignatureEntry>>>>,
 
     /// Layer 4: Session ID -> Assistant Reasoning Text History (NEW v4.2.0)
     /// Key: session fingerprint
@@ -171,7 +171,7 @@ impl SignatureCache {
 
     // ===== Layer 3: Session-based Signature Storage =====
 
-    /// Store the latest thinking signature for a session.
+    /// Store the thinking signature for a session at a specific message count.
     /// This is the preferred method for tracking signatures across tool loops.
     ///
     /// # Arguments
@@ -189,29 +189,34 @@ impl SignatureCache {
         }
 
         if let Ok(mut cache) = self.session_signatures.lock() {
-            let should_store = match cache.get(session_id) {
+            let entry = cache
+                .entry(session_id.to_string())
+                .or_insert_with(|| CacheEntry::new(HashMap::new()));
+
+            // Update timestamp to refresh TTL
+            entry.timestamp = SystemTime::now();
+
+            // Detect if a rewind happened (e.g. if we have cached signatures with message_count
+            // greater than the current message_count, those should be cleared since that future is gone).
+            entry.data.retain(|&mc, _| {
+                if mc > message_count {
+                    tracing::info!(
+                        "[SignatureCache] Rewind detected for {} at count {}: removing future signature at count {}.",
+                        session_id,
+                        message_count,
+                        mc
+                    );
+                    false
+                } else {
+                    true
+                }
+            });
+
+            let should_store = match entry.data.get(&message_count) {
                 None => true,
                 Some(existing) => {
-                    if existing.is_expired() {
-                        true
-                    } else if message_count < existing.data.message_count {
-                        // [CRITICAL] Rewind detected: user deleted messages or reverted to an earlier state.
-                        // The cached signature is now from a "future" that no longer exists in history.
-                        // We MUST force an update to prevent sending a future signature.
-                        tracing::info!(
-                            "[SignatureCache] Rewind detected for {}: {} -> {} messages. Forcing signature update.",
-                            session_id,
-                            existing.data.message_count,
-                            message_count
-                        );
-                        true
-                    } else if message_count == existing.data.message_count {
-                        // Same message count: only update if the new signature is longer (more complete)
-                        signature.len() > existing.data.signature.len()
-                    } else {
-                        // message_count > existing.data.message_count: normal progression
-                        true
-                    }
+                    // Same message count: only update if the new signature is longer (more complete)
+                    signature.len() > existing.signature.len()
                 }
             };
 
@@ -222,12 +227,12 @@ impl SignatureCache {
                     message_count,
                     signature.len()
                 );
-                cache.insert(
-                    session_id.to_string(),
-                    CacheEntry::new(SessionSignatureEntry {
+                entry.data.insert(
+                    message_count,
+                    SessionSignatureEntry {
                         signature,
                         message_count,
-                    }),
+                    },
                 );
             }
 
@@ -254,14 +259,39 @@ impl SignatureCache {
         if let Ok(cache) = self.session_signatures.lock() {
             if let Some(entry) = cache.get(session_id) {
                 if !entry.is_expired() {
-                    tracing::debug!(
-                        "[SignatureCache] Session {} -> HIT (len={})",
-                        session_id,
-                        entry.data.signature.len()
-                    );
-                    return Some(entry.data.signature.clone());
+                    // Find the signature with the maximum message_count (the latest one)
+                    if let Some(sig_entry) = entry.data.values().max_by_key(|e| e.message_count) {
+                        tracing::debug!(
+                            "[SignatureCache] Session {} (latest, msg_count={}) -> HIT (len={})",
+                            session_id,
+                            sig_entry.message_count,
+                            sig_entry.signature.len()
+                        );
+                        return Some(sig_entry.signature.clone());
+                    }
                 } else {
                     tracing::debug!("[SignatureCache] Session {} -> EXPIRED", session_id);
+                }
+            }
+        }
+        None
+    }
+
+    /// Retrieve the thinking signature for a session at a specific message count.
+    /// Returns None if not found or expired.
+    pub fn get_session_signature_at(&self, session_id: &str, message_count: usize) -> Option<String> {
+        if let Ok(cache) = self.session_signatures.lock() {
+            if let Some(entry) = cache.get(session_id) {
+                if !entry.is_expired() {
+                    if let Some(sig_entry) = entry.data.get(&message_count) {
+                        tracing::debug!(
+                            "[SignatureCache] Session {} (msg_count={}) -> HIT (len={})",
+                            session_id,
+                            message_count,
+                            sig_entry.signature.len()
+                        );
+                        return Some(sig_entry.signature.clone());
+                    }
                 }
             }
         }

@@ -941,6 +941,7 @@ fn build_contents(
     _claude_req: &ClaudeRequest,
     is_thinking_enabled: bool,
     session_id: &str,
+    msg_index: usize,
     allow_dummy_thought: bool,
     is_retry: bool,
     tool_id_to_name: &mut HashMap<String, String>,
@@ -1205,12 +1206,22 @@ fn build_contents(
                             .or(last_thought_signature.as_ref())
                             .cloned()
                             .or_else(|| {
-                                // [NEW v3.3.17] Try session-based signature cache first (Layer 3)
-                                // This provides conversation-level isolation
+                                // Try session-based signature cache at specific msg_index first (Layer 3)
+                                crate::proxy::SignatureCache::global().get_session_signature_at(session_id, msg_index)
+                                    .map(|s| {
+                                        tracing::info!(
+                                            "[Claude-Request] Recovered signature from SESSION cache at turn {} (session: {}, len: {})",
+                                            msg_index, session_id, s.len()
+                                        );
+                                        s
+                                    })
+                            })
+                            .or_else(|| {
+                                // Fallback to latest session signature
                                 crate::proxy::SignatureCache::global().get_session_signature(session_id)
                                     .map(|s| {
                                         tracing::info!(
-                                            "[Claude-Request] Recovered signature from SESSION cache (session: {}, len: {})",
+                                            "[Claude-Request] Recovered latest signature from SESSION cache (session: {}, len: {})",
                                             session_id, s.len()
                                         );
                                         s
@@ -1523,6 +1534,7 @@ fn build_google_content(
     claude_req: &ClaudeRequest,
     is_thinking_enabled: bool,
     session_id: &str,
+    msg_index: usize,
     allow_dummy_thought: bool,
     is_retry: bool,
     tool_id_to_name: &mut HashMap<String, String>,
@@ -1580,6 +1592,7 @@ fn build_google_content(
         claude_req,
         is_thinking_enabled,
         session_id,
+        msg_index,
         allow_dummy_thought,
         is_retry,
         tool_id_to_name,
@@ -1639,12 +1652,13 @@ fn build_google_contents(
         }
     }
 
-    for (_i, msg) in messages.iter().enumerate() {
+    for (i, msg) in messages.iter().enumerate() {
         let google_content = build_google_content(
             msg,
             claude_req,
             is_thinking_enabled,
             session_id,
+            i,
             allow_dummy_thought,
             is_retry,
             tool_id_to_name,

@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> Professional AI Account Management & Protocol Proxy System (v4.4.0)
+> Professional AI Account Management & Protocol Proxy System (v4.4.1)
 
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
@@ -9,7 +9,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.4.0-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.4.1-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -134,7 +134,7 @@ Automatically detects your OS, architecture, and package manager — one command
 
 **Linux / macOS:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.4.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.4.1/install.sh | bash
 ```
 
 **Windows (PowerShell):**
@@ -144,7 +144,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **Supported formats**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **Advanced usage**: Install a specific version `curl -fsSL ... | bash -s -- --version 4.4.0`，dry-run mode `curl -fsSL ... | bash -s -- --dry-run`
+> **Advanced usage**: Install a specific version `curl -fsSL ... | bash -s -- --version 4.4.1`，dry-run mode `curl -fsSL ... | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 If you have [Homebrew](https://brew.sh/) installed, you can also install via:
@@ -427,6 +427,15 @@ In clients that support OpenAI protocol (e.g., Cherry Studio), you can configure
 ## 📝 Developer & Community
 
 *   **Changelog**:
+    *   **v4.4.1 (2026-07-12)**:
+        -   **[Core Fix] Resolve System Tray Exit, Process Residual & Port Occupancy**:
+            -   **Terminate Background Async Tasks**: Explicitly aborts all background scan and monitor tasks in the Token Manager when the user triggers "Quit" from the tray menu, ensuring they don't block Tauri's teardown flow.
+            -   **Guaranteed Process Termination**: Invokes `std::process::exit(0)` after gracefully stopping the admin server. This completely resolves the Windows system tray freeze (where the icon remained visible but unresponsive) and ensures the web proxy port (`8045`) is freed immediately.
+            -   *Related Issue*: See [Issue #3242](https://github.com/lbjlaq/Antigravity-Manager/issues/3242).
+        -   **[Core Fix] Resolve Multi-Turn Tool Call 400 Bad Request Due to Missing Thought Signature (Claude Code Compatibility)**:
+            -   **Multi-Turn Signature Caching**: Refactored the session signature caching mechanism to store a map of message counts to signatures (`HashMap<usize, SessionSignatureEntry>`) instead of caching only the single latest signature per session, ensuring signatures from historical turns are preserved.
+            -   **Precise Signature Recovery**: Updated the request adapter translation logic to pass the current message index through the parser during content construction, and retrieve the exact signature associated with that specific turn index via `get_session_signature_at` to backfill Gemini's `functionCall` elements, preventing 400 validation failures.
+            -   *Related Issue*: See [Issue #3243](https://github.com/lbjlaq/Antigravity-Manager/issues/3243).
     *   **v4.4.0 (2026-07-11)**:
         -   **[Core Feature & Fix] Windows Background Throttling & System Tray Freeze Fix**:
             -   **Disable Efficiency Mode & Power Throttling**: Fixed the issue where Windows aggressively forces the process into "Efficiency Mode" (EcoQoS) when minimized/hidden to the system tray. We programmatically disable Power Throttling via Win32 APIs at startup to restore proper thread priority and CPU Core scheduling.

@@ -84,19 +84,27 @@ pub fn create_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
                     }
                 }
                 "quit" => {
-                    // 先停止 Admin Server，避免僵尸 socket
+                    // 先停止 Admin Server 和反代服务，避免进程残留和端口占用
                     let state = app.state::<crate::commands::proxy::ProxyServiceState>();
                     let admin_server = state.admin_server.clone();
+                    let instance = state.instance.clone();
                     tauri::async_runtime::spawn(async move {
-                        let mut lock = admin_server.write().await;
-                        if let Some(admin) = lock.take() {
-                            admin.axum_server.stop();
-                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        {
+                            let mut lock = admin_server.write().await;
+                            if let Some(admin) = lock.take() {
+                                admin.axum_server.stop();
+                            }
                         }
+                        {
+                            let mut lock = instance.write().await;
+                            if let Some(inst) = lock.take() {
+                                inst.token_manager.abort_background_tasks().await;
+                                inst.axum_server.set_running(false).await;
+                            }
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        std::process::exit(0);
                     });
-                    // 給一點時間讓 socket 關閉
-                    std::thread::sleep(std::time::Duration::from_millis(200));
-                    app.exit(0);
                 }
                 "refresh_curr" => {
                     // Execute refresh asynchronously

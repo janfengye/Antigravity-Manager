@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> 专业级 AI 账号管理与协议代理系统 (v4.4.0)
+> 专业级 AI 账号管理与协议代理系统 (v4.4.1)
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
 
@@ -8,7 +8,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.4.0-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.4.1-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -133,7 +133,7 @@ graph TD
 
 **Linux / macOS:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.4.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.4.1/install.sh | bash
 ```
 
 **Windows (PowerShell):**
@@ -143,7 +143,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **支持的格式**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **高级用法**: 安装指定版本 `curl -fsSL ... | bash -s -- --version 4.4.0`，预览模式 `curl -fsSL ... | bash -s -- --dry-run`
+> **高级用法**: 安装指定版本 `curl -fsSL ... | bash -s -- --version 4.4.1`，预览模式 `curl -fsSL ... | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 如果您已安装 [Homebrew](https://brew.sh/)，也可以通过以下命令安装：
@@ -439,6 +439,15 @@ response = client.chat.completions.create(
 ## 📝 开发者与社区
 
 *   **版本演进 (Changelog)**:
+    *   **v4.4.1 (2026-07-12)**:
+        -   **[核心修复] 修复托盘退出卡死、进程残留与端口占用问题 (System Tray Exit & Process Residual Fix)**:
+            -   **彻底中止后台异步任务**: 在用户点击系统托盘菜单的“退出”时，显式中止 Token 管理器的所有后台扫描与监控任务，防止其阻塞 Tauri 的资源释放流程。
+            -   **强力关闭进程消除残留**: 在优雅停止管理后台服务器后，使用 `std::process::exit(0)` 强力退出进程，彻底解决了 Windows 平台下退出后应用图标依旧残留在系统状态栏（且无法再次右键交互）、后台进程常驻以及端口（`8045`）被持续占用的问题，保障下次启动的顺利加载。
+            -   *相关 Issue*: 详见 [Issue #3242](https://github.com/lbjlaq/Antigravity-Manager/issues/3242)。
+        -   **[核心修复] 解决多轮对话历史工具调用缺少思维签名导致的 400 异常 (Multi-Turn Thought Signature Recovery Fix)**:
+            -   **将会话签名升级为多轮缓存结构**: 改变了原本只缓存最新一条签名的机制，将会话签名结构重构为以消息位置/对话轮次为索引的多值缓存，确保历史轮次的签名不会被后续请求覆盖。
+            -   **历史签名精准回填**: 在 Claude 协议到 Google API 转换层重构消息遍历逻辑，在转换时将当前消息索引传递给处理器，并通过 `get_session_signature_at` 接口精准召回该工具调用在历史上对应的 `thought_signature` 进行回填，杜绝了多轮工具交互时因签名缺失抛出 400 错误的 Bug。
+            -   *相关 Issue*: 详见 [Issue #3243](https://github.com/lbjlaq/Antigravity-Manager/issues/3243)。
     *   **v4.4.0 (2026-07-11)**:
         -   **[核心功能/修复] 修复 Windows 系统后台运行/最小化卡死与托盘无响应问题 (Windows Background Throttling & System Tray Freeze Fix)**:
             -   **禁用效率模式与电源限流**: 针对 Windows 平台在最小化/隐藏至系统托盘时被系统强制判定为后台闲置并打上“效率模式（EcoQoS）”标签的问题，我们在启动时通过 Win32 API 显式禁用了电源限流（Power Throttling），恢复正常的 CPU 核心与线程调度优先级。
