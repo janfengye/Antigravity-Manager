@@ -279,7 +279,11 @@ impl SignatureCache {
 
     /// Retrieve the thinking signature for a session at a specific message count.
     /// Returns None if not found or expired.
-    pub fn get_session_signature_at(&self, session_id: &str, message_count: usize) -> Option<String> {
+    pub fn get_session_signature_at(
+        &self,
+        session_id: &str,
+        message_count: usize,
+    ) -> Option<String> {
         if let Ok(cache) = self.session_signatures.lock() {
             if let Some(entry) = cache.get(session_id) {
                 if !entry.is_expired() {

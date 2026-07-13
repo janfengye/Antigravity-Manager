@@ -434,14 +434,18 @@ pub async fn handle_messages(
                 if msg.role == "user" || msg.role == "assistant" {
                     match &mut msg.content {
                         crate::proxy::mappers::claude::models::MessageContent::String(s) => {
-                            let cleaned = crate::proxy::mappers::caveman_cleaner::CavemanCleaner::clean(s);
+                            let cleaned =
+                                crate::proxy::mappers::caveman_cleaner::CavemanCleaner::clean(s);
                             if cleaned != *s {
                                 *s = cleaned;
                             }
                         }
                         crate::proxy::mappers::claude::models::MessageContent::Array(blocks) => {
                             for block in blocks {
-                                if let crate::proxy::mappers::claude::models::ContentBlock::Text { text } = block {
+                                if let crate::proxy::mappers::claude::models::ContentBlock::Text {
+                                    text,
+                                } = block
+                                {
                                     let cleaned = crate::proxy::mappers::caveman_cleaner::CavemanCleaner::clean(text);
                                     if cleaned != *text {
                                         *text = cleaned;
@@ -2320,16 +2324,20 @@ fn inject_cache_control_to_forked_summary(body: &mut serde_json::Value) {
             if let Some(content) = first_msg.get_mut("content") {
                 if let Some(content_arr) = content.as_array_mut() {
                     if !content_arr.is_empty() {
-                        let is_summary = content_arr[0].get("text")
+                        let is_summary = content_arr[0]
+                            .get("text")
                             .and_then(|t| t.as_str())
                             .map(|s| s.contains("Context has been compressed"))
                             .unwrap_or(false);
-                        
+
                         if is_summary {
                             if let Some(obj) = content_arr[0].as_object_mut() {
-                                obj.insert("cache_control".to_string(), serde_json::json!({
-                                    "type": "ephemeral"
-                                }));
+                                obj.insert(
+                                    "cache_control".to_string(),
+                                    serde_json::json!({
+                                        "type": "ephemeral"
+                                    }),
+                                );
                             }
                         }
                     }

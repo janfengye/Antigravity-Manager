@@ -52,7 +52,10 @@ pub fn wrap_request_v2(
             2_000_000
         };
 
-        let raw_estimated = crate::proxy::mappers::context_manager::ContextManager::estimate_gemini_token_usage(&inner_request);
+        let raw_estimated =
+            crate::proxy::mappers::context_manager::ContextManager::estimate_gemini_token_usage(
+                &inner_request,
+            );
         let calibrator = crate::proxy::mappers::estimation_calibrator::get_calibrator();
         let mut estimated_usage = calibrator.calibrate(raw_estimated);
         let mut usage_ratio = estimated_usage as f32 / context_limit as f32;
@@ -61,7 +64,10 @@ pub fn wrap_request_v2(
         let threshold_l2 = crate::proxy::config::get_global_threshold_l2();
         let threshold_l3 = crate::proxy::config::get_global_threshold_l3();
 
-        let trace_id = format!("gemini_req_{}", chrono::Utc::now().timestamp_subsec_millis());
+        let trace_id = format!(
+            "gemini_req_{}",
+            chrono::Utc::now().timestamp_subsec_millis()
+        );
 
         tracing::info!(
             "[{}] [ContextManager] [Gemini] Context pressure: {:.1}% (raw: {}, calibrated: {} / {}), Calibration factor: {:.2}",
@@ -70,7 +76,10 @@ pub fn wrap_request_v2(
 
         // ===== Layer 1: Tool Message Trimming =====
         if usage_ratio > threshold_l1 && !compression_applied {
-            if crate::proxy::mappers::context_manager::ContextManager::trim_gemini_tool_messages(&mut inner_request, 5) {
+            if crate::proxy::mappers::context_manager::ContextManager::trim_gemini_tool_messages(
+                &mut inner_request,
+                5,
+            ) {
                 tracing::info!(
                     "[{}] [Layer-1] [Gemini] Tool trimming triggered (usage: {:.1}%, threshold: {:.1}%)",
                     trace_id, usage_ratio * 100.0, threshold_l1 * 100.0
@@ -83,7 +92,10 @@ pub fn wrap_request_v2(
 
                 tracing::info!(
                     "[{}] [Layer-1] [Gemini] Compression result: {:.1}% → {:.1}% (saved {} tokens)",
-                    trace_id, usage_ratio * 100.0, new_ratio * 100.0, estimated_usage - new_usage
+                    trace_id,
+                    usage_ratio * 100.0,
+                    new_ratio * 100.0,
+                    estimated_usage - new_usage
                 );
 
                 if new_ratio < 0.7 {
@@ -157,7 +169,8 @@ pub fn wrap_request_v2(
                         Err(e) => {
                             tracing::error!(
                                 "[{}] [Layer-3] [Gemini] Background Fork+Summary failed: {}",
-                                trace_id_clone, e
+                                trace_id_clone,
+                                e
                             );
                         }
                     }
@@ -167,7 +180,10 @@ pub fn wrap_request_v2(
     }
 
     if compression_level != "disabled" {
-        if let Some(contents) = inner_request.get_mut("contents").and_then(|c| c.as_array_mut()) {
+        if let Some(contents) = inner_request
+            .get_mut("contents")
+            .and_then(|c| c.as_array_mut())
+        {
             let total_turns = contents.len();
             let protected_last_n = 4;
             let start_protection_idx = total_turns.saturating_sub(protected_last_n);
@@ -178,7 +194,9 @@ pub fn wrap_request_v2(
                         if let Some(obj) = part.as_object_mut() {
                             if compression_level == "medium" || compression_level == "high" {
                                 if i < start_protection_idx {
-                                    if let Some(text_val) = obj.get_mut("text").and_then(|t| t.as_str()) {
+                                    if let Some(text_val) =
+                                        obj.get_mut("text").and_then(|t| t.as_str())
+                                    {
                                         let cleaned = crate::proxy::mappers::caveman_cleaner::CavemanCleaner::clean(text_val);
                                         if cleaned != text_val {
                                             obj.insert("text".to_string(), json!(cleaned));
@@ -187,7 +205,9 @@ pub fn wrap_request_v2(
                                 }
                             }
                             if let Some(fr) = obj.get_mut("functionResponse") {
-                                if let Some(resp_obj) = fr.get_mut("response").and_then(|r| r.as_object_mut()) {
+                                if let Some(resp_obj) =
+                                    fr.get_mut("response").and_then(|r| r.as_object_mut())
+                                {
                                     for (_key, val) in resp_obj.iter_mut() {
                                         if let Some(s) = val.as_str() {
                                             let cleaned = crate::proxy::mappers::rtk_cleaner::RtkCleaner::clean(s, 48);
@@ -216,7 +236,6 @@ pub fn wrap_request_v2(
             if let Some(parts) = content.get_mut("parts").and_then(|p| p.as_array_mut()) {
                 for part in parts {
                     if let Some(obj) = part.as_object_mut() {
-
                         // 1. 处理 functionCall (Assistant 请求调用工具)
                         if let Some(fc) = obj.get_mut("functionCall") {
                             if fc.get("id").is_none() && is_target_claude {
@@ -1038,7 +1057,10 @@ async fn try_compress_gemini_with_summary(
         trace_id
     );
 
-    let last_signature = crate::proxy::mappers::context_manager::ContextManager::extract_last_openai_valid_signature(session_id_str);
+    let last_signature =
+        crate::proxy::mappers::context_manager::ContextManager::extract_last_openai_valid_signature(
+            session_id_str,
+        );
 
     let signature_instruction = if let Some(ref sig) = last_signature {
         format!("\n\n**CRITICAL**: The last thinking signature is:\n```\n{}\n```\nYou MUST include this EXACTLY in the <latest_thinking_signature> section.", sig)
@@ -1046,7 +1068,8 @@ async fn try_compress_gemini_with_summary(
         "\n\n**Note**: No thinking signature found in history. Leave <latest_thinking_signature> empty.".to_string()
     };
 
-    let mut summary_messages = original_request.get("contents")
+    let mut summary_messages = original_request
+        .get("contents")
         .and_then(|c| c.as_array())
         .cloned()
         .unwrap_or_default();
@@ -1141,17 +1164,29 @@ async fn try_compress_gemini_with_summary(
             "parts": [{
                 "text": "I have reviewed the compressed context summary. I understand the current state and will continue from here."
             }]
-        })
+        }),
     ];
 
     let mut forked_request = original_request.clone();
     if let Some(obj) = forked_request.as_object_mut() {
         let mut final_msgs = forked_messages;
-        if let Some(last_msg) = original_request.get("contents").and_then(|c| c.as_array()).and_then(|a| a.last()) {
+        if let Some(last_msg) = original_request
+            .get("contents")
+            .and_then(|c| c.as_array())
+            .and_then(|a| a.last())
+        {
             if last_msg.get("role").and_then(|r| r.as_str()) == Some("user") {
-                let has_summary_inst = last_msg.get("parts")
+                let has_summary_inst = last_msg
+                    .get("parts")
                     .and_then(|p| p.as_array())
-                    .map(|arr| arr.iter().any(|part| part.get("text").and_then(|t| t.as_str()).map(|t| t.contains(CONTEXT_SUMMARY_PROMPT)).unwrap_or(false)))
+                    .map(|arr| {
+                        arr.iter().any(|part| {
+                            part.get("text")
+                                .and_then(|t| t.as_str())
+                                .map(|t| t.contains(CONTEXT_SUMMARY_PROMPT))
+                                .unwrap_or(false)
+                        })
+                    })
                     .unwrap_or(false);
                 if !has_summary_inst {
                     final_msgs.push(last_msg.clone());
@@ -1252,7 +1287,7 @@ mod tests {
 
         let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         crate::proxy::config::update_thinking_budget_config(
-            crate::proxy::config::ThinkingBudgetConfig::default()
+            crate::proxy::config::ThinkingBudgetConfig::default(),
         );
 
         // Test with Flash model
@@ -1522,7 +1557,7 @@ mod tests {
         fn test_gemini_thinking_injection_default() {
             let _lock = super::TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
             crate::proxy::config::update_thinking_budget_config(
-                crate::proxy::config::ThinkingBudgetConfig::default()
+                crate::proxy::config::ThinkingBudgetConfig::default(),
             );
             // 验证 Gemini 模型注入默认预算 24576
             let body = json!({
@@ -1719,7 +1754,10 @@ mod tests {
         });
 
         let wrapped = wrap_request(&body, "test-proj", "gemini-2.5-pro", None, None, None);
-        println!("DEBUG: wrapped = {}", serde_json::to_string_pretty(&wrapped).unwrap());
+        println!(
+            "DEBUG: wrapped = {}",
+            serde_json::to_string_pretty(&wrapped).unwrap()
+        );
         let contents = wrapped["request"]["contents"].as_array().unwrap();
 
         let text_1 = contents[0]["parts"][0]["text"].as_str().unwrap();
@@ -1729,7 +1767,9 @@ mod tests {
         let text_2 = contents[1]["parts"][0]["text"].as_str().unwrap();
         assert!(!text_2.contains("Basically"));
 
-        let tool_resp = contents[3]["parts"][0]["functionResponse"]["response"]["output"].as_str().unwrap();
+        let tool_resp = contents[3]["parts"][0]["functionResponse"]["response"]["output"]
+            .as_str()
+            .unwrap();
         assert!(tool_resp.contains("Collapsed"));
         assert!(tool_resp.contains("Error: compilation failed"));
 

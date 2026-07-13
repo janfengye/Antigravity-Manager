@@ -3,22 +3,17 @@
 //! Rust-native implementation of terminal/shell log cleanup pipeline.
 //! Ported and optimized from OmniRoute's RTK engine.
 
+use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::HashSet;
-use once_cell::sync::Lazy;
 
 // Lazy static regular expressions to optimize processing
-static ANSI_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"\x1B\[[0-9;?]*[a-zA-Z]").unwrap()
-});
+static ANSI_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\x1B\[[0-9;?]*[a-zA-Z]").unwrap());
 
-static DIGITS_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"\d+").unwrap()
-});
+static DIGITS_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\d+").unwrap());
 
-static ERROR_KEYWORDS_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)error|failed|exception|traceback|FAIL|✖|TS\d{4}").unwrap()
-});
+static ERROR_KEYWORDS_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)error|failed|exception|traceback|FAIL|✖|TS\d{4}").unwrap());
 
 /// Clean terminal outputs: strip ANSI codes, deduplicate lines, group similar lines, and smart truncate.
 pub struct RtkCleaner;
@@ -91,9 +86,8 @@ impl RtkCleaner {
             }
 
             // Extract "skeleton" by replacing all digits with '#'
-            let get_skeleton = |s: &str| -> String {
-                DIGITS_RE.replace_all(s.trim(), "#").to_string()
-            };
+            let get_skeleton =
+                |s: &str| -> String { DIGITS_RE.replace_all(s.trim(), "#").to_string() };
 
             let current_skeleton = get_skeleton(current_trimmed);
             let mut run_end = index + 1;
@@ -120,12 +114,14 @@ impl RtkCleaner {
                 // We have a run of 3 or more similar lines. Keep the first line,
                 // add a placeholder indicating collapsed lines, and keep the last line of the run.
                 result.push(lines[index]);
-                
+
                 // Construct placeholder string
                 // We use static allocation for the placeholder to avoid lifetime issues
-                let collapsed_msg = Box::leak(format!("... [Collapsed {} similar lines] ...", run_len - 2).into_boxed_str());
+                let collapsed_msg = Box::leak(
+                    format!("... [Collapsed {} similar lines] ...", run_len - 2).into_boxed_str(),
+                );
                 result.push(collapsed_msg);
-                
+
                 result.push(lines[run_end - 1]);
             } else {
                 // Copy the elements as-is
@@ -175,10 +171,17 @@ impl RtkCleaner {
 
         // 3. Append Middle errors or collapse info
         if !middle_errors.is_empty() {
-            output.push(format!("... [Truncated {} verbose lines, preserved {} error lines] ...", skipped_count, middle_errors.len()));
+            output.push(format!(
+                "... [Truncated {} verbose lines, preserved {} error lines] ...",
+                skipped_count,
+                middle_errors.len()
+            ));
             output.extend(middle_errors);
         } else if skipped_count > 0 {
-            output.push(format!("... [Truncated {} verbose lines] ...", skipped_count));
+            output.push(format!(
+                "... [Truncated {} verbose lines] ...",
+                skipped_count
+            ));
         }
 
         // 4. Keep Tail

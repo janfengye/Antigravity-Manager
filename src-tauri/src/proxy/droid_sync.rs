@@ -315,35 +315,51 @@ pub fn read_droid_config_content() -> Result<String, String> {
 
 #[tauri::command]
 pub async fn get_droid_sync_status(proxy_url: String) -> Result<DroidStatus, String> {
-    let (installed, version) = check_droid_installed();
-    let (is_synced, has_backup, current_base_url, synced_count) = if installed {
-        get_sync_status(&proxy_url)
-    } else {
-        (false, false, None, 0)
-    };
+    tokio::task::spawn_blocking(move || {
+        let (installed, version) = check_droid_installed();
+        let (is_synced, has_backup, current_base_url, synced_count) = if installed {
+            get_sync_status(&proxy_url)
+        } else {
+            (false, false, None, 0)
+        };
 
-    Ok(DroidStatus {
-        installed,
-        version,
-        is_synced,
-        has_backup,
-        current_base_url,
-        files: vec![DROID_CONFIG_FILE.to_string()],
-        synced_count,
+        Ok(DroidStatus {
+            installed,
+            version,
+            is_synced,
+            has_backup,
+            current_base_url,
+            files: vec![DROID_CONFIG_FILE.to_string()],
+            synced_count,
+        })
     })
+    .await
+    .unwrap_or_else(|_| Err("Task panicked".to_string()))
 }
 
 #[tauri::command]
 pub async fn execute_droid_sync(custom_models: Vec<Value>) -> Result<usize, String> {
-    sync_droid_config(custom_models)
+    tokio::task::spawn_blocking(move || {
+        sync_droid_config(custom_models)
+    })
+    .await
+    .unwrap_or_else(|_| Err("Task panicked".to_string()))
 }
 
 #[tauri::command]
 pub async fn execute_droid_restore() -> Result<(), String> {
-    restore_droid_config()
+    tokio::task::spawn_blocking(move || {
+        restore_droid_config()
+    })
+    .await
+    .unwrap_or_else(|_| Err("Task panicked".to_string()))
 }
 
 #[tauri::command]
 pub async fn get_droid_config_content() -> Result<String, String> {
-    read_droid_config_content()
+    tokio::task::spawn_blocking(move || {
+        read_droid_config_content()
+    })
+    .await
+    .unwrap_or_else(|_| Err("Task panicked".to_string()))
 }

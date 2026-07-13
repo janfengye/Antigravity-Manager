@@ -446,7 +446,10 @@ impl AxumServer {
                     .get(handlers::openai::handle_responses_websocket),
             ) // 兼容 Codex CLI
             .route("/responses", post(handlers::openai::handle_completions))
-            .route("/responses/compact", post(handlers::openai::handle_completions))
+            .route(
+                "/responses/compact",
+                post(handlers::openai::handle_completions),
+            )
             .route(
                 "/v1/images/generations",
                 post(handlers::openai::handle_images_generations),

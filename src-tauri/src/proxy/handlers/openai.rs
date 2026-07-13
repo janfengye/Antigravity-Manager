@@ -3046,9 +3046,7 @@ pub async fn handle_images_generations(
     match handle_images_generations_internal(state, body).await {
         Ok((email_header, openai_response)) => Ok((
             StatusCode::OK,
-            [
-                ("X-Account-Email", email_header.as_str()),
-            ],
+            [("X-Account-Email", email_header.as_str())],
             Json(openai_response),
         )
             .into_response()),

@@ -22,7 +22,11 @@ pub mod user_token;
 pub async fn list_accounts(
     proxy_state: tauri::State<'_, crate::commands::proxy::ProxyServiceState>,
 ) -> Result<Vec<Account>, String> {
-    let mut accounts = modules::list_accounts()?;
+    let mut accounts = tokio::task::spawn_blocking(move || {
+        modules::list_accounts()
+    })
+    .await
+    .unwrap_or_else(|_| Err("Task panicked".to_string()))?;
 
     // [FIX] Blend in-memory TokenManager rate limit status into the UI quota display
     let instance_lock = proxy_state.instance.read().await;
@@ -189,7 +193,11 @@ use crate::models::AccountExportResponse;
 
 #[tauri::command]
 pub async fn export_accounts(account_ids: Vec<String>) -> Result<AccountExportResponse, String> {
-    modules::account::export_accounts_by_ids(&account_ids)
+    tokio::task::spawn_blocking(move || {
+        modules::account::export_accounts_by_ids(&account_ids)
+    })
+    .await
+    .unwrap_or_else(|_| Err("Task panicked".to_string()))
 }
 
 /// 内部辅助功能：在添加或导入账号后自动刷新一次额度

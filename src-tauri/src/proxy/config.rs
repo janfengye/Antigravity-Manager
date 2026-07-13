@@ -131,15 +131,27 @@ static GLOBAL_THRESHOLD_L2: OnceLock<RwLock<f32>> = OnceLock::new();
 static GLOBAL_THRESHOLD_L3: OnceLock<RwLock<f32>> = OnceLock::new();
 
 pub fn get_global_threshold_l1() -> f32 {
-    GLOBAL_THRESHOLD_L1.get().and_then(|lock| lock.read().ok()).map(|v| *v).unwrap_or(0.6)
+    GLOBAL_THRESHOLD_L1
+        .get()
+        .and_then(|lock| lock.read().ok())
+        .map(|v| *v)
+        .unwrap_or(0.6)
 }
 
 pub fn get_global_threshold_l2() -> f32 {
-    GLOBAL_THRESHOLD_L2.get().and_then(|lock| lock.read().ok()).map(|v| *v).unwrap_or(0.75)
+    GLOBAL_THRESHOLD_L2
+        .get()
+        .and_then(|lock| lock.read().ok())
+        .map(|v| *v)
+        .unwrap_or(0.75)
 }
 
 pub fn get_global_threshold_l3() -> f32 {
-    GLOBAL_THRESHOLD_L3.get().and_then(|lock| lock.read().ok()).map(|v| *v).unwrap_or(0.9)
+    GLOBAL_THRESHOLD_L3
+        .get()
+        .and_then(|lock| lock.read().ok())
+        .map(|v| *v)
+        .unwrap_or(0.9)
 }
 
 pub fn get_global_compression_level() -> String {
@@ -185,19 +197,25 @@ pub fn update_global_compression_level(level: String, scaling: bool) {
 
 pub fn update_global_thresholds(l1: f32, l2: f32, l3: f32) {
     if let Some(lock) = GLOBAL_THRESHOLD_L1.get() {
-        if let Ok(mut cfg) = lock.write() { *cfg = l1; }
+        if let Ok(mut cfg) = lock.write() {
+            *cfg = l1;
+        }
     } else {
         let _ = GLOBAL_THRESHOLD_L1.set(RwLock::new(l1));
     }
 
     if let Some(lock) = GLOBAL_THRESHOLD_L2.get() {
-        if let Ok(mut cfg) = lock.write() { *cfg = l2; }
+        if let Ok(mut cfg) = lock.write() {
+            *cfg = l2;
+        }
     } else {
         let _ = GLOBAL_THRESHOLD_L2.set(RwLock::new(l2));
     }
 
     if let Some(lock) = GLOBAL_THRESHOLD_L3.get() {
-        if let Ok(mut cfg) = lock.write() { *cfg = l3; }
+        if let Ok(mut cfg) = lock.write() {
+            *cfg = l3;
+        }
     } else {
         let _ = GLOBAL_THRESHOLD_L3.set(RwLock::new(l3));
     }

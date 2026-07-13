@@ -143,7 +143,7 @@ mod windows_api {
     pub fn disable_efficiency_mode() {
         unsafe {
             let mut state = ProcessPowerThrottlingState {
-                version: 1, // PROCESS_POWER_THROTTLING_STATE::VERSION
+                version: 1,        // PROCESS_POWER_THROTTLING_STATE::VERSION
                 control_mask: 0x1, // PROCESS_POWER_THROTTLING_CURRENT_EXECUTION_SPEED
                 state_mask: 0,
             };
@@ -157,9 +157,14 @@ mod windows_api {
             );
             if res == 0 {
                 let err = std::io::Error::last_os_error();
-                tracing::warn!("Failed to disable Windows Power Throttling / EcoQoS: {}", err);
+                tracing::warn!(
+                    "Failed to disable Windows Power Throttling / EcoQoS: {}",
+                    err
+                );
             } else {
-                tracing::info!("Successfully disabled Windows Power Throttling / EcoQoS for the process.");
+                tracing::info!(
+                    "Successfully disabled Windows Power Throttling / EcoQoS for the process."
+                );
             }
         }
     }

@@ -3,12 +3,12 @@
 //! Responsible for estimating token usage and purifying context (stripping thinking blocks)
 //! to prevent "Prompt is too long" errors and avoid invalid signatures.
 
+use super::caveman_cleaner::CavemanCleaner;
 use super::claude::models::{ClaudeRequest, ContentBlock, Message, MessageContent, SystemPrompt};
-use super::openai::models::{OpenAIRequest, OpenAIMessage};
+use super::openai::models::{OpenAIMessage, OpenAIRequest};
+use super::rtk_cleaner::RtkCleaner;
 use serde_json::{json, Value};
 use tracing::{debug, info};
-use super::rtk_cleaner::RtkCleaner;
-use super::caveman_cleaner::CavemanCleaner;
 
 /// Helper to estimate tokens from text with multi-language awareness
 ///
@@ -508,7 +508,11 @@ impl ContextManager {
             if msg.role == "assistant" && msg.reasoning_content.is_some() {
                 // [FIX] If the assistant message contains tool calls, do NOT strip its reasoning_content/signature.
                 // Otherwise, the signature chain is broken, and Google API throws a 400 thought_signature error for historical tool calls.
-                let has_tool_calls = msg.tool_calls.as_ref().map(|tc| !tc.is_empty()).unwrap_or(false);
+                let has_tool_calls = msg
+                    .tool_calls
+                    .as_ref()
+                    .map(|tc| !tc.is_empty())
+                    .unwrap_or(false);
                 if !has_tool_calls {
                     tracing::debug!(
                         "[ContextManager] Purifying reasoning_content of message {} (len: {})",
@@ -804,7 +808,11 @@ impl ContextManager {
             if msg.role == "assistant" {
                 if let Some(ref mut reasoning) = msg.reasoning_content {
                     // [FIX] If the assistant message contains tool calls, do NOT strip its reasoning_content/signature.
-                    let has_tool_calls = msg.tool_calls.as_ref().map(|tc| !tc.is_empty()).unwrap_or(false);
+                    let has_tool_calls = msg
+                        .tool_calls
+                        .as_ref()
+                        .map(|tc| !tc.is_empty())
+                        .unwrap_or(false);
                     if !has_tool_calls && reasoning.len() > 10 {
                         *reasoning = "...".to_string();
                         compressed_count += 1;
@@ -891,14 +899,22 @@ impl ContextManager {
             let mut current_round: Option<OpenAIToolRound> = None;
 
             for (i, msg) in contents.iter().enumerate() {
-                let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("unknown");
-                let has_function_call = msg.get("parts")
+                let role = msg
+                    .get("role")
+                    .and_then(|r| r.as_str())
+                    .unwrap_or("unknown");
+                let has_function_call = msg
+                    .get("parts")
                     .and_then(|p| p.as_array())
                     .map(|arr| arr.iter().any(|part| part.get("functionCall").is_some()))
                     .unwrap_or(false);
-                let has_function_response = msg.get("parts")
+                let has_function_response = msg
+                    .get("parts")
                     .and_then(|p| p.as_array())
-                    .map(|arr| arr.iter().any(|part| part.get("functionResponse").is_some()))
+                    .map(|arr| {
+                        arr.iter()
+                            .any(|part| part.get("functionResponse").is_some())
+                    })
                     .unwrap_or(false);
 
                 if role == "model" && has_function_call {
@@ -930,7 +946,9 @@ impl ContextManager {
                 if let Some(parts) = msg.get_mut("parts").and_then(|p| p.as_array_mut()) {
                     for part in parts {
                         if let Some(fr) = part.get_mut("functionResponse") {
-                            if let Some(resp_obj) = fr.get_mut("response").and_then(|r| r.as_object_mut()) {
+                            if let Some(resp_obj) =
+                                fr.get_mut("response").and_then(|r| r.as_object_mut())
+                            {
                                 for (_key, val) in resp_obj.iter_mut() {
                                     if let Some(s) = val.as_str() {
                                         let cleaned = RtkCleaner::clean(s, 48);
@@ -997,14 +1015,20 @@ impl ContextManager {
                     continue;
                 }
 
-                let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("unknown");
+                let role = msg
+                    .get("role")
+                    .and_then(|r| r.as_str())
+                    .unwrap_or("unknown");
                 if role == "model" {
                     if let Some(parts) = msg.get_mut("parts").and_then(|p| p.as_array_mut()) {
                         for part in parts {
                             if let Some(obj) = part.as_object_mut() {
-                                if let Some(thought) = obj.get("thought").and_then(|t| t.as_bool()) {
+                                if let Some(thought) = obj.get("thought").and_then(|t| t.as_bool())
+                                {
                                     if thought {
-                                        if let Some(text) = obj.get_mut("text").and_then(|t| t.as_str()) {
+                                        if let Some(text) =
+                                            obj.get_mut("text").and_then(|t| t.as_str())
+                                        {
                                             if text.len() > 10 {
                                                 obj.insert("text".to_string(), json!("..."));
                                                 compressed_count += 1;

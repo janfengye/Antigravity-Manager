@@ -228,9 +228,9 @@ pub fn transform_openai_request(
     // [FIX #2167] gemini-*-flash 支持 thinking，functionCall 必须携带 thoughtSignature
     // [FEATURE] 同时注入 includeThoughts:true 使 Gemini 返回 thought:true chunk，客户端可显示思维链
     let is_gemini_flash_thinking = mapped_model_lower.contains("gemini")
-        && (mapped_model_lower.contains("flash") 
-        || mapped_model_lower.contains("-flash-") 
-        || mapped_model_lower.contains("-flash-agent"))
+        && (mapped_model_lower.contains("flash")
+            || mapped_model_lower.contains("-flash-")
+            || mapped_model_lower.contains("-flash-agent"))
         && !mapped_model_lower.contains("claude");
     let is_claude_thinking = mapped_model_lower.ends_with("-thinking");
     let is_thinking_model = is_gemini_3_thinking || is_claude_thinking || is_gemini_flash_thinking;
@@ -788,7 +788,9 @@ pub fn transform_openai_request(
             let model_lower = mapped_model.to_lowercase();
             let mut final_budget = budget;
             if model_lower.contains("claude-opus-4-6-thinking") {
-                tracing::debug!("[Opus-Alignment] Enforcing fixed thinkingBudget 24576 for Opus 4.6 (OpenAI)");
+                tracing::debug!(
+                    "[Opus-Alignment] Enforcing fixed thinkingBudget 24576 for Opus 4.6 (OpenAI)"
+                );
                 final_budget = 24576;
             }
 
@@ -812,7 +814,9 @@ pub fn transform_openai_request(
 
             if model_lower.contains("claude-opus-4-6-thinking") {
                 gen_config["maxOutputTokens"] = json!(57344);
-                tracing::debug!("[Opus-Alignment] Enforcing maxOutputTokens 57344 for Opus 4.6 (OpenAI)");
+                tracing::debug!(
+                    "[Opus-Alignment] Enforcing maxOutputTokens 57344 for Opus 4.6 (OpenAI)"
+                );
             } else if let Some(max_tokens) = request.max_tokens {
                 if (max_tokens as i64) <= final_budget {
                     gen_config["maxOutputTokens"] = json!(final_budget + min_overhead);
@@ -1128,7 +1132,10 @@ pub fn transform_openai_request(
         );
 
     // [FIX] Inject explicit tool mapping instructions for Gemini to read SKILL.md
-    structured_system_instruction = crate::proxy::mappers::common_utils::enhance_gemini_skills_prompt(&structured_system_instruction);
+    structured_system_instruction =
+        crate::proxy::mappers::common_utils::enhance_gemini_skills_prompt(
+            &structured_system_instruction,
+        );
 
     inner_request["systemInstruction"] = json!({
         "role": "system",

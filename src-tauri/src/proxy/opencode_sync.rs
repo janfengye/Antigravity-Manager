@@ -1686,21 +1686,25 @@ pub fn read_opencode_config_content(file_name: Option<String>) -> Result<String,
 
 #[tauri::command]
 pub async fn get_opencode_sync_status(proxy_url: String) -> Result<OpencodeStatus, String> {
-    let (installed, version) = check_opencode_installed();
-    let (is_synced, has_backup, current_base_url) = get_sync_status(&proxy_url);
+    tokio::task::spawn_blocking(move || {
+        let (installed, version) = check_opencode_installed();
+        let (is_synced, has_backup, current_base_url) = get_sync_status(&proxy_url);
 
-    Ok(OpencodeStatus {
-        installed,
-        version,
-        is_synced,
-        has_backup,
-        current_base_url,
-        files: vec![
-            OPENCODE_CONFIG_FILE.to_string(),
-            ANTIGRAVITY_CONFIG_FILE.to_string(),
-            ANTIGRAVITY_ACCOUNTS_FILE.to_string(),
-        ],
+        Ok(OpencodeStatus {
+            installed,
+            version,
+            is_synced,
+            has_backup,
+            current_base_url,
+            files: vec![
+                OPENCODE_CONFIG_FILE.to_string(),
+                ANTIGRAVITY_CONFIG_FILE.to_string(),
+                ANTIGRAVITY_ACCOUNTS_FILE.to_string(),
+            ],
+        })
     })
+    .await
+    .unwrap_or_else(|_| Err("Failed to execute check".to_string()))
 }
 
 #[tauri::command]
@@ -1710,12 +1714,20 @@ pub async fn execute_opencode_sync(
     sync_accounts: Option<bool>,
     models: Option<Vec<String>>,
 ) -> Result<(), String> {
-    sync_opencode_config(&proxy_url, &api_key, sync_accounts.unwrap_or(false), models)
+    tokio::task::spawn_blocking(move || {
+        sync_opencode_config(&proxy_url, &api_key, sync_accounts.unwrap_or(false), models)
+    })
+    .await
+    .unwrap_or_else(|_| Err("Failed to execute sync".to_string()))
 }
 
 #[tauri::command]
 pub async fn execute_opencode_restore() -> Result<(), String> {
-    restore_opencode_config()
+    tokio::task::spawn_blocking(move || {
+        restore_opencode_config()
+    })
+    .await
+    .unwrap_or_else(|_| Err("Failed to execute restore".to_string()))
 }
 
 #[derive(Deserialize)]
@@ -1728,7 +1740,11 @@ pub struct GetOpencodeConfigRequest {
 pub async fn get_opencode_config_content(
     request: GetOpencodeConfigRequest,
 ) -> Result<String, String> {
-    read_opencode_config_content(request.file_name)
+    tokio::task::spawn_blocking(move || {
+        read_opencode_config_content(request.file_name)
+    })
+    .await
+    .unwrap_or_else(|_| Err("Failed to read config".to_string()))
 }
 
 /// List of Antigravity model IDs that may have been added to legacy providers

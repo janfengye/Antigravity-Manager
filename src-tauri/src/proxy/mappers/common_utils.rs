@@ -941,7 +941,6 @@ pub fn sanitize_system_prompt_for_tokens(text: &str) -> String {
     cleaned
 }
 
-
 /// [FIX] Parse markdown base64 images from text and split into Gemini parts
 /// This prevents base64 reflection bloat where generated images are sent back as huge text strings
 pub fn parse_markdown_images_to_parts(text: &str) -> Vec<Value> {
@@ -949,10 +948,10 @@ pub fn parse_markdown_images_to_parts(text: &str) -> Vec<Value> {
     // Match ![...](data:image/...;base64,...)
     if let Ok(re) = regex::Regex::new(r"!\[.*?\]\(data:(image/[^;]+);base64,([a-zA-Z0-9+/=]+)\)") {
         let mut last_match = 0;
-        
+
         for cap in re.captures_iter(text) {
             let m = cap.get(0).unwrap();
-            
+
             // Add preceding text
             if m.start() > last_match {
                 let preceding = &text[last_match..m.start()];
@@ -960,17 +959,17 @@ pub fn parse_markdown_images_to_parts(text: &str) -> Vec<Value> {
                     parts.push(json!({"text": preceding}));
                 }
             }
-            
+
             // Add inlineData image
             let mime = cap.get(1).unwrap().as_str();
             let b64 = cap.get(2).unwrap().as_str();
             parts.push(json!({
                 "inlineData": { "mimeType": mime, "data": b64 }
             }));
-            
+
             last_match = m.end();
         }
-        
+
         // Add remaining text
         if last_match < text.len() {
             let remaining = &text[last_match..];
@@ -978,18 +977,18 @@ pub fn parse_markdown_images_to_parts(text: &str) -> Vec<Value> {
                 parts.push(json!({"text": remaining}));
             }
         }
-        
+
         if parts.is_empty() && !text.trim().is_empty() {
             parts.push(json!({"text": text}));
         }
-        
+
         return parts;
     }
-    
+
     if !text.trim().is_empty() {
         parts.push(json!({"text": text}));
     }
-    
+
     parts
 }
 
@@ -1000,7 +999,10 @@ pub fn enhance_gemini_skills_prompt(text: &str) -> String {
 
     // Inject before </skills_instructions> or </skills>
     if enhanced.contains("</skills_instructions>") {
-        enhanced = enhanced.replace("</skills_instructions>", &format!("{}</skills_instructions>", warning_note));
+        enhanced = enhanced.replace(
+            "</skills_instructions>",
+            &format!("{}</skills_instructions>", warning_note),
+        );
     } else if enhanced.contains("</skills>") {
         enhanced = enhanced.replace("</skills>", &format!("{}</skills>", warning_note));
     }

@@ -49,7 +49,7 @@ impl ProxyMonitor {
         }
 
         // Auto cleanup old logs (keep last 30 days)
-        tokio::spawn(async {
+        tokio::task::spawn_blocking(move || {
             match crate::modules::proxy_db::cleanup_old_logs(30) {
                 Ok(deleted) => {
                     if deleted > 0 {
@@ -86,7 +86,7 @@ impl ProxyMonitor {
             let model = log.model.clone().unwrap_or_else(|| "unknown".to_string());
             let account = account.clone();
             let cached = log.cached_tokens.unwrap_or(0);
-            tokio::spawn(async move {
+            tokio::task::spawn_blocking(move || {
                 if let Err(e) = crate::modules::token_stats::record_usage(
                     &account, &model, input, output, cached,
                 ) {
@@ -121,7 +121,7 @@ impl ProxyMonitor {
 
         // Save to DB
         let log_to_save = log.clone();
-        tokio::spawn(async move {
+        tokio::task::spawn_blocking(move || {
             if let Err(e) = crate::modules::proxy_db::save_log(&log_to_save) {
                 tracing::error!("Failed to save proxy log to DB: {}", e);
             }

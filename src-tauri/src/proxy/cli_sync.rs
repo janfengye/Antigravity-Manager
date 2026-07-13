@@ -796,25 +796,29 @@ pub fn sync_config(
 
 #[tauri::command]
 pub async fn get_cli_sync_status(app_type: CliApp, proxy_url: String) -> Result<CliStatus, String> {
-    let (installed, version) = check_cli_installed(&app_type);
-    let (is_synced, has_backup, current_base_url) = if installed {
-        get_sync_status(&app_type, &proxy_url)
-    } else {
-        (false, false, None)
-    };
+    tokio::task::spawn_blocking(move || {
+        let (installed, version) = check_cli_installed(&app_type);
+        let (is_synced, has_backup, current_base_url) = if installed {
+            get_sync_status(&app_type, &proxy_url)
+        } else {
+            (false, false, None)
+        };
 
-    Ok(CliStatus {
-        installed,
-        version,
-        is_synced,
-        has_backup,
-        current_base_url,
-        files: app_type
-            .config_files()
-            .into_iter()
-            .map(|f| f.name)
-            .collect(),
+        Ok(CliStatus {
+            installed,
+            version,
+            is_synced,
+            has_backup,
+            current_base_url,
+            files: app_type
+                .config_files()
+                .into_iter()
+                .map(|f| f.name)
+                .collect(),
+        })
     })
+    .await
+    .unwrap_or_else(|_| Err("Task panicked".to_string()))
 }
 
 #[tauri::command]
@@ -824,37 +828,45 @@ pub async fn execute_cli_sync(
     api_key: String,
     model: Option<String>,
 ) -> Result<(), String> {
-    sync_config(&app_type, &proxy_url, &api_key, model.as_deref())
+    tokio::task::spawn_blocking(move || {
+        sync_config(&app_type, &proxy_url, &api_key, model.as_deref())
+    })
+    .await
+    .unwrap_or_else(|_| Err("Task panicked".to_string()))
 }
 
 #[tauri::command]
 pub async fn execute_cli_restore(app_type: CliApp) -> Result<(), String> {
-    let files = app_type.config_files();
-    let mut restored_count = 0;
+    tokio::task::spawn_blocking(move || {
+        let files = app_type.config_files();
+        let mut restored_count = 0;
 
-    // 尝试从备份恢复
-    for file in &files {
-        let backup_path = file
-            .path
-            .with_file_name(format!("{}.antigravity.bak", file.name));
-        if backup_path.exists() {
-            // 还原：覆盖原文件
-            if let Err(e) = fs::rename(&backup_path, &file.path) {
-                return Err(format!("恢复备份失败 {}: {}", file.name, e));
+        // 尝试从备份恢复
+        for file in &files {
+            let backup_path = file
+                .path
+                .with_file_name(format!("{}.antigravity.bak", file.name));
+            if backup_path.exists() {
+                // 还原：覆盖原文件
+                if let Err(e) = fs::rename(&backup_path, &file.path) {
+                    return Err(format!("恢复备份失败 {}: {}", file.name, e));
+                }
+                restored_count += 1;
             }
-            restored_count += 1;
         }
-    }
 
-    if restored_count > 0 {
-        // 如果成功恢复了至少一个备份，就认为是恢复成功
-        return Ok(());
-    }
+        if restored_count > 0 {
+            // 如果成功恢复了至少一个备份，就认为是恢复成功
+            return Ok(());
+        }
 
-    // 如果没有备份，则执行原来的逻辑：恢复为默认配置
-    let default_url = app_type.default_url();
-    // 恢复默认时清空 API Key，让用户重新授权或使用官方 Key
-    sync_config(&app_type, default_url, "", None)
+        // 如果没有备份，则执行原来的逻辑：恢复为默认配置
+        let default_url = app_type.default_url();
+        // 恢复默认时清空 API Key，让用户重新授权或使用官方 Key
+        sync_config(&app_type, default_url, "", None)
+    })
+    .await
+    .unwrap_or_else(|_| Err("Task panicked".to_string()))
 }
 
 #[tauri::command]
@@ -862,21 +874,25 @@ pub async fn get_cli_config_content(
     app_type: CliApp,
     file_name: Option<String>,
 ) -> Result<String, String> {
-    let files = app_type.config_files();
-    let file = if let Some(name) = file_name {
-        files
-            .into_iter()
-            .find(|f| f.name == name)
-            .ok_or("找不到指定的文件".to_string())?
-    } else {
-        files
-            .into_iter()
-            .next()
-            .ok_or("找不到配置文件".to_string())?
-    };
+    tokio::task::spawn_blocking(move || {
+        let files = app_type.config_files();
+        let file = if let Some(name) = file_name {
+            files
+                .into_iter()
+                .find(|f| f.name == name)
+                .ok_or("找不到指定的文件".to_string())?
+        } else {
+            files
+                .into_iter()
+                .next()
+                .ok_or("找不到配置文件".to_string())?
+        };
 
-    if !file.path.exists() {
-        return Err("配置文件不存在".to_string());
-    }
-    fs::read_to_string(&file.path).map_err(|e| format!("读取配置文件失败: {}", e))
+        if !file.path.exists() {
+            return Err("配置文件不存在".to_string());
+        }
+        fs::read_to_string(&file.path).map_err(|e| format!("读取配置文件失败: {}", e))
+    })
+    .await
+    .unwrap_or_else(|_| Err("Task panicked".to_string()))
 }

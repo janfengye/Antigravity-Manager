@@ -761,7 +761,9 @@ fn should_enable_thinking_by_default(model: &str) -> bool {
 
     // [FEATURE] 为 gemini-*-flash 自动开启 thinking
     // 让 Cherry Studio 等客户端即使未显式传 thinking.type 也能获取思维链内容
-    if model_lower.contains("gemini") && (model_lower.contains("flash") || model_lower.contains("-flash-")) {
+    if model_lower.contains("gemini")
+        && (model_lower.contains("flash") || model_lower.contains("-flash-"))
+    {
         tracing::debug!(
             "[Thinking-Mode] Auto-enabling thinking for Flash model: {}",
             model
@@ -966,7 +968,11 @@ fn build_contents(
             if text != "(no content)" {
                 let trimmed = text.trim();
                 if !trimmed.is_empty() {
-                    parts.extend(crate::proxy::mappers::common_utils::parse_markdown_images_to_parts(trimmed));
+                    parts.extend(
+                        crate::proxy::mappers::common_utils::parse_markdown_images_to_parts(
+                            trimmed,
+                        ),
+                    );
                 }
             }
         }
@@ -990,7 +996,11 @@ fn build_contents(
                                 }
                             }
 
-                            parts.extend(crate::proxy::mappers::common_utils::parse_markdown_images_to_parts(text));
+                            parts.extend(
+                                crate::proxy::mappers::common_utils::parse_markdown_images_to_parts(
+                                    text,
+                                ),
+                            );
                             saw_non_thinking = true;
 
                             // 记录最近一次 User 任务文本用于后续比对

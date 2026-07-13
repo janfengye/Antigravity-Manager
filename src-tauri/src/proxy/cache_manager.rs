@@ -166,51 +166,58 @@ impl CacheManager {
             stats.0 += 1; // total
         }
 
-        match self.si_cache.get(raw_hash) {
-            Some(entry) if !Self::is_expired(entry.timestamp, LAYER_12_TTL) => {
-                if let Ok(mut stats) = self.si_stats.write() {
-                    stats.1 += 1; // hits
-                }
-                // 不更新 timestamp（节省写操作），但更新命中计数
-                let text = entry.sanitized_text.clone();
-                drop(entry);
-                // 使用 get_mut 安全地增加计数
-                if let Some(mut e) = self.si_cache.get_mut(raw_hash) {
-                    e.hit_count += 1;
-                }
-                tracing::debug!(
-                    "[CacheManager:L1-SI] HIT hash={} hit_count={}",
-                    &raw_hash[..raw_hash.len().min(16)],
-                    self.si_cache
-                        .get(raw_hash)
-                        .map(|e| e.hit_count)
-                        .unwrap_or(0)
-                );
-                Some(text)
-            }
-            Some(_) => {
-                // 已过期
-                self.si_cache.remove(raw_hash);
-                if let Ok(mut stats) = self.si_stats.write() {
-                    stats.2 += 1; // misses
-                }
-                tracing::debug!(
-                    "[CacheManager:L1-SI] EXPIRED hash={}",
-                    &raw_hash[..raw_hash.len().min(16)]
-                );
-                None
-            }
-            None => {
-                if let Ok(mut stats) = self.si_stats.write() {
-                    stats.2 += 1; // misses
-                }
-                tracing::debug!(
-                    "[CacheManager:L1-SI] MISS hash={}",
-                    &raw_hash[..raw_hash.len().min(16)]
-                );
-                None
+        let mut hit = false;
+        let mut expired = false;
+        let mut text = None;
+
+        if let Some(entry) = self.si_cache.get(raw_hash) {
+            if !Self::is_expired(entry.timestamp, LAYER_12_TTL) {
+                hit = true;
+                text = Some(entry.sanitized_text.clone());
+            } else {
+                expired = true;
             }
         }
+
+        if hit {
+            if let Ok(mut stats) = self.si_stats.write() {
+                stats.1 += 1; // hits
+            }
+            let mut hit_count = 0;
+            if let Some(mut e) = self.si_cache.get_mut(raw_hash) {
+                e.hit_count += 1;
+                hit_count = e.hit_count;
+            }
+            tracing::debug!(
+                "[CacheManager:L1-SI] HIT hash={} hit_count={}",
+                &raw_hash[..raw_hash.len().min(16)],
+                hit_count
+            );
+            return text;
+        }
+
+        if expired {
+            self.si_cache.remove_if(raw_hash, |_, entry| {
+                Self::is_expired(entry.timestamp, LAYER_12_TTL)
+            });
+            if let Ok(mut stats) = self.si_stats.write() {
+                stats.2 += 1; // misses
+            }
+            tracing::debug!(
+                "[CacheManager:L1-SI] EXPIRED hash={}",
+                &raw_hash[..raw_hash.len().min(16)]
+            );
+            return None;
+        }
+
+        if let Ok(mut stats) = self.si_stats.write() {
+            stats.2 += 1; // misses
+        }
+        tracing::debug!(
+            "[CacheManager:L1-SI] MISS hash={}",
+            &raw_hash[..raw_hash.len().min(16)]
+        );
+        None
     }
 
     /// 存入 Layer 1: raw → sanitized
@@ -259,44 +266,55 @@ impl CacheManager {
             stats.0 += 1;
         }
 
-        match self.tools_cache.get(raw_hash) {
-            Some(entry) if !Self::is_expired(entry.timestamp, LAYER_12_TTL) => {
-                if let Ok(mut stats) = self.tools_stats.write() {
-                    stats.1 += 1;
-                }
-                let json = entry.tools_json.clone();
-                drop(entry);
-                if let Some(mut e) = self.tools_cache.get_mut(raw_hash) {
-                    e.hit_count += 1;
-                }
-                tracing::debug!(
-                    "[CacheManager:L2-Tools] HIT hash={}",
-                    &raw_hash[..raw_hash.len().min(16)]
-                );
-                Some(json)
-            }
-            Some(_) => {
-                self.tools_cache.remove(raw_hash);
-                if let Ok(mut stats) = self.tools_stats.write() {
-                    stats.2 += 1;
-                }
-                tracing::debug!(
-                    "[CacheManager:L2-Tools] EXPIRED hash={}",
-                    &raw_hash[..raw_hash.len().min(16)]
-                );
-                None
-            }
-            None => {
-                if let Ok(mut stats) = self.tools_stats.write() {
-                    stats.2 += 1;
-                }
-                tracing::debug!(
-                    "[CacheManager:L2-Tools] MISS hash={}",
-                    &raw_hash[..raw_hash.len().min(16)]
-                );
-                None
+        let mut hit = false;
+        let mut expired = false;
+        let mut json = None;
+
+        if let Some(entry) = self.tools_cache.get(raw_hash) {
+            if !Self::is_expired(entry.timestamp, LAYER_12_TTL) {
+                hit = true;
+                json = Some(entry.tools_json.clone());
+            } else {
+                expired = true;
             }
         }
+
+        if hit {
+            if let Ok(mut stats) = self.tools_stats.write() {
+                stats.1 += 1;
+            }
+            if let Some(mut e) = self.tools_cache.get_mut(raw_hash) {
+                e.hit_count += 1;
+            }
+            tracing::debug!(
+                "[CacheManager:L2-Tools] HIT hash={}",
+                &raw_hash[..raw_hash.len().min(16)]
+            );
+            return json;
+        }
+
+        if expired {
+            self.tools_cache.remove_if(raw_hash, |_, entry| {
+                Self::is_expired(entry.timestamp, LAYER_12_TTL)
+            });
+            if let Ok(mut stats) = self.tools_stats.write() {
+                stats.2 += 1;
+            }
+            tracing::debug!(
+                "[CacheManager:L2-Tools] EXPIRED hash={}",
+                &raw_hash[..raw_hash.len().min(16)]
+            );
+            return None;
+        }
+
+        if let Ok(mut stats) = self.tools_stats.write() {
+            stats.2 += 1;
+        }
+        tracing::debug!(
+            "[CacheManager:L2-Tools] MISS hash={}",
+            &raw_hash[..raw_hash.len().min(16)]
+        );
+        None
     }
 
     /// 存入 Layer 2: raw → processed tools JSON
@@ -359,40 +377,54 @@ impl CacheManager {
             stats.0 += 1;
         }
 
-        match self.prefix_tracker.get(hash) {
-            Some(entry) if entry.expires_at > Instant::now() => {
-                if let Ok(mut stats) = self.prefix_stats.write() {
-                    stats.1 += 1;
-                }
+        let mut hit = false;
+        let mut expired = false;
+        let mut cache_name = None;
+
+        if let Some(entry) = self.prefix_tracker.get(hash) {
+            if entry.expires_at > Instant::now() {
+                hit = true;
+                cache_name = Some(entry.cache_name.clone());
+            } else {
+                expired = true;
+            }
+        }
+
+        if hit {
+            if let Ok(mut stats) = self.prefix_stats.write() {
+                stats.1 += 1;
+            }
+            if let Some(ref name) = cache_name {
                 tracing::debug!(
                     "[CacheManager:L3-Prefix] HIT hash={} cache_name={}",
                     &hash[..hash.len().min(16)],
-                    entry.cache_name
+                    name
                 );
-                Some(entry.cache_name.clone())
             }
-            Some(_) => {
-                self.prefix_tracker.remove(hash);
-                if let Ok(mut stats) = self.prefix_stats.write() {
-                    stats.2 += 1;
-                }
-                tracing::debug!(
-                    "[CacheManager:L3-Prefix] EXPIRED hash={}",
-                    &hash[..hash.len().min(16)]
-                );
-                None
-            }
-            None => {
-                if let Ok(mut stats) = self.prefix_stats.write() {
-                    stats.2 += 1;
-                }
-                tracing::debug!(
-                    "[CacheManager:L3-Prefix] MISS hash={}",
-                    &hash[..hash.len().min(16)]
-                );
-                None
-            }
+            return cache_name;
         }
+
+        if expired {
+            self.prefix_tracker
+                .remove_if(hash, |_, entry| entry.expires_at <= Instant::now());
+            if let Ok(mut stats) = self.prefix_stats.write() {
+                stats.2 += 1;
+            }
+            tracing::debug!(
+                "[CacheManager:L3-Prefix] EXPIRED hash={}",
+                &hash[..hash.len().min(16)]
+            );
+            return None;
+        }
+
+        if let Ok(mut stats) = self.prefix_stats.write() {
+            stats.2 += 1;
+        }
+        tracing::debug!(
+            "[CacheManager:L3-Prefix] MISS hash={}",
+            &hash[..hash.len().min(16)]
+        );
+        None
     }
 
     /// 插入或更新 Layer 3 条目
