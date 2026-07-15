@@ -273,6 +273,31 @@ function Settings() {
         }
     };
 
+    const handleSelectAntigravityCliPath = async () => {
+        try {
+            const selected = await open({
+                directory: false,
+                multiple: false,
+                title: t('settings.advanced.antigravity_cli_path_select', 'Select Antigravity CLI (agy) Executable'),
+            });
+            if (selected && typeof selected === 'string') {
+                setFormData({ ...formData, antigravity_cli_executable: selected });
+            }
+        } catch (error) {
+            showToast(`${t('common.error')}: ${error}`, 'error');
+        }
+    };
+
+    const handleDetectAntigravityCliPath = async () => {
+        try {
+            const path = await invoke<string>('get_antigravity_cli_path', { bypassConfig: true });
+            setFormData({ ...formData, antigravity_cli_executable: path });
+            showToast(t('settings.advanced.antigravity_cli_path_detected', 'Detected CLI path updated'), 'success');
+        } catch (error) {
+            showToast(`${t('common.error')}: ${error}`, 'error');
+        }
+    };
+
     const handleCheckUpdate = async () => {
         setIsCheckingUpdate(true);
         setUpdateInfo(null);
@@ -936,25 +961,70 @@ function Settings() {
                                     <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">
                                         {t('settings.advanced.antigravity_path_desc')}
                                     </p>
+                                </div>
+
+                                {/* Antigravity CLI (agy) 程序路径 */}
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-900 dark:text-base-content mb-1">
+                                        {t('settings.advanced.antigravity_cli_path', 'Antigravity CLI (agy) Path')}
+                                    </label>
+                                    <div className="flex gap-2">
+                                        <input
+                                            type="text"
+                                            className="flex-1 px-4 py-4 border border-gray-200 dark:border-base-300 rounded-lg bg-gray-50 dark:bg-base-200 text-gray-900 dark:text-base-content font-medium"
+                                            value={formData.antigravity_cli_executable || ''}
+                                            placeholder={t('settings.advanced.antigravity_cli_path_placeholder', '未设置 (将使用自动探测)')}
+                                            onChange={(e) => setFormData({ ...formData, antigravity_cli_executable: e.target.value })}
+                                        />
+                                        {formData.antigravity_cli_executable && (
+                                            <button
+                                                className="px-4 py-2 border border-gray-200 dark:border-base-300 text-red-600 dark:text-red-400 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/10 transition-colors"
+                                                onClick={() => setFormData({ ...formData, antigravity_cli_executable: undefined })}
+                                            >
+                                                {t('common.clear')}
+                                            </button>
+                                        )}
+                                        <button
+                                            className="px-4 py-2 border border-gray-200 dark:border-base-300 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-base-200 transition-colors"
+                                            onClick={handleDetectAntigravityCliPath}
+                                        >
+                                            {t('settings.advanced.detect_btn')}
+                                        </button>
+                                        {isTauri() ? (
+                                            <button
+                                                className="px-4 py-2 border border-gray-200 dark:border-base-300 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-base-200 transition-colors"
+                                                onClick={handleSelectAntigravityCliPath}
+                                            >
+                                                {t('settings.advanced.select_btn')}
+                                            </button>
+                                        ) : (
+                                            <span className="self-center text-xs text-gray-400 dark:text-gray-500 italic px-2">
+                                                {t('settings.web_mode_limitation', '(Web 模式不支持)')}
+                                            </span>
+                                        )}
+                                    </div>
+                                    <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">
+                                        {t('settings.advanced.antigravity_cli_path_desc', '设置您的命令行客户端 (agy) 的可执行文件路径，用于一键解除账号限制。')}
+                                    </p>
                                     
                                     {/* 新增：解密/修补准入限制一键修补按钮 */}
-                                    <div className={`mt-3 flex items-center gap-4 p-3 rounded-lg border ${formData.antigravity_executable ? 'bg-blue-50 dark:bg-blue-950/20 border-blue-100 dark:border-blue-900/30' : 'bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700'}`}>
+                                    <div className={`mt-3 flex items-center gap-4 p-3 rounded-lg border ${formData.antigravity_cli_executable ? 'bg-blue-50 dark:bg-blue-950/20 border-blue-100 dark:border-blue-900/30' : 'bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700'}`}>
                                         <div className="flex-1">
-                                            <h4 className={`text-sm font-semibold ${formData.antigravity_executable ? 'text-blue-900 dark:text-blue-200' : 'text-gray-500 dark:text-gray-400'}`}>
+                                            <h4 className={`text-sm font-semibold ${formData.antigravity_cli_executable ? 'text-blue-900 dark:text-blue-200' : 'text-gray-500 dark:text-gray-400'}`}>
                                                 {t('settings.advanced.patch_eligibility_title', '账号准入限制解除')}
                                             </h4>
-                                            <p className={`text-xs mt-0.5 ${formData.antigravity_executable ? 'text-blue-700 dark:text-blue-300/80' : 'text-gray-400 dark:text-gray-500'}`}>
+                                            <p className={`text-xs mt-0.5 ${formData.antigravity_cli_executable ? 'text-blue-700 dark:text-blue-300/80' : 'text-gray-400 dark:text-gray-500'}`}>
                                                 {t('settings.advanced.patch_eligibility_desc', '新版 agy 二进制强制拦截未授权账号，此操作一键跳过本地准入拦截检查。')}
-                                                {!formData.antigravity_executable && " (需先在上方设置或探测路径)"}
+                                                {!formData.antigravity_cli_executable && " (需先在上方设置或探测路径)"}
                                             </p>
                                         </div>
                                         <button
-                                            className={`px-4 py-2 rounded-lg transition-colors font-medium text-sm shadow-sm ${formData.antigravity_executable ? 'bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-400 dark:text-gray-500 cursor-not-allowed'}`}
-                                            disabled={!formData.antigravity_executable}
+                                            className={`px-4 py-2 rounded-lg transition-colors font-medium text-sm shadow-sm ${formData.antigravity_cli_executable ? 'bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-400 dark:text-gray-500 cursor-not-allowed'}`}
+                                            disabled={!formData.antigravity_cli_executable}
                                             onClick={async () => {
-                                                if (!formData.antigravity_executable) return;
+                                                if (!formData.antigravity_cli_executable) return;
                                                 try {
-                                                    const res = await invoke<string>('patch_agy_binary', { filePath: formData.antigravity_executable });
+                                                    const res = await invoke<string>('patch_agy_binary', { filePath: formData.antigravity_cli_executable });
                                                     showToast(res, 'success');
                                                 } catch (err) {
                                                     showToast(String(err), 'error');
@@ -1335,7 +1405,7 @@ function Settings() {
                                     <div>
                                         <h3 className="text-3xl font-black text-gray-900 dark:text-base-content tracking-tight mb-2">{t('common.app_name', 'Antigravity Tools')}</h3>
                                         <div className="flex items-center justify-center gap-2 text-sm">
-                                            v4.4.3
+                                            v4.4.4
                                             <span className="text-gray-400 dark:text-gray-600">•</span>
                                             <span className="text-gray-500 dark:text-gray-400">{t('settings.branding.subtitle')}</span>
                                         </div>

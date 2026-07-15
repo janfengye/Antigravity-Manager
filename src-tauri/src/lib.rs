@@ -554,6 +554,7 @@ pub fn run() {
             commands::show_main_window,
             commands::set_window_theme,
             commands::get_antigravity_path,
+            commands::get_antigravity_cli_path,
             commands::get_antigravity_args,
             commands::check_for_updates,
             commands::check_homebrew_installation,

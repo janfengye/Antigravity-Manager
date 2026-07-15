@@ -134,6 +134,7 @@ export interface AppConfig {
     default_export_path?: string;
     antigravity_executable?: string; // [NEW] 手动指定的反重力程序路径
     antigravity_ide_executable?: string; // [NEW] 手动指定的 Antigravity IDE 程序路径
+    antigravity_cli_executable?: string; // [NEW] 手动指定的 Antigravity CLI (agy) 路径
     antigravity_args?: string[]; // [NEW] Antigravity 启动参数
     auto_launch?: boolean; // 开机自动启动
     auto_check_update?: boolean; // 自动检查更新

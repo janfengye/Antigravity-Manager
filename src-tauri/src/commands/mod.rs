@@ -865,6 +865,27 @@ pub async fn get_antigravity_path(bypass_config: Option<bool>) -> Result<String,
     }
 }
 
+/// 获取 Antigravity CLI (agy) 可执行文件路径
+#[tauri::command]
+pub async fn get_antigravity_cli_path(bypass_config: Option<bool>) -> Result<String, String> {
+    // 1. 优先从配置查询 (除非明确要求绕过)
+    if bypass_config != Some(true) {
+        if let Ok(config) = crate::modules::config::load_app_config() {
+            if let Some(path) = config.antigravity_cli_executable {
+                if std::path::Path::new(&path).exists() {
+                    return Ok(path);
+                }
+            }
+        }
+    }
+
+    // 2. 执行实时探测
+    match crate::modules::process::get_antigravity_cli_executable_path() {
+        Some(path) => Ok(path.to_string_lossy().to_string()),
+        None => Err("未找到 Antigravity CLI (agy) 安装路径".to_string()),
+    }
+}
+
 /// 获取 Antigravity 启动参数
 #[tauri::command]
 pub async fn get_antigravity_args() -> Result<Vec<String>, String> {
