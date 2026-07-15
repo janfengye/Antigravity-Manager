@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> 专业级 AI 账号管理与协议代理系统 (v4.4.2)
+> 专业级 AI 账号管理与协议代理系统 (v4.4.3)
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
 
@@ -8,7 +8,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.4.2-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.4.3-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -133,7 +133,7 @@ graph TD
 
 **Linux / macOS:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.4.2/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.4.3/install.sh | bash
 ```
 
 **Windows (PowerShell):**
@@ -143,7 +143,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **支持的格式**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **高级用法**: 安装指定版本 `curl -fsSL ... | bash -s -- --version 4.4.2`，预览模式 `curl -fsSL ... | bash -s -- --dry-run`
+> **高级用法**: 安装指定版本 `curl -fsSL ... | bash -s -- --version 4.4.3`，预览模式 `curl -fsSL ... | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 如果您已安装 [Homebrew](https://brew.sh/)，也可以通过以下命令安装：
@@ -439,6 +439,16 @@ response = client.chat.completions.create(
 ## 📝 开发者与社区
 
 *   **版本演进 (Changelog)**:
+    *   **v4.4.3 (2026-07-15)**:
+        -   **[核心特性] 账号准入限制解除 (Bypass Account Eligibility Check)**:
+            -   **一键解封拦截**: 针对新版客户端强制拦截未授权账号的问题，新增一键本地跳过功能。通过动态修改底层 `agy` 程序的 ARM64 机器指令流（重写 `cbz` 校验判断分支），并配合 macOS `codesign` 自动签发，直接突破本地账号准入验证。
+            -   *相关 PR*: 详见 [PR #3248](https://github.com/lbjlaq/Antigravity-Manager/pull/3248)。
+        -   **[核心特性] 多模态 Token 消耗动态精准估算 (Multimodal Token Estimation)**:
+            -   **体积比例换算**: 针对带有内联 Base64 媒体数据（图片、音频、视频）的 OpenAI 或 Gemini 请求格式，采用极其轻量的高效算法估算 Token：不进行消耗 CPU 的真实媒体解码，而是基于数据体积（bytes）与分辨率/时长的关联做等比换算。支持普通图片 258 Token 到超大超高清图片 10k Token 的动态进位计费；并根据 ~32KB/s (针对音频) 及视频预估码率，自动转化为精确的 Token 时长耗费。
+            -   *相关 PR*: 详见 [PR #3250](https://github.com/lbjlaq/Antigravity-Manager/pull/3250)。
+        -   **[问题修复] 刷新后耗尽额度的账号在前端凭空消失 (Fix Account Disappearance on Refresh)**:
+            -   **视图隐藏问题**: 修复了账号在耗尽额度（触发 403 限流或被封禁）时，系统自动更新本地状态导致原本保存的 `subscription_tier`（订阅等级）被清空，进而使得该账号无法匹配前端的 Free / Pro 视图过滤器而被意外隐藏的 UI 级缺陷。现已在更新配额状态时强制保留原有订阅信息。
+            -   *相关 Issue*: 详见 [Issue #3249](https://github.com/lbjlaq/Antigravity-Manager/issues/3249)。
     *   **v4.4.2 (2026-07-13)**:
         -   **[核心特性] 增强网页搜索 MCP 集成与网页正文深度读取 (Enhanced Web Search MCP & Content Reading)**:
             -   **防封锁搜索与容灾**: 重构了搜索词解析与结果排序评分算法，并在官方搜索 API 遭遇限流（Rate Limit）时自动降级采用 DuckDuckGo 的原生 HTML 抓取策略，确保联网搜索永不断联。

@@ -49,8 +49,8 @@ impl ProxyMonitor {
         }
 
         // Auto cleanup old logs (keep last 30 days)
-        tokio::task::spawn_blocking(move || {
-            match crate::modules::proxy_db::cleanup_old_logs(30) {
+        tokio::task::spawn_blocking(
+            move || match crate::modules::proxy_db::cleanup_old_logs(30) {
                 Ok(deleted) => {
                     if deleted > 0 {
                         tracing::info!("Auto cleanup: removed {} old logs (>30 days)", deleted);
@@ -59,8 +59,8 @@ impl ProxyMonitor {
                 Err(e) => {
                     tracing::error!("Failed to cleanup old logs: {}", e);
                 }
-            }
-        });
+            },
+        );
 
         Self {
             logs: RwLock::new(VecDeque::with_capacity(max_logs)),

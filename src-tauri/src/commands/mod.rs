@@ -16,17 +16,18 @@ pub mod security;
 pub mod proxy_pool;
 // 导出 user_token 命令
 pub mod user_token;
+// 导出 patch 命令
+pub mod patch;
+pub use patch::*;
 
 /// 列出所有账号
 #[tauri::command]
 pub async fn list_accounts(
     proxy_state: tauri::State<'_, crate::commands::proxy::ProxyServiceState>,
 ) -> Result<Vec<Account>, String> {
-    let mut accounts = tokio::task::spawn_blocking(move || {
-        modules::list_accounts()
-    })
-    .await
-    .unwrap_or_else(|_| Err("Task panicked".to_string()))?;
+    let mut accounts = tokio::task::spawn_blocking(move || modules::list_accounts())
+        .await
+        .unwrap_or_else(|_| Err("Task panicked".to_string()))?;
 
     // [FIX] Blend in-memory TokenManager rate limit status into the UI quota display
     let instance_lock = proxy_state.instance.read().await;
@@ -193,11 +194,9 @@ use crate::models::AccountExportResponse;
 
 #[tauri::command]
 pub async fn export_accounts(account_ids: Vec<String>) -> Result<AccountExportResponse, String> {
-    tokio::task::spawn_blocking(move || {
-        modules::account::export_accounts_by_ids(&account_ids)
-    })
-    .await
-    .unwrap_or_else(|_| Err("Task panicked".to_string()))
+    tokio::task::spawn_blocking(move || modules::account::export_accounts_by_ids(&account_ids))
+        .await
+        .unwrap_or_else(|_| Err("Task panicked".to_string()))
 }
 
 /// 内部辅助功能：在添加或导入账号后自动刷新一次额度

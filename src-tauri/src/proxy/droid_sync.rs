@@ -339,27 +339,21 @@ pub async fn get_droid_sync_status(proxy_url: String) -> Result<DroidStatus, Str
 
 #[tauri::command]
 pub async fn execute_droid_sync(custom_models: Vec<Value>) -> Result<usize, String> {
-    tokio::task::spawn_blocking(move || {
-        sync_droid_config(custom_models)
-    })
-    .await
-    .unwrap_or_else(|_| Err("Task panicked".to_string()))
+    tokio::task::spawn_blocking(move || sync_droid_config(custom_models))
+        .await
+        .unwrap_or_else(|_| Err("Task panicked".to_string()))
 }
 
 #[tauri::command]
 pub async fn execute_droid_restore() -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
-        restore_droid_config()
-    })
-    .await
-    .unwrap_or_else(|_| Err("Task panicked".to_string()))
+    tokio::task::spawn_blocking(move || restore_droid_config())
+        .await
+        .unwrap_or_else(|_| Err("Task panicked".to_string()))
 }
 
 #[tauri::command]
 pub async fn get_droid_config_content() -> Result<String, String> {
-    tokio::task::spawn_blocking(move || {
-        read_droid_config_content()
-    })
-    .await
-    .unwrap_or_else(|_| Err("Task panicked".to_string()))
+    tokio::task::spawn_blocking(move || read_droid_config_content())
+        .await
+        .unwrap_or_else(|_| Err("Task panicked".to_string()))
 }

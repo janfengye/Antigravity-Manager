@@ -40,6 +40,94 @@ fn estimate_tokens_from_str(s: &str) -> u32 {
     ((ascii_tokens + unicode_tokens) as f32 * 1.15).ceil() as u32
 }
 
+/// Estimate token cost for an image from an OpenAI-format image_url.
+/// Handles both base64 data URLs and remote URLs.
+/// Gemini counts standard images at ~258 tokens. For very large images
+/// (>1MB base64 payload), we scale up since high-res images tokenize higher.
+fn estimate_image_tokens_from_url(url: &str) -> u32 {
+    const BASE_IMAGE_TOKENS: u32 = 258;
+
+    if url.starts_with("data:") {
+        // data:image/png;base64,<data>
+        // Extract the base64 portion after the comma
+        if let Some(comma_pos) = url.find(',') {
+            let base64_len = url.len() - comma_pos - 1;
+            // Approximate raw bytes: base64 encodes 3 bytes into 4 chars
+            let raw_bytes = (base64_len * 3) / 4;
+
+            // Gemini: standard images = 258 tokens
+            // High-res images (>1MB) scale higher, up to ~10k tokens for very large ones
+            if raw_bytes > 4_000_000 {
+                // >4MB: very high resolution
+                10_000
+            } else if raw_bytes > 1_000_000 {
+                // 1-4MB: high resolution, scale linearly
+                let factor = raw_bytes as f32 / 1_000_000.0;
+                (BASE_IMAGE_TOKENS as f32 * factor * 4.0).ceil() as u32
+            } else {
+                BASE_IMAGE_TOKENS
+            }
+        } else {
+            BASE_IMAGE_TOKENS
+        }
+    } else {
+        // Remote URL: assume standard resolution
+        BASE_IMAGE_TOKENS
+    }
+}
+
+/// Estimate token cost for audio from a URL.
+/// Audio is tokenized at roughly 32 tokens per second.
+/// From base64, we estimate duration from payload size.
+fn estimate_media_tokens_from_url(url: &str) -> u32 {
+    const BASE_AUDIO_TOKENS: u32 = 500; // ~15 seconds default
+
+    if url.starts_with("data:") {
+        if let Some(comma_pos) = url.find(',') {
+            let base64_len = url.len() - comma_pos - 1;
+            let raw_bytes = (base64_len * 3) / 4;
+            // Rough estimate: 16kHz, 16-bit mono audio ≈ 32KB/s
+            // 32 tokens/second
+            let estimated_seconds = raw_bytes as f32 / 32_000.0;
+            let tokens = (estimated_seconds * 32.0).ceil() as u32;
+            tokens.max(64) // minimum 64 tokens for any audio
+        } else {
+            BASE_AUDIO_TOKENS
+        }
+    } else {
+        BASE_AUDIO_TOKENS
+    }
+}
+
+/// Estimate token cost for Gemini inlineData (base64 images/audio in Gemini format).
+/// mime_type determines the estimation strategy. data_len is the length of the base64 string.
+fn estimate_inline_data_tokens(mime_type: &str, data_len: usize) -> u32 {
+    if mime_type.starts_with("image/") {
+        // Same logic as estimate_image_tokens_from_url for base64
+        let raw_bytes = (data_len * 3) / 4;
+        if raw_bytes > 4_000_000 {
+            10_000
+        } else if raw_bytes > 1_000_000 {
+            let factor = raw_bytes as f32 / 1_000_000.0;
+            (258.0 * factor * 4.0).ceil() as u32
+        } else {
+            258
+        }
+    } else if mime_type.starts_with("audio/") {
+        let raw_bytes = (data_len * 3) / 4;
+        let estimated_seconds = raw_bytes as f32 / 32_000.0;
+        (estimated_seconds * 32.0).ceil().max(64.0) as u32
+    } else if mime_type.starts_with("video/") {
+        // Video: very expensive, rough estimate
+        let raw_bytes = (data_len * 3) / 4;
+        let estimated_seconds = raw_bytes as f32 / 500_000.0; // rough video bitrate
+        (estimated_seconds * 300.0).ceil().max(258.0) as u32 // ~300 tokens/sec for video
+    } else {
+        // Unknown media: treat as text approximation
+        estimate_tokens_from_str(&format!("[binary data: {} bytes]", data_len))
+    }
+}
+
 /// Strategy for context purification
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PurificationStrategy {
@@ -743,7 +831,16 @@ impl ContextManager {
                                 crate::proxy::mappers::openai::models::OpenAIContentBlock::Text { text } => {
                                     total += estimate_tokens_from_str(text);
                                 }
-                                _ => {}
+                                crate::proxy::mappers::openai::models::OpenAIContentBlock::ImageUrl { image_url } => {
+                                    // Gemini counts images at ~258 tokens for standard resolution.
+                                    // For base64 data URLs, estimate higher based on payload size
+                                    // since very large images can consume significantly more tokens.
+                                    total += estimate_image_tokens_from_url(&image_url.url);
+                                }
+                                crate::proxy::mappers::openai::models::OpenAIContentBlock::AudioUrl { audio_url } => {
+                                    // Audio is tokenized at ~32 tokens per second (~25 bytes/token from base64)
+                                    total += estimate_media_tokens_from_url(&audio_url.url);
+                                }
                             }
                         }
                     }
@@ -852,6 +949,19 @@ impl ContextManager {
                             if thought {
                                 total += 100; // thinking overhead
                             }
+                        }
+                        // inlineData: base64-encoded images/audio embedded in the request
+                        if let Some(inline_data) = part.get("inlineData") {
+                            let mime = inline_data
+                                .get("mimeType")
+                                .and_then(|m| m.as_str())
+                                .unwrap_or("");
+                            let data_len = inline_data
+                                .get("data")
+                                .and_then(|d| d.as_str())
+                                .map(|s| s.len())
+                                .unwrap_or(0);
+                            total += estimate_inline_data_tokens(mime, data_len);
                         }
                         if let Some(fc) = part.get("functionCall") {
                             total += 20;

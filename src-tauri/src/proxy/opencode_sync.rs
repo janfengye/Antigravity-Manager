@@ -1723,11 +1723,9 @@ pub async fn execute_opencode_sync(
 
 #[tauri::command]
 pub async fn execute_opencode_restore() -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
-        restore_opencode_config()
-    })
-    .await
-    .unwrap_or_else(|_| Err("Failed to execute restore".to_string()))
+    tokio::task::spawn_blocking(move || restore_opencode_config())
+        .await
+        .unwrap_or_else(|_| Err("Failed to execute restore".to_string()))
 }
 
 #[derive(Deserialize)]
@@ -1740,11 +1738,9 @@ pub struct GetOpencodeConfigRequest {
 pub async fn get_opencode_config_content(
     request: GetOpencodeConfigRequest,
 ) -> Result<String, String> {
-    tokio::task::spawn_blocking(move || {
-        read_opencode_config_content(request.file_name)
-    })
-    .await
-    .unwrap_or_else(|_| Err("Failed to read config".to_string()))
+    tokio::task::spawn_blocking(move || read_opencode_config_content(request.file_name))
+        .await
+        .unwrap_or_else(|_| Err("Failed to read config".to_string()))
 }
 
 /// List of Antigravity model IDs that may have been added to legacy providers

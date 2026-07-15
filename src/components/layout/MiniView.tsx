@@ -65,12 +65,12 @@ export default function MiniView() {
                 try {
                     const version = await getVersion();
                     setAppVersion(version);
-                } catch (e) {
-                    console.error('Failed to get app version:', e);
+                } catch (error) {
+                    console.error('Failed to get app version:', error);
                 }
             } else {
                 // Fallback for web mode if needed, or import from package.json
-                setAppVersion('4.4.2');
+                setAppVersion('4.4.3');
             }
         };
         fetchVersion();

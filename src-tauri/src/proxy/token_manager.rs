@@ -2054,7 +2054,9 @@ impl TokenManager {
         };
 
         let mut content: serde_json::Value = serde_json::from_str(
-            &tokio::fs::read_to_string(&path).await.map_err(|e| format!("读取文件失败: {}", e))?,
+            &tokio::fs::read_to_string(&path)
+                .await
+                .map_err(|e| format!("读取文件失败: {}", e))?,
         )
         .map_err(|e| format!("解析 JSON 失败: {}", e))?;
 
@@ -2081,7 +2083,9 @@ impl TokenManager {
         let path = &entry.account_path;
 
         let mut content: serde_json::Value = serde_json::from_str(
-            &tokio::fs::read_to_string(path).await.map_err(|e| format!("读取文件失败: {}", e))?,
+            &tokio::fs::read_to_string(path)
+                .await
+                .map_err(|e| format!("读取文件失败: {}", e))?,
         )
         .map_err(|e| format!("解析 JSON 失败: {}", e))?;
 

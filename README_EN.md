@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> Professional AI Account Management & Protocol Proxy System (v4.4.2)
+> Professional AI Account Management & Protocol Proxy System (v4.4.3)
 
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
@@ -9,7 +9,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.4.2-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.4.3-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -134,7 +134,7 @@ Automatically detects your OS, architecture, and package manager — one command
 
 **Linux / macOS:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.4.2/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.4.3/install.sh | bash
 ```
 
 **Windows (PowerShell):**
@@ -144,7 +144,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **Supported formats**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **Advanced usage**: Install a specific version `curl -fsSL ... | bash -s -- --version 4.4.2`，dry-run mode `curl -fsSL ... | bash -s -- --dry-run`
+> **Advanced usage**: Install a specific version `curl -fsSL ... | bash -s -- --version 4.4.3`，dry-run mode `curl -fsSL ... | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 If you have [Homebrew](https://brew.sh/) installed, you can also install via:
@@ -427,6 +427,16 @@ In clients that support OpenAI protocol (e.g., Cherry Studio), you can configure
 ## 📝 Developer & Community
 
 *   **Version History (Changelog)**:
+    *   **v4.4.3 (2026-07-15)**:
+        -   **[Core Feature] Bypass Account Eligibility Check**:
+            -   **One-Click Unblock**: Bypasses the new client's mandatory unauthorized account blocking. Dynamically patches the underlying `agy` ARM64 instruction stream (overwriting `cbz` branches) and performs ad-hoc macOS `codesign` to skip local access control checks seamlessly.
+            -   *Related PR*: See [PR #3248](https://github.com/lbjlaq/Antigravity-Manager/pull/3248).
+        -   **[Core Feature] Accurate Multimodal Token Estimation**:
+            -   **Volume-Proportional Scaling**: Implemented a highly efficient algorithm to estimate token usage for embedded Base64 media (images, audio, video) in OpenAI and Gemini requests. Instead of performing CPU-intensive media decoding, the backend calculates tokens via proportional scaling based on byte volume. Standard images are correctly billed at 258 tokens while very large/high-res payloads dynamically scale up to 10k tokens. Audio and video token lengths are also accurately approximated based on bitrate heuristics.
+            -   *Related PR*: See [PR #3250](https://github.com/lbjlaq/Antigravity-Manager/pull/3250).
+        -   **[Bug Fix] Fix Account Disappearance on Refresh**:
+            -   **UI Visibility Issue**: Fixed a UI bug where an account would accidentally vanish from the "Free/Pro" view filters after its quota was exhausted. Previously, hitting a 403 rate limit would silently overwrite the local quota structure and wipe out the `subscription_tier` string, hiding it from the frontend filters. The system now preserves existing subscription metadata during 403 fallback updates.
+            -   *Related Issue*: See [Issue #3249](https://github.com/lbjlaq/Antigravity-Manager/issues/3249).
     *   **v4.4.2 (2026-07-13)**:
         -   **[Core Feature] Enhanced Web Search MCP Integration & Deep Content Reading**:
             -   **Search Resilience & Failover**: Revamped query parsing and result scoring algorithms. Implemented a robust fallback mechanism that automatically utilizes DuckDuckGo HTML scraping when official search APIs hit rate limits, ensuring continuous connectivity.
