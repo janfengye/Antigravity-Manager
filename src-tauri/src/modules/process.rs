@@ -1125,13 +1125,6 @@ pub fn get_antigravity_executable_path(target_ide: Option<&str>) -> Option<std::
                         return Some(path);
                     }
                 }
-                // Fall back to IDE executable if the other wasn't set or found
-                if let Some(ref p) = config.antigravity_ide_executable {
-                    let path = std::path::PathBuf::from(p);
-                    if path.exists() {
-                        return Some(path);
-                    }
-                }
             }
         }
     }
@@ -1147,7 +1140,7 @@ fn check_standard_locations(target_ide: Option<&str>) -> Option<std::path::PathB
     } else if target_ide == Some("code") || target_ide == Some("cursor") {
         &["Antigravity"]
     } else {
-        &["Antigravity IDE", "Antigravity"]
+        &["Antigravity"]
     };
 
     #[cfg(target_os = "macos")]

@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> 专业级 AI 账号管理与协议代理系统 (v4.4.4)
+> 专业级 AI 账号管理与协议代理系统 (v4.4.5)
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
 
@@ -8,7 +8,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.4.4-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.4.5-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -133,7 +133,7 @@ graph TD
 
 **Linux / macOS:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.4.4/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.4.5/install.sh | bash
 ```
 
 **Windows (PowerShell):**
@@ -143,7 +143,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **支持的格式**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **高级用法**: 安装指定版本 `curl -fsSL ... | bash -s -- --version 4.4.4`，预览模式 `curl -fsSL ... | bash -s -- --dry-run`
+> **高级用法**: 安装指定版本 `curl -fsSL ... | bash -s -- --version 4.4.5`，预览模式 `curl -fsSL ... | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 如果您已安装 [Homebrew](https://brew.sh/)，也可以通过以下命令安装：
@@ -439,6 +439,11 @@ response = client.chat.completions.create(
 ## 📝 开发者与社区
 
 *   **版本演进 (Changelog)**:
+    *   **v4.4.5 (2026-07-16)**:
+        -   **[问题修复] 修复点击“经典版”按钮时错误调起 IDE 的问题 (Fix Classic Mode Downgrade Bug)**:
+            -   **移除 IDE 降级回退**: 取消了在经典版（`target_ide` 为 `None`）未配置路径或未找到时，自动降级去查找并启动 Antigravity IDE 的逻辑。
+            -   **限定标准搜索目录**: 修正了在标准目录搜索经典版可执行文件时的目录匹配规则，只搜索 `"Antigravity"` 而不再默认混入 `"Antigravity IDE"`，从而彻底杜绝误调起 IDE 的现象。
+            -   *相关 Issue*: 详见 [Issue #3253](https://github.com/lbjlaq/Antigravity-Manager/issues/3253)。
     *   **v4.4.4 (2026-07-15)**:
         -   **[核心特性] 独立 Antigravity CLI 路径配置与拓展系统支持 (Standalone CLI Configuration & Extended OS Support)**:
             -   **CLI 独立配置与探测**: 在设置界面新增了针对底层命令行工具 `agy` 的独立执行路径配置，避免了与主程序发生混淆，同时提供自动探测（检测环境变量及默认安装位置）与手动选择功能。

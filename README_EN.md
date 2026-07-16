@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> Professional AI Account Management & Protocol Proxy System (v4.4.4)
+> Professional AI Account Management & Protocol Proxy System (v4.4.5)
 
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
@@ -9,7 +9,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.4.4-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.4.5-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -134,7 +134,7 @@ Automatically detects your OS, architecture, and package manager — one command
 
 **Linux / macOS:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.4.4/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.4.5/install.sh | bash
 ```
 
 **Windows (PowerShell):**
@@ -144,7 +144,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **Supported formats**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **Advanced usage**: Install a specific version `curl -fsSL ... | bash -s -- --version 4.4.4`，dry-run mode `curl -fsSL ... | bash -s -- --dry-run`
+> **Advanced usage**: Install a specific version `curl -fsSL ... | bash -s -- --version 4.4.5`，dry-run mode `curl -fsSL ... | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 If you have [Homebrew](https://brew.sh/) installed, you can also install via:
@@ -427,6 +427,11 @@ In clients that support OpenAI protocol (e.g., Cherry Studio), you can configure
 ## 📝 Developer & Community
 
 *   **Version History (Changelog)**:
+    *   **v4.4.5 (2026-07-16)**:
+        -   **[Bug Fix] Fix Incorrect IDE Launch on "Classic" Button Click (Fix Classic Mode Downgrade Bug)**:
+            -   **Eliminate IDE Fallback**: Removed the aggressive fallback logic that launched Antigravity IDE when the Classic version (`target_ide` is `None`) path was not configured or found.
+            -   **Restrict Standard Directory Search**: Updated standard directory search paths to only search for `"Antigravity"` instead of falling back to `"Antigravity IDE"` when searching for the Classic executable, preventing unexpected IDE launches.
+            -   *Related Issue*: See [Issue #3253](https://github.com/lbjlaq/Antigravity-Manager/issues/3253).
     *   **v4.4.4 (2026-07-15)**:
         -   **[Core Feature] Standalone CLI Configuration & Extended OS Support**:
             -   **Independent CLI Path Settings**: Added a dedicated configuration field for the underlying `agy` command-line tool in the settings panel to prevent path conflicts with the main application. Includes auto-detection via PATH and default directories alongside manual selection.
