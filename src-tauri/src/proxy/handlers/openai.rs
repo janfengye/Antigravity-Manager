@@ -154,6 +154,40 @@ data: {"type":"response.failed","response":{"status":"failed","error":{"code":"u
     }
 }
 
+#[cfg(test)]
+mod variant_tests {
+    use crate::proxy::common::variant_mapping;
+    use crate::proxy::mappers::openai::models::ThinkingConfig;
+
+    #[test]
+    fn openai_opus_preserves_client_budget_when_present() {
+        let client_budget = Some(32_768);
+        let spec = variant_mapping::resolve("claude-opus-4-6-thinking", client_budget)
+            .expect("Claude Opus 4.6 thinking must resolve");
+        let request_thinking = ThinkingConfig {
+            thinking_type: Some("enabled".to_string()),
+            budget_tokens: Some(spec.effective_thinking_budget(client_budget)),
+            effort: None,
+        };
+
+        assert_eq!(request_thinking.budget_tokens, client_budget);
+    }
+
+    #[test]
+    fn openai_opus_falls_back_to_spec_budget_when_client_budget_is_absent() {
+        let client_budget = None;
+        let spec = variant_mapping::resolve("claude-opus-4-6-thinking", client_budget)
+            .expect("Claude Opus 4.6 thinking must resolve");
+        let request_thinking = ThinkingConfig {
+            thinking_type: Some("enabled".to_string()),
+            budget_tokens: Some(spec.effective_thinking_budget(client_budget)),
+            effort: None,
+        };
+
+        assert_eq!(request_thinking.budget_tokens, Some(1_024));
+    }
+}
+
 fn compact_apply_patch_failure_output(
     output: String,
     seen: &mut std::collections::HashSet<String>,
@@ -396,6 +430,39 @@ pub async fn handle_chat_completions(
         .cloned();
     if client_adapter.is_some() {
         debug!("[{}] Client Adapter detected", trace_id);
+    }
+
+    // [Variant] Resolve canonical model + variant → real model + real params.
+    // Replace the client's model/thinking/max_tokens with verified real values so the
+    // forwarded request matches the expected upstream format. OpenCode encodes the variant as
+    // thinking.budget_tokens; we infer the tier from its magnitude.
+    let client_budget = openai_req
+        .thinking
+        .as_ref()
+        .and_then(|t| t.budget_tokens);
+    if let Some(spec) =
+        crate::proxy::common::variant_mapping::resolve(&openai_req.model, client_budget)
+    {
+        tracing::info!(
+            "[{}] [Variant] canonical='{}' budget_hint={:?} -> real_model='{}' budget={} maxOut={}",
+            trace_id, openai_req.model, client_budget, spec.id, spec.thinking_budget, spec.max_output_tokens
+        );
+        openai_req.model = spec.id.to_string();
+        if spec.thinking_budget == 0 {
+            // Non-thinking checkpoint model (e.g. gemini-3.1-flash-lite): disable thinking
+            // AND strip tools/tool_choice — per upstream spec §3 checkpoint requests carry
+            // no tools.
+            openai_req.thinking = None;
+            openai_req.tools = None;
+            openai_req.tool_choice = None;
+        } else {
+            openai_req.thinking = Some(crate::proxy::mappers::openai::models::ThinkingConfig {
+                thinking_type: Some("enabled".to_string()),
+                budget_tokens: Some(spec.effective_thinking_budget(client_budget)),
+                effort: None,
+            });
+        }
+        openai_req.max_tokens = Some(spec.max_output_tokens);
     }
 
     let client_tool_names =

@@ -73,6 +73,7 @@ const COMMAND_MAPPING: Record<string, { url: string; method: 'GET' | 'POST' | 'D
   'execute_opencode_restore': { url: '/api/proxy/opencode/restore', method: 'POST' },
   'execute_opencode_clear': { url: '/api/proxy/opencode/clear', method: 'POST' },
   'get_opencode_config_content': { url: '/api/proxy/opencode/config', method: 'POST' },
+  'get_canonical_families': { url: '/api/proxy/opencode/families', method: 'GET' },
 
   // Stats
   'get_token_stats_hourly': { url: '/api/stats/token/hourly', method: 'GET' },

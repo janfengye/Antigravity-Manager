@@ -1,11 +1,11 @@
 import { useMemo, useState } from 'react';
 import { ArrowRightLeft, RefreshCw, Trash2, Download, Info, Lock, Ban, Diamond, Gem, Circle, ToggleLeft, ToggleRight, Fingerprint, Sparkles, Tag, X, Check, Clock, Bot, Repeat2, Terminal } from 'lucide-react';
-import { Account } from '../../types/account';
+import { Account, ModelQuota } from '../../types/account';
 import { cn } from '../../utils/cn';
 import { useTranslation } from 'react-i18next';
 import { useConfigStore } from '../../stores/useConfigStore';
 import { QuotaItem } from './QuotaItem';
-import { MODEL_CONFIG, sortModels } from '../../config/modelConfig';
+import { MODEL_CONFIG, sortModels, getModelProtectionKey, resolveQuotaModels, ensurePinnedImageSelector } from '../../config/modelConfig';
 import { getValidationBlockedStatusLabel } from './accountValidationStatus';
 import { getLiveLimitForModel } from '../../utils/liveLimit';
 
@@ -82,7 +82,7 @@ function AccountCard({ account, selected, onSelect, isCurrent: propIsCurrent, is
             return {
                 id: m.name,
                 label: m.display_name || fullConfig?.shortLabel || fullConfig?.label || m.name,
-                protectedKey: fullConfig?.protectedKey || m.name,
+                protectedKey: getModelProtectionKey(m.name) ?? fullConfig?.protectedKey ?? m.name,
                 Icon: iconMap.get(m.name) || Bot,
                 data: m
             };
@@ -96,7 +96,28 @@ function AccountCard({ account, selected, onSelect, isCurrent: propIsCurrent, is
             // Filter for pinned or defaults
             const pinned = config?.pinned_quota_models?.models;
             if (pinned && pinned.length > 0) {
-                models = accountModels.filter(m => pinned.includes(m.id));
+                const selections = resolveQuotaModels(
+                    accountModels.map(m => m.data),
+                    ensurePinnedImageSelector(pinned),
+                );
+                models = selections
+                    .map(sel => sel.model ? accountModels.find(am => am.data === sel.model) : undefined)
+                    .filter((m): m is typeof accountModels[number] => m !== undefined);
+                // 也保留无配额数据的 pinned 模型（显示 0%）
+                for (const sel of selections) {
+                    if (!sel.model) {
+                        const selectorConfig = MODEL_CONFIG[sel.selectorId.toLowerCase()];
+                        if (selectorConfig) {
+                            models = [...models, {
+                                id: sel.selectorId,
+                                label: selectorConfig.shortLabel || selectorConfig.label,
+                                protectedKey: selectorConfig.protectedKey,
+                                Icon: selectorConfig.Icon,
+                                data: { name: sel.selectorId, percentage: 0 } as ModelQuota,
+                            }];
+                        }
+                    }
+                }
             } else {
                 // Default fallback: show known default models, plus we show all dynamic pinned models
                 // 暂时退化：如果没有 config 就不阻拦了？不，没有 pinned 就显示内置+有 display_name 的。

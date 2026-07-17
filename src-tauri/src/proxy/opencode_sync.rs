@@ -1,10 +1,12 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+
+use crate::proxy::common::variant_mapping::{VariantTier, GEMINI_FAMILIES};
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -14,6 +16,7 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 const OPENCODE_DIR: &str = ".config/opencode";
 const OPENCODE_CONFIG_FILE: &str = "opencode.json";
+const OPENCODE_CONFIG_FILE_JSONC: &str = "opencode.jsonc";
 const ANTIGRAVITY_CONFIG_FILE: &str = "antigravity.json";
 const ANTIGRAVITY_ACCOUNTS_FILE: &str = "antigravity-accounts.json";
 const BACKUP_SUFFIX: &str = ".antigravity-manager.bak";
@@ -26,9 +29,9 @@ const ANTIGRAVITY_PROVIDER_ID: &str = "antigravity-manager";
 enum VariantType {
     /// Claude-style thinking with budget_tokens
     ClaudeThinking,
-    /// Gemini 3 Pro style with thinkingLevel
+    /// Gemini 3 Pro style with thinking budgets
     Gemini3Pro,
-    /// Gemini 3 Flash style with thinkingLevel
+    /// Gemini 3 Flash style with thinking budgets
     Gemini3Flash,
     /// Gemini 2.5 thinking style
     Gemini25Thinking,
@@ -49,7 +52,7 @@ struct ModelDef {
 
 /// Build the complete model catalog for antigravity-manager provider
 fn build_model_catalog() -> Vec<ModelDef> {
-    vec![
+    let mut catalog = vec![
         // Claude models
         ModelDef {
             id: "claude-sonnet-4-6",
@@ -91,36 +94,33 @@ fn build_model_catalog() -> Vec<ModelDef> {
             reasoning: true,
             variant_type: Some(VariantType::ClaudeThinking),
         },
-        // Gemini 3.1 Pro models
-        ModelDef {
-            id: "gemini-3.1-pro-high",
-            name: "Gemini 3.1 Pro High",
-            context_limit: 1_048_576,
-            output_limit: 65_535,
-            input_modalities: &["text", "image", "pdf"],
-            output_modalities: &["text", "image"],
-            reasoning: true,
-            variant_type: Some(VariantType::Gemini3Pro),
+    ];
+
+    catalog.extend(GEMINI_FAMILIES.iter().map(|family| ModelDef {
+        id: family.canonical_id,
+        name: family.display_name,
+        context_limit: family.context_limit,
+        output_limit: family.output_limit,
+        input_modalities: family.input_modalities,
+        output_modalities: family.output_modalities,
+        reasoning: family.reasoning,
+        variant_type: match family.canonical_id {
+            "gemini-3.1-pro" => Some(VariantType::Gemini3Pro),
+            "gemini-3.5-flash" => Some(VariantType::Gemini3Flash),
+            _ => None,
         },
+    }));
+
+    catalog.extend([
         ModelDef {
-            id: "gemini-3.1-pro-low",
-            name: "Gemini 3.1 Pro Low",
-            context_limit: 1_048_576,
-            output_limit: 65_535,
-            input_modalities: &["text", "image", "pdf"],
-            output_modalities: &["text", "image"],
-            reasoning: true,
-            variant_type: Some(VariantType::Gemini3Pro),
-        },
-        ModelDef {
-            id: "gemini-3-flash",
-            name: "Gemini 3 Flash",
+            id: "gemini-3.1-flash-lite",
+            name: "Gemini 3.1 Flash Lite",
             context_limit: 1_048_576,
             output_limit: 65_536,
             input_modalities: &["text", "image", "pdf"],
             output_modalities: &["text"],
             reasoning: true,
-            variant_type: Some(VariantType::Gemini3Flash),
+            variant_type: None,
         },
         ModelDef {
             id: "gemini-3-pro-image",
@@ -173,7 +173,9 @@ fn build_model_catalog() -> Vec<ModelDef> {
             reasoning: true,
             variant_type: None,
         },
-    ]
+    ]);
+
+    catalog
 }
 
 /// Normalize OpenCode base URL to ensure it ends with `/v1` (Anthropic protocol requirement)
@@ -197,6 +199,13 @@ pub struct OpencodeStatus {
     pub has_backup: bool,
     pub current_base_url: Option<String>,
     pub files: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct CanonicalFamilyDto {
+    pub canonical_id: String,
+    pub display_name: String,
+    pub match_ids: Vec<String>,
 }
 
 /// Plugin schema v3 account structure
@@ -256,14 +265,181 @@ fn get_opencode_dir() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(OPENCODE_DIR))
 }
 
+/// Resolve the active OpenCode config file name for the given directory.
+///
+/// OpenCode accepts both `opencode.json` and `opencode.jsonc`. To avoid creating a
+/// parallel `opencode.json` next to a user's existing `opencode.jsonc`, we probe the
+/// directory: if a `.jsonc` file already exists we keep using it, otherwise we fall
+/// back to the default `opencode.json`. This keeps each user on the file they
+/// already use.
+///
+/// Pass `Some(dir)` to probe a real directory, or `None` to get the default file
+/// name without filesystem access (used by pure-function helpers).
+fn resolve_active_config_file_name(dir: Option<&PathBuf>) -> &'static str {
+    if let Some(dir) = dir {
+        let jsonc = dir.join(OPENCODE_CONFIG_FILE_JSONC);
+        if jsonc.exists() {
+            return OPENCODE_CONFIG_FILE_JSONC;
+        }
+    }
+    OPENCODE_CONFIG_FILE
+}
+
 fn get_config_paths() -> Option<(PathBuf, PathBuf, PathBuf)> {
     get_opencode_dir().map(|dir| {
+        let config_file = resolve_active_config_file_name(Some(&dir));
         (
-            dir.join(OPENCODE_CONFIG_FILE),
+            dir.join(config_file),
             dir.join(ANTIGRAVITY_CONFIG_FILE),
             dir.join(ANTIGRAVITY_ACCOUNTS_FILE),
         )
     })
+}
+
+/// Strip JSONC comments (both `// line` and `/* block */`) so the remainder can be
+/// parsed by `serde_json`, which only understands strict JSON.
+///
+/// This is intentionally a small, conservative scanner: it tracks whether the current
+/// position is inside a string literal (respecting `\"` escapes) so that `//` or `/*`
+/// appearing inside a string value is never mistaken for a comment. Trailing commas are
+/// handled separately by [`strip_jsonc_trailing_commas`].
+fn strip_jsonc_comments(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = String::with_capacity(input.len());
+    let mut i = 0;
+    let mut in_string = false;
+
+    while i < bytes.len() {
+        let c = bytes[i];
+
+        if in_string {
+            out.push(c as char);
+            if c == b'\\' && i + 1 < bytes.len() {
+                // Keep the escaped char verbatim (e.g. \", \\, \/).
+                out.push(bytes[i + 1] as char);
+                i += 2;
+                continue;
+            }
+            if c == b'"' {
+                in_string = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        match c {
+            b'"' => {
+                in_string = true;
+                out.push('"');
+                i += 1;
+            }
+            b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'/' => {
+                // Line comment: skip until newline.
+                i += 2;
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'*' => {
+                // Block comment: skip until closing */.
+                i += 2;
+                while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                    i += 1;
+                }
+                i = (i + 2).min(bytes.len());
+            }
+            _ => {
+                out.push(c as char);
+                i += 1;
+            }
+        }
+    }
+
+    out
+}
+
+/// Remove trailing commas (a `,` followed, after optional whitespace, by a closing
+/// `}` or `]`) so `serde_json` can parse JSONC that permits them. Like the comment
+/// stripper, this respects string literals so a comma at the end of a string value is
+/// never touched.
+fn strip_jsonc_trailing_commas(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = String::with_capacity(input.len());
+    let mut i = 0;
+    let mut in_string = false;
+
+    while i < bytes.len() {
+        let c = bytes[i];
+
+        if in_string {
+            out.push(c as char);
+            if c == b'\\' && i + 1 < bytes.len() {
+                out.push(bytes[i + 1] as char);
+                i += 2;
+                continue;
+            }
+            if c == b'"' {
+                in_string = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        if c == b'"' {
+            in_string = true;
+            out.push('"');
+            i += 1;
+            continue;
+        }
+
+        // When we hit a comma outside a string, look ahead past whitespace. If the next
+        // significant character closes an object/array, this is a trailing comma — drop
+        // it. Otherwise keep the comma (it separates real elements).
+        if c == b',' {
+            let mut j = i + 1;
+            let mut is_trailing = false;
+            while j < bytes.len() {
+                match bytes[j] {
+                    b' ' | b'\t' | b'\n' | b'\r' => j += 1,
+                    b'}' | b']' => {
+                        is_trailing = true;
+                        break;
+                    }
+                    _ => break,
+                }
+            }
+            if is_trailing {
+                // Skip the comma (don't push it); leave the whitespace to be pushed normally.
+                i += 1;
+            } else {
+                out.push(',');
+                i += 1;
+            }
+            continue;
+        }
+
+        out.push(c as char);
+        i += 1;
+    }
+
+    out
+}
+
+/// Read and parse an OpenCode config file, tolerating JSONC comments and trailing commas.
+fn parse_config_file(path: &PathBuf) -> Option<Value> {
+    let content = fs::read_to_string(path).ok()?;
+    parse_jsonc(&content)
+}
+
+/// Parse a JSON/JSONC string: try strict JSON first, then normalize comments and
+/// trailing commas and retry. Used everywhere a user opencode config is read.
+fn parse_jsonc(content: &str) -> Option<Value> {
+    serde_json::from_str(content)
+        .or_else(|_| {
+            let normalized = strip_jsonc_trailing_commas(&strip_jsonc_comments(content));
+            serde_json::from_str(&normalized)
+        })
+        .ok()
 }
 
 fn extract_version(raw: &str) -> String {
@@ -677,12 +853,24 @@ pub fn get_sync_status(proxy_url: &str) -> (bool, bool, Option<String>) {
     let mut has_backup = false;
     let mut current_base_url = None;
 
-    let backup_path =
-        config_path.with_file_name(format!("{}{}", OPENCODE_CONFIG_FILE, BACKUP_SUFFIX));
-    let old_backup_path =
-        config_path.with_file_name(format!("{}{}", OPENCODE_CONFIG_FILE, OLD_BACKUP_SUFFIX));
-    if backup_path.exists() || old_backup_path.exists() {
-        has_backup = true;
+    // Backups may have been created against either opencode.json or opencode.jsonc.
+    // Check both the active file name's backup and the canonical json backup so a
+    // previously-synced state is still detected after switching file types.
+    let active_file_name = config_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(OPENCODE_CONFIG_FILE);
+    let backup_candidates = [
+        format!("{}{}", active_file_name, BACKUP_SUFFIX),
+        format!("{}{}", active_file_name, OLD_BACKUP_SUFFIX),
+        format!("{}{}", OPENCODE_CONFIG_FILE, BACKUP_SUFFIX),
+        format!("{}{}", OPENCODE_CONFIG_FILE, OLD_BACKUP_SUFFIX),
+    ];
+    for name in &backup_candidates {
+        if config_path.with_file_name(name).exists() {
+            has_backup = true;
+            break;
+        }
     }
 
     if !config_path.exists() {
@@ -694,7 +882,7 @@ pub fn get_sync_status(proxy_url: &str) -> (bool, bool, Option<String>) {
         Err(_) => return (false, has_backup, None),
     };
 
-    let json: Value = serde_json::from_str(&content).unwrap_or_default();
+    let json: Value = parse_jsonc(&content).unwrap_or_default();
 
     // Normalize proxy URL for comparison
     let normalized_proxy = normalize_opencode_base_url(proxy_url);
@@ -808,11 +996,17 @@ fn build_claude_thinking_variant(budget: u32) -> Value {
     })
 }
 
-/// Build Gemini 3 style variant with thinkingLevel
-fn build_gemini3_variant(level: &str) -> Value {
-    serde_json::json!({
-        "thinkingLevel": level
-    })
+/// Build Gemini 3 effort-based variant for the @ai-sdk/anthropic SDK.
+///
+/// The provider serializes `{ "effort": "<tier>" }` as `output_config.effort`
+/// on the outgoing Anthropic request. No thinking-budget fields are used.
+fn build_gemini3_effort_variant(tier: VariantTier) -> Value {
+    let effort = match tier {
+        VariantTier::Low => "low",
+        VariantTier::Medium => "medium",
+        VariantTier::High => "high",
+    };
+    serde_json::json!({ "effort": effort })
 }
 
 /// Build Gemini 2.5 thinking variant with thinkingConfig and thinking
@@ -842,16 +1036,30 @@ fn build_variants_object(variant_type: Option<VariantType>) -> Option<Value> {
         }
         Some(VariantType::Gemini3Pro) => {
             let mut variants = serde_json::Map::new();
-            variants.insert("low".to_string(), build_gemini3_variant("low"));
-            variants.insert("high".to_string(), build_gemini3_variant("high"));
+            variants.insert(
+                "low".to_string(),
+                build_gemini3_effort_variant(VariantTier::Low),
+            );
+            variants.insert(
+                "high".to_string(),
+                build_gemini3_effort_variant(VariantTier::High),
+            );
             Some(Value::Object(variants))
         }
         Some(VariantType::Gemini3Flash) => {
             let mut variants = serde_json::Map::new();
-            variants.insert("minimal".to_string(), build_gemini3_variant("minimal"));
-            variants.insert("low".to_string(), build_gemini3_variant("low"));
-            variants.insert("medium".to_string(), build_gemini3_variant("medium"));
-            variants.insert("high".to_string(), build_gemini3_variant("high"));
+            variants.insert(
+                "low".to_string(),
+                build_gemini3_effort_variant(VariantTier::Low),
+            );
+            variants.insert(
+                "medium".to_string(),
+                build_gemini3_effort_variant(VariantTier::Medium),
+            );
+            variants.insert(
+                "high".to_string(),
+                build_gemini3_effort_variant(VariantTier::High),
+            );
             Some(Value::Object(variants))
         }
         Some(VariantType::Gemini25Thinking) => {
@@ -899,8 +1107,179 @@ fn build_model_json(model_def: &ModelDef) -> Value {
     Value::Object(model_obj)
 }
 
-/// Merge catalog models into provider.models without deleting user models
-fn merge_catalog_models(provider: &mut Value, model_ids: Option<&[&str]>) {
+/// A model to sync, optionally carrying the display name from the frontend.
+/// When `name` is provided (the common case from the OpenCode sync modal), it is used
+/// verbatim so the config shows the same recognizable name the user saw in the UI.
+/// When absent (e.g. a plain id list), a name is derived from the id.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelInput {
+    pub id: String,
+    pub name: Option<String>,
+}
+
+/// Sensible per-series defaults derived from the model id prefix. Real model metadata
+/// lives in the catalog; this is only used for ids the catalog doesn't know (e.g. a
+/// newly released model or an account-specific variant), so the entry still gets useful
+/// limit/modalities instead of a bare `{ "name": ... }`. Returns None for unknown
+/// families, in which case only the name is written.
+fn series_defaults_for(model_id: &str) -> Option<Value> {
+    let id = model_id.to_lowercase();
+    // Gemini 3.x / 3.5 / 3.1 family: 1M context, 64k output, multimodal in, text out.
+    if id.starts_with("gemini-3") || id.starts_with("gemini-3.1") || id.starts_with("gemini-3.5")
+    {
+        return Some(serde_json::json!({
+            "limit": { "context": 1_048_576, "output": 65_536 },
+            "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] },
+        }));
+    }
+    // Gemini 2.5 family: same shape.
+    if id.starts_with("gemini-2.5") || id.starts_with("gemini-2.0") {
+        return Some(serde_json::json!({
+            "limit": { "context": 1_048_576, "output": 65_536 },
+            "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] },
+        }));
+    }
+    // Claude family: 200k context, 64k output.
+    if id.starts_with("claude") {
+        return Some(serde_json::json!({
+            "limit": { "context": 200_000, "output": 64_000 },
+            "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] },
+        }));
+    }
+    None
+}
+
+/// Build a minimal but valid model entry for a model id that is not in the catalog.
+///
+/// OpenCode's schema only requires a `name` for a model entry, so a model the user
+/// explicitly selected — even one we have no metadata for — should still be written
+/// rather than silently dropped. If a display name was passed from the frontend we use
+/// it verbatim (so the config matches what the user saw); otherwise we derive one.
+/// When we can infer the model family from the id we also fill in limit/modalities.
+fn build_fallback_model_json(model_id: &str, display_name: Option<&str>) -> Value {
+    // Prefer the caller-provided display name; fall back to a cleaned-up id.
+    let name = display_name
+        .filter(|n| !n.trim().is_empty())
+        .map(|n| n.to_string())
+        .unwrap_or_else(|| humanize_model_id(model_id));
+
+    let mut entry = serde_json::Map::new();
+    entry.insert("name".to_string(), Value::String(name));
+    if let Some(defaults) = series_defaults_for(model_id) {
+        if let Some(obj) = defaults.as_object() {
+            for (k, v) in obj.iter() {
+                entry.insert(k.clone(), v.clone());
+            }
+        }
+    }
+    Value::Object(entry)
+}
+
+/// Derive a readable name from a model id, preserving version dots
+/// (e.g. "gemini-3.5-flash-low" -> "Gemini 3.5 Flash Low").
+fn humanize_model_id(model_id: &str) -> String {
+    model_id
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            let mut chars = s.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Return a Gemini canonical catalog id for a canonical id or one of its aliases.
+fn canonical_gemini_model_id(model_id: &str) -> Option<&'static str> {
+    GEMINI_FAMILIES.iter().find_map(|family| {
+        (family.canonical_id == model_id
+            || family
+                .aliases
+                .iter()
+                .any(|(alias_id, _)| *alias_id == model_id))
+        .then_some(family.canonical_id)
+    })
+}
+
+/// Normalize Gemini aliases and preserve the first frontend entry for each model id.
+fn normalize_model_inputs(model_inputs: &[ModelInput]) -> Vec<ModelInput> {
+    let mut seen_model_ids = HashSet::new();
+
+    model_inputs
+        .iter()
+        .filter_map(|input| {
+            let model_id = canonical_gemini_model_id(&input.id).unwrap_or(&input.id);
+            if !seen_model_ids.insert(model_id.to_string()) {
+                return None;
+            }
+
+            let mut normalized = input.clone();
+            normalized.id = model_id.to_string();
+            Some(normalized)
+        })
+        .collect()
+}
+
+/// Migrate known Gemini alias keys without touching non-Gemini user models.
+fn migrate_gemini_alias_models(provider: &mut Value) {
+    let Some(models) = provider.get_mut("models").and_then(Value::as_object_mut) else {
+        return;
+    };
+
+    for family in GEMINI_FAMILIES {
+        for (alias_id, _) in family.aliases {
+            let Some(alias_value) = models.remove(*alias_id) else {
+                continue;
+            };
+
+            let merged = match models.remove(family.canonical_id) {
+                Some(canonical_value) => {
+                    match (canonical_value.as_object(), alias_value.as_object()) {
+                        (Some(canonical), Some(alias)) => {
+                            let mut merged = canonical.clone();
+                            for (field, value) in alias {
+                                match merged.get(field) {
+                                    Some(canonical_value) if canonical_value != value => {
+                                        tracing::warn!(
+                                            canonical_model = family.canonical_id,
+                                            alias_model = alias_id,
+                                            field = field.as_str(),
+                                            "OpenCode sync model field conflict; canonical value retained"
+                                        );
+                                    }
+                                    Some(_) => {}
+                                    None => {
+                                        merged.insert(field.clone(), value.clone());
+                                    }
+                                }
+                            }
+                            Value::Object(merged)
+                        }
+                        _ => {
+                            tracing::warn!(
+                                canonical_model = family.canonical_id,
+                                alias_model = alias_id,
+                                "OpenCode sync could not merge a non-object alias model; canonical value retained"
+                            );
+                            canonical_value
+                        }
+                    }
+                }
+                None => alias_value,
+            };
+            models.insert(family.canonical_id.to_string(), merged);
+        }
+    }
+}
+
+/// Merge catalog models into provider.models without deleting user models.
+/// Each entry carries an optional display name from the frontend so fallback entries
+/// for non-catalog models get a recognizable name.
+fn merge_catalog_models(provider: &mut Value, model_inputs: Option<&[ModelInput]>) {
     if provider.get("models").is_none() {
         provider["models"] = serde_json::json!({});
     }
@@ -909,12 +1288,12 @@ fn merge_catalog_models(provider: &mut Value, model_ids: Option<&[&str]>) {
     let catalog_map: HashMap<&str, &ModelDef> = catalog.iter().map(|m| (m.id, m)).collect();
 
     if let Some(models) = provider.get_mut("models").and_then(|m| m.as_object_mut()) {
-        let ids_to_sync: Vec<&str> = match model_ids {
-            Some(ids) => ids.to_vec(),
-            None => catalog_map.keys().copied().collect(),
-        };
+        // When no specific models are requested, sync the whole catalog.
+        let catalog_ids: Vec<&str> = catalog_map.keys().copied().collect();
 
-        for model_id in ids_to_sync {
+        let normalized_inputs = normalize_model_inputs(model_inputs.unwrap_or(&[]));
+        for input in &normalized_inputs {
+            let model_id = input.id.as_str();
             if let Some(model_def) = catalog_map.get(model_id) {
                 let catalog_model = build_model_json(model_def);
 
@@ -939,6 +1318,30 @@ fn merge_catalog_models(provider: &mut Value, model_ids: Option<&[&str]>) {
                     // Model doesn't exist, insert full catalog entry
                     models.insert(model_id.to_string(), catalog_model);
                 }
+            } else {
+                // Fallback: the id isn't in our catalog (e.g. a dynamically discovered
+                // model from the user's account quota, or a new model not yet listed).
+                // Previously these were silently dropped, which caused selected models to
+                // never appear in the config. OpenCode only requires a `name`, so write a
+                // minimal entry using the frontend-provided display name when available.
+                // Preserve any user-defined object the user may already have.
+                if !models.contains_key(model_id) {
+                    models.insert(
+                        model_id.to_string(),
+                        build_fallback_model_json(model_id, input.name.as_deref()),
+                    );
+                }
+            }
+        }
+
+        // No inputs at all => sync the entire catalog (None means "all").
+        if model_inputs.is_none() {
+            for model_id in &catalog_ids {
+                if let Some(model_def) = catalog_map.get(model_id) {
+                    if !models.contains_key(*model_id) {
+                        models.insert((*model_id).to_string(), build_model_json(model_def));
+                    }
+                }
             }
         }
     }
@@ -948,7 +1351,7 @@ pub fn sync_opencode_config(
     proxy_url: &str,
     api_key: &str,
     sync_accounts: bool,
-    models_to_sync: Option<Vec<String>>,
+    models_to_sync: Option<Vec<ModelInput>>,
 ) -> Result<(), String> {
     let Some((config_path, _ag_config_path, ag_accounts_path)) = get_config_paths() else {
         return Err("Failed to get OpenCode config directory".to_string());
@@ -961,18 +1364,12 @@ pub fn sync_opencode_config(
     create_backup(&config_path)?;
 
     let mut config: Value = if config_path.exists() {
-        fs::read_to_string(&config_path)
-            .ok()
-            .and_then(|c| serde_json::from_str(&c).ok())
-            .unwrap_or_else(|| serde_json::json!({}))
+        parse_config_file(&config_path).unwrap_or_else(|| serde_json::json!({}))
     } else {
         serde_json::json!({})
     };
 
-    let model_refs: Option<Vec<&str>> = models_to_sync
-        .as_ref()
-        .map(|models| models.iter().map(|m| m.as_str()).collect());
-    config = apply_sync_to_config(config, proxy_url, api_key, model_refs.as_deref());
+    config = apply_sync_to_config(config, proxy_url, api_key, models_to_sync.as_deref());
 
     let tmp_path = config_path.with_extension("tmp");
     fs::write(&tmp_path, serde_json::to_string_pretty(&config).unwrap())
@@ -1153,18 +1550,30 @@ pub fn restore_opencode_config() -> Result<(), String> {
 
     let mut restored = false;
 
-    // Try new backup suffix first, fall back to old suffix for backward compatibility
-    let config_backup_new =
-        config_path.with_file_name(format!("{}{}", OPENCODE_CONFIG_FILE, BACKUP_SUFFIX));
-    let config_backup_old =
-        config_path.with_file_name(format!("{}{}", OPENCODE_CONFIG_FILE, OLD_BACKUP_SUFFIX));
-
-    if config_backup_new.exists() {
-        restore_backup_to_target(&config_backup_new, &config_path, "config")?;
-        restored = true;
-    } else if config_backup_old.exists() {
-        restore_backup_to_target(&config_backup_old, &config_path, "config")?;
-        restored = true;
+    // Backups are named after the config file they protected. A user may have been
+    // using opencode.json or opencode.jsonc, and the active path may now differ from
+    // whichever backup exists. Look for backups under both file names, preferring the
+    // active one, and restore the backup to its original (backup-name minus suffix)
+    // target path so we don't resurrect a stale parallel file.
+    let dir = config_path.parent();
+    let active_file_name = config_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(OPENCODE_CONFIG_FILE);
+    let config_candidates: [(&str, &str); 4] = [
+        (active_file_name, BACKUP_SUFFIX),
+        (active_file_name, OLD_BACKUP_SUFFIX),
+        (OPENCODE_CONFIG_FILE, BACKUP_SUFFIX),
+        (OPENCODE_CONFIG_FILE, OLD_BACKUP_SUFFIX),
+    ];
+    for (file_name, suffix) in &config_candidates {
+        let backup_path = config_path.with_file_name(format!("{}{}", file_name, suffix));
+        if backup_path.exists() {
+            let target = dir.map(|d| d.join(file_name)).unwrap_or_else(|| config_path.clone());
+            restore_backup_to_target(&backup_path, &target, "config")?;
+            restored = true;
+            break;
+        }
     }
 
     // Try new backup suffix first, fall back to old suffix for backward compatibility
@@ -1196,7 +1605,7 @@ fn apply_sync_to_config(
     mut config: Value,
     proxy_url: &str,
     api_key: &str,
-    models_to_sync: Option<&[&str]>,
+    models_to_sync: Option<&[ModelInput]>,
 ) -> Value {
     if !config.is_object() {
         config = serde_json::json!({});
@@ -1216,6 +1625,7 @@ fn apply_sync_to_config(
             ensure_provider_string_field(ag_provider, "npm", "@ai-sdk/anthropic");
             ensure_provider_string_field(ag_provider, "name", "Antigravity Manager");
             merge_provider_options(ag_provider, &normalized_url, api_key);
+            migrate_gemini_alias_models(ag_provider);
             merge_catalog_models(ag_provider, models_to_sync);
         }
     }
@@ -1259,6 +1669,408 @@ fn apply_clear_to_config(mut config: Value, proxy_url: Option<&str>, clear_legac
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::proxy::common::variant_mapping::resolve_real_model;
+
+    /// Helper: build a ModelInput with just an id (no display name).
+    fn minput(id: &str) -> ModelInput {
+        ModelInput {
+            id: id.to_string(),
+            name: None,
+        }
+    }
+
+    /// Helper: build a ModelInput carrying a display name.
+    fn minput_named(id: &str, name: &str) -> ModelInput {
+        ModelInput {
+            id: id.to_string(),
+            name: Some(name.to_string()),
+        }
+    }
+
+    #[test]
+    fn merge_catalog_models_normalizes_aliases_to_canonical() {
+        let mut provider = serde_json::json!({ "models": {} });
+        let inputs = [minput("gemini-3.1-pro-high"), minput("gemini-3.1-pro-low")];
+
+        merge_catalog_models(&mut provider, Some(&inputs));
+
+        let models = provider["models"].as_object().expect("models object");
+        assert_eq!(models.len(), 1);
+        assert!(models.contains_key("gemini-3.1-pro"));
+        assert!(!models.contains_key("gemini-3.1-pro-high"));
+        assert!(!models.contains_key("gemini-3.1-pro-low"));
+    }
+
+    #[test]
+    fn merge_catalog_models_keeps_one_pro_and_one_flash_for_legacy_inputs() {
+        let mut provider = serde_json::json!({ "models": {} });
+        let inputs = [
+            minput("gemini-3.1-pro-high"),
+            minput("gemini-3.1-pro-low"),
+            minput("gemini-3-flash"),
+        ];
+
+        merge_catalog_models(&mut provider, Some(&inputs));
+
+        let models = provider["models"].as_object().expect("models object");
+        assert_eq!(models.len(), 2);
+        assert!(models.contains_key("gemini-3.1-pro"));
+        assert!(models.contains_key("gemini-3.5-flash"));
+    }
+
+    #[test]
+    fn apply_sync_migrates_old_alias_keys_to_canonical() {
+        let config = serde_json::json!({
+            "provider": {
+                ANTIGRAVITY_PROVIDER_ID: {
+                    "models": {
+                        "gemini-3.1-pro-high": { "from_high": true },
+                        "gemini-3.1-pro-low": { "from_low": true },
+                        "custom-model": { "preserved": true }
+                    }
+                }
+            }
+        });
+
+        let updated = apply_sync_to_config(config, "http://localhost:8045", "key", Some(&[]));
+        let models = updated["provider"][ANTIGRAVITY_PROVIDER_ID]["models"]
+            .as_object()
+            .expect("models object");
+        let canonical = models
+            .get("gemini-3.1-pro")
+            .and_then(Value::as_object)
+            .expect("canonical model");
+
+        assert_eq!(canonical.get("from_high"), Some(&Value::Bool(true)));
+        assert_eq!(canonical.get("from_low"), Some(&Value::Bool(true)));
+        assert!(!models.contains_key("gemini-3.1-pro-high"));
+        assert!(!models.contains_key("gemini-3.1-pro-low"));
+        assert_eq!(
+            models.get("custom-model"),
+            Some(&serde_json::json!({ "preserved": true }))
+        );
+    }
+
+    #[test]
+    fn apply_sync_keeps_non_conflicting_user_fields() {
+        let config = serde_json::json!({
+            "provider": {
+                ANTIGRAVITY_PROVIDER_ID: {
+                    "models": {
+                        "gemini-3.1-pro": { "canonical_only": "keep" },
+                        "gemini-3.1-pro-high": { "alias_only": "also keep" }
+                    }
+                }
+            }
+        });
+
+        let updated = apply_sync_to_config(config, "http://localhost:8045", "key", Some(&[]));
+        let canonical = updated["provider"][ANTIGRAVITY_PROVIDER_ID]["models"]
+            ["gemini-3.1-pro"]
+            .as_object()
+            .expect("canonical model");
+
+        assert_eq!(
+            canonical.get("canonical_only"),
+            Some(&Value::String("keep".to_string()))
+        );
+        assert_eq!(
+            canonical.get("alias_only"),
+            Some(&Value::String("also keep".to_string()))
+        );
+    }
+
+    #[test]
+    fn apply_sync_warns_on_conflicts_and_canonical_wins() {
+        use std::sync::{Arc, Mutex};
+        use tracing::{Event, Level, Subscriber};
+        use tracing_subscriber::{
+            layer::{Context, SubscriberExt},
+            registry::LookupSpan,
+            Layer,
+        };
+
+        #[derive(Clone)]
+        struct WarnCapture(Arc<Mutex<usize>>);
+
+        impl<S> Layer<S> for WarnCapture
+        where
+            S: Subscriber + for<'lookup> LookupSpan<'lookup>,
+        {
+            fn on_event(&self, event: &Event<'_>, _: Context<'_, S>) {
+                if *event.metadata().level() == Level::WARN {
+                    *self.0.lock().expect("warning counter lock") += 1;
+                }
+            }
+        }
+
+        let config = serde_json::json!({
+            "provider": {
+                ANTIGRAVITY_PROVIDER_ID: {
+                    "models": {
+                        "gemini-3.1-pro": { "custom": "canonical" },
+                        "gemini-3.1-pro-high": { "custom": "alias" }
+                    }
+                }
+            }
+        });
+        let warnings = Arc::new(Mutex::new(0));
+        let subscriber = tracing_subscriber::registry().with(WarnCapture(warnings.clone()));
+        let updated = tracing::subscriber::with_default(subscriber, || {
+            apply_sync_to_config(config, "http://localhost:8045", "key", Some(&[]))
+        });
+
+        assert_eq!(
+            updated["provider"][ANTIGRAVITY_PROVIDER_ID]["models"]["gemini-3.1-pro"]["custom"],
+            "canonical"
+        );
+        assert_eq!(*warnings.lock().expect("warning counter lock"), 1);
+    }
+
+    fn preserved_catalog_json_snapshot(models: &[ModelDef]) -> String {
+        let entries = models
+            .iter()
+            .filter(|model| {
+                model.id.starts_with("claude-")
+                    || model.id == "gemini-3-pro-image"
+                    || model.id.starts_with("gemini-2.5-")
+            })
+            .map(|model| serde_json::json!({ "id": model.id, "model": build_model_json(model) }))
+            .collect::<Vec<_>>();
+
+        serde_json::to_string(&entries).unwrap()
+    }
+
+    #[test]
+    fn catalog_preserves_non_gemini3_variant_json_snapshot() {
+        let expected = vec![
+            ModelDef {
+                id: "claude-sonnet-4-6",
+                name: "Claude Sonnet 4.6",
+                context_limit: 200_000,
+                output_limit: 64_000,
+                input_modalities: &["text", "image", "pdf"],
+                output_modalities: &["text"],
+                reasoning: false,
+                variant_type: None,
+            },
+            ModelDef {
+                id: "claude-sonnet-4-6-thinking",
+                name: "Claude Sonnet 4.6 Thinking",
+                context_limit: 200_000,
+                output_limit: 64_000,
+                input_modalities: &["text", "image", "pdf"],
+                output_modalities: &["text"],
+                reasoning: true,
+                variant_type: Some(VariantType::ClaudeThinking),
+            },
+            ModelDef {
+                id: "claude-opus-4-5-thinking",
+                name: "Claude Opus 4.5 Thinking",
+                context_limit: 200_000,
+                output_limit: 64_000,
+                input_modalities: &["text", "image", "pdf"],
+                output_modalities: &["text"],
+                reasoning: true,
+                variant_type: Some(VariantType::ClaudeThinking),
+            },
+            ModelDef {
+                id: "claude-opus-4-6-thinking",
+                name: "Claude Opus 4.6 Thinking",
+                context_limit: 200_000,
+                output_limit: 64_000,
+                input_modalities: &["text", "image", "pdf"],
+                output_modalities: &["text"],
+                reasoning: true,
+                variant_type: Some(VariantType::ClaudeThinking),
+            },
+            ModelDef {
+                id: "gemini-3-pro-image",
+                name: "Gemini 3 Pro Image",
+                context_limit: 1_048_576,
+                output_limit: 65_535,
+                input_modalities: &["text", "image", "pdf"],
+                output_modalities: &["text", "image"],
+                reasoning: false,
+                variant_type: None,
+            },
+            ModelDef {
+                id: "gemini-2.5-flash",
+                name: "Gemini 2.5 Flash",
+                context_limit: 1_048_576,
+                output_limit: 65_536,
+                input_modalities: &["text", "image", "pdf"],
+                output_modalities: &["text"],
+                reasoning: false,
+                variant_type: None,
+            },
+            ModelDef {
+                id: "gemini-2.5-flash-lite",
+                name: "Gemini 2.5 Flash Lite",
+                context_limit: 1_048_576,
+                output_limit: 65_536,
+                input_modalities: &["text", "image", "pdf"],
+                output_modalities: &["text"],
+                reasoning: false,
+                variant_type: None,
+            },
+            ModelDef {
+                id: "gemini-2.5-flash-thinking",
+                name: "Gemini 2.5 Flash Thinking",
+                context_limit: 1_048_576,
+                output_limit: 65_536,
+                input_modalities: &["text", "image", "pdf"],
+                output_modalities: &["text"],
+                reasoning: true,
+                variant_type: Some(VariantType::Gemini25Thinking),
+            },
+            ModelDef {
+                id: "gemini-2.5-pro",
+                name: "Gemini 2.5 Pro",
+                context_limit: 1_048_576,
+                output_limit: 65_536,
+                input_modalities: &["text", "image", "pdf"],
+                output_modalities: &["text"],
+                reasoning: true,
+                variant_type: None,
+            },
+        ];
+
+        assert_eq!(
+            preserved_catalog_json_snapshot(&build_model_catalog()),
+            preserved_catalog_json_snapshot(&expected)
+        );
+    }
+
+    #[test]
+    fn catalog_uses_canonical_gemini_family_entries() {
+        let catalog = build_model_catalog();
+        let variant_ids = catalog
+            .iter()
+            .filter(|model| {
+                matches!(
+                    model.variant_type,
+                    Some(VariantType::Gemini3Pro) | Some(VariantType::Gemini3Flash)
+                )
+            })
+            .map(|model| model.id)
+            .collect::<std::collections::BTreeSet<_>>();
+        let canonical_ids = GEMINI_FAMILIES
+            .iter()
+            .map(|family| family.canonical_id)
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert_eq!(variant_ids, canonical_ids);
+
+        for family in GEMINI_FAMILIES {
+            let model = catalog
+                .iter()
+                .find(|model| model.id == family.canonical_id)
+                .unwrap();
+            assert_eq!(model.name, family.display_name);
+            assert_eq!(model.context_limit, family.context_limit);
+            assert_eq!(model.output_limit, family.output_limit);
+            assert_eq!(model.input_modalities, family.input_modalities);
+            assert_eq!(model.output_modalities, family.output_modalities);
+            assert_eq!(model.reasoning, family.reasoning);
+
+            match family.canonical_id {
+                "gemini-3.1-pro" => {
+                    assert!(matches!(model.variant_type, Some(VariantType::Gemini3Pro)));
+                }
+                "gemini-3.5-flash" => {
+                    assert!(matches!(model.variant_type, Some(VariantType::Gemini3Flash)));
+                }
+                _ => panic!("unexpected Gemini family: {}", family.canonical_id),
+            }
+        }
+    }
+
+    #[test]
+    fn catalog_marks_gemini_31_flash_lite_as_non_variant() {
+        let catalog = build_model_catalog();
+        let flash_lite = catalog
+            .iter()
+            .find(|model| model.id == "gemini-3.1-flash-lite")
+            .unwrap();
+
+        assert!(matches!(flash_lite.variant_type, None));
+    }
+
+    /// Map an Anthropic SDK effort string to the internal VariantTier.
+    fn effort_to_tier(effort: &str) -> VariantTier {
+        match effort {
+            "low" => VariantTier::Low,
+            "medium" => VariantTier::Medium,
+            "high" => VariantTier::High,
+            _ => panic!("unrecognized effort variant: {effort}"),
+        }
+    }
+
+    #[test]
+    fn build_variants_pro_resolve_to_real_ids() {
+        let variants = build_variants_object(Some(VariantType::Gemini3Pro))
+            .expect("Gemini 3.1 Pro variants must be configured");
+
+        for (name, expected_id) in [
+            ("low", "gemini-3.1-pro-low"),
+            ("high", "gemini-pro-agent"),
+        ] {
+            let variant = &variants[name];
+            let effort = variant["effort"]
+                .as_str()
+                .expect("Gemini 3 variant must expose effort string");
+
+            let tier = effort_to_tier(effort);
+            assert_eq!(
+                resolve_real_model("gemini-3.1-pro", tier)
+                    .expect("Gemini 3.1 Pro tier must resolve")
+                    .id,
+                expected_id
+            );
+        }
+
+        assert_eq!(variants.as_object().expect("variants must be an object").len(), 2);
+
+        // Verify the JSON shape contains only `effort` — no budget fields
+        let low = &variants["low"];
+        assert_eq!(low.as_object().unwrap().len(), 1);
+        assert!(low.get("effort").is_some());
+        assert!(low.get("thinking").is_none());
+    }
+
+    #[test]
+    fn build_variants_flash_resolve_to_real_ids() {
+        let variants = build_variants_object(Some(VariantType::Gemini3Flash))
+            .expect("Gemini 3.5 Flash variants must be configured");
+
+        for (name, expected_id) in [
+            ("low", "gemini-3.5-flash-extra-low"),
+            ("medium", "gemini-3.5-flash-low"),
+            ("high", "gemini-3-flash-agent"),
+        ] {
+            let variant = &variants[name];
+            let effort = variant["effort"]
+                .as_str()
+                .expect("Gemini 3 variant must expose effort string");
+
+            let tier = effort_to_tier(effort);
+            assert_eq!(
+                resolve_real_model("gemini-3.5-flash", tier)
+                    .expect("Gemini 3.5 Flash tier must resolve")
+                    .id,
+                expected_id
+            );
+        }
+
+        assert_eq!(variants.as_object().expect("variants must be an object").len(), 3);
+
+        // Verify the JSON shape contains only `effort` — no budget fields
+        let low = &variants["low"];
+        assert_eq!(low.as_object().unwrap().len(), 1);
+        assert!(low.get("effort").is_some());
+        assert!(low.get("thinking").is_none());
+    }
 
     #[test]
     fn test_extract_version_opencode_format() {
@@ -1421,8 +2233,8 @@ mod tests {
             "should have claude-sonnet-4-6"
         );
         assert!(
-            models.contains_key("gemini-3.1-pro-high"),
-            "should have gemini-3.1-pro-high"
+            models.contains_key("gemini-3.1-pro"),
+            "should have gemini-3.1-pro"
         );
         assert!(
             models.contains_key("gemini-2.5-pro"),
@@ -1439,13 +2251,13 @@ mod tests {
     #[test]
     fn test_sync_with_filtered_models() {
         let config = serde_json::json!({});
-        let models_to_sync = &["claude-sonnet-4-6", "gemini-3.1-pro-high"];
+        let models_to_sync = [minput("claude-sonnet-4-6"), minput("gemini-3.1-pro")];
 
         let result = apply_sync_to_config(
             config,
             "http://localhost:3000",
             "test-api-key",
-            Some(models_to_sync),
+            Some(&models_to_sync),
         );
 
         let provider = result.get("provider").unwrap();
@@ -1453,7 +2265,9 @@ mod tests {
         let models = ag.get("models").unwrap().as_object().unwrap();
 
         assert!(models.contains_key("claude-sonnet-4-6"));
-        assert!(models.contains_key("gemini-3.1-pro-high"));
+        let pro_model = models.get("gemini-3.1-pro").unwrap();
+        assert_eq!(pro_model.get("name").unwrap(), "Gemini 3.1 Pro");
+        assert_eq!(pro_model["limit"]["output"], 65_535);
         assert!(
             !models.contains_key("gemini-2.5-pro"),
             "should not have unselected models"
@@ -1649,6 +2463,386 @@ mod tests {
             "empty provider object should be removed"
         );
     }
+
+    /// Regression: model ids not present in the hardcoded catalog must still be
+    /// written to the config (previously silently dropped). A minimal `{ "name": ... }`
+    /// entry is valid per the OpenCode schema.
+    #[test]
+    fn test_sync_creates_fallback_model_for_unknown_id() {
+        let config = serde_json::json!({});
+        // "some-new-model" is deliberately not in build_model_catalog()
+        let models_to_sync = [minput("some-new-model")];
+
+        let result = apply_sync_to_config(
+            config,
+            "http://localhost:3000",
+            "test-api-key",
+            Some(&models_to_sync),
+        );
+
+        let models = result
+            .get("provider")
+            .unwrap()
+            .get(ANTIGRAVITY_PROVIDER_ID)
+            .unwrap()
+            .get("models")
+            .unwrap()
+            .as_object()
+            .unwrap();
+
+        assert!(
+            models.contains_key("some-new-model"),
+            "unknown model id must still be written, not dropped"
+        );
+        let entry = models.get("some-new-model").unwrap();
+        assert!(
+            entry.get("name").is_some(),
+            "fallback entry must at least have a name"
+        );
+    }
+
+    /// Mixing known catalog ids with unknown ids should write all of them.
+    #[test]
+    fn test_sync_filtered_models_with_known_and_unknown_ids() {
+        let config = serde_json::json!({});
+        let models_to_sync = [
+            minput("claude-sonnet-4-6"),
+            minput("gemini-3.1-pro"),
+            minput("custom-future-model"),
+        ];
+
+        let result = apply_sync_to_config(
+            config,
+            "http://localhost:3000",
+            "test-api-key",
+            Some(&models_to_sync),
+        );
+
+        let models = result
+            .get("provider")
+            .unwrap()
+            .get(ANTIGRAVITY_PROVIDER_ID)
+            .unwrap()
+            .get("models")
+            .unwrap()
+            .as_object()
+            .unwrap();
+
+        // Known ids get full catalog metadata
+        let claude = models.get("claude-sonnet-4-6").unwrap();
+        assert_eq!(claude.get("name").unwrap(), "Claude Sonnet 4.6");
+        assert!(claude.get("limit").is_some());
+
+        // Unknown id gets a minimal fallback entry
+        let custom = models.get("custom-future-model").unwrap();
+        assert!(custom.get("name").is_some());
+        assert_eq!(models["gemini-3.1-pro"]["limit"]["output"], 65_535);
+    }
+
+    /// Fallback entries should not clobber a model object the user already defined.
+    #[test]
+    fn test_sync_fallback_preserves_user_defined_model() {
+        let config = serde_json::json!({
+            "provider": {
+                "antigravity-manager": {
+                    "models": {
+                        "custom-future-model": {
+                            "name": "My Custom Name",
+                            "limit": { "context": 128000, "output": 4096 }
+                        }
+                    }
+                }
+            }
+        });
+        let models_to_sync = [minput("custom-future-model")];
+
+        let result = apply_sync_to_config(
+            config,
+            "http://localhost:3000",
+            "test-api-key",
+            Some(&models_to_sync),
+        );
+
+        let entry = result
+            .get("provider")
+            .unwrap()
+            .get(ANTIGRAVITY_PROVIDER_ID)
+            .unwrap()
+            .get("models")
+            .unwrap()
+            .get("custom-future-model")
+            .unwrap();
+
+        // User's own name/limit must be preserved, not overwritten by the fallback.
+        assert_eq!(entry.get("name").unwrap(), "My Custom Name");
+        assert_eq!(
+            entry.get("limit").unwrap().get("context").unwrap(),
+            &serde_json::json!(128000)
+        );
+    }
+
+    /// The fallback name derivation should produce human-readable names.
+    /// The fallback name derivation should preserve version dots (e.g. "3.5").
+    #[test]
+    fn test_build_fallback_model_json_readable_name() {
+        // No display name: derived from id, dots preserved.
+        let entry = build_fallback_model_json("gemini-2.5-pro", None);
+        assert_eq!(entry.get("name").unwrap(), "Gemini 2.5 Pro");
+
+        // 3.5 should stay together, not split into "3 5".
+        let entry = build_fallback_model_json("gemini-3.5-flash-low", None);
+        assert_eq!(entry.get("name").unwrap(), "Gemini 3.5 Flash Low");
+    }
+
+    /// When the frontend provides a display name, it must be used verbatim so the
+    /// config shows the same name the user saw (e.g. "Gemini 3.5 Flash (High)").
+    #[test]
+    fn test_build_fallback_model_json_uses_display_name() {
+        let entry = build_fallback_model_json(
+            "gemini-3.5-flash-high",
+            Some("Gemini 3.5 Flash (High)"),
+        );
+        assert_eq!(entry.get("name").unwrap(), "Gemini 3.5 Flash (High)");
+    }
+
+    /// Fallback entries for known families should pick up sensible limit/modalities.
+    #[test]
+    fn test_build_fallback_model_json_series_defaults() {
+        // A gemini-3.x id gets 1M context + multimodal input.
+        let entry = build_fallback_model_json("gemini-3.5-flash-low", None);
+        let limit = entry.get("limit").unwrap();
+        assert_eq!(limit.get("context").unwrap(), &serde_json::json!(1_048_576));
+        assert!(entry.get("modalities").is_some());
+
+        // A claude id gets 200k context.
+        let entry = build_fallback_model_json("claude-sonnet-4-9", None);
+        let limit = entry.get("limit").unwrap();
+        assert_eq!(limit.get("context").unwrap(), &serde_json::json!(200_000));
+
+        // An unknown family (not gemini/claude) only gets a name.
+        let entry = build_fallback_model_json("acme-model-1", None);
+        assert!(entry.get("limit").is_none());
+        assert!(entry.get("name").is_some());
+    }
+
+    /// resolve_active_config_file_name should prefer .jsonc when None is passed
+    /// (pure helper path), and the default file should be opencode.json.
+    #[test]
+    fn test_resolve_active_config_file_name_default() {
+        // Without probing a directory, the default is opencode.json.
+        assert_eq!(resolve_active_config_file_name(None), OPENCODE_CONFIG_FILE);
+    }
+
+    #[test]
+    fn test_resolve_active_config_file_name_prefers_existing_jsonc() {
+        // Create a temp dir that has only opencode.jsonc and confirm it is preferred.
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let dir = tmp.path().to_path_buf();
+        std::fs::write(dir.join(OPENCODE_CONFIG_FILE_JSONC), "{}").expect("write jsonc");
+        assert_eq!(
+            resolve_active_config_file_name(Some(&dir)),
+            OPENCODE_CONFIG_FILE_JSONC
+        );
+    }
+
+    #[test]
+    fn test_resolve_active_config_file_name_falls_back_to_json() {
+        // A temp dir with no config files at all defaults to opencode.json.
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let dir = tmp.path().to_path_buf();
+        assert_eq!(
+            resolve_active_config_file_name(Some(&dir)),
+            OPENCODE_CONFIG_FILE
+        );
+    }
+
+    /// strip_jsonc_comments must remove line and block comments while preserving
+    /// `//` and `/* */` that appear inside string values.
+    #[test]
+    fn test_strip_jsonc_comments_line_and_block() {
+        let input = r#"{
+  // a line comment
+  "key": "value", /* trailing block comment */
+  "url": "https://example.com/path" // not a comment inside string
+}"#;
+        let stripped = strip_jsonc_comments(input);
+        // The resulting string must be valid JSON.
+        let parsed: Value =
+            serde_json::from_str(&stripped).expect("stripped jsonc must be valid JSON");
+        assert_eq!(parsed.get("key").unwrap(), "value");
+        // The URL's // must be preserved (it is inside a string).
+        assert_eq!(
+            parsed.get("url").unwrap(),
+            "https://example.com/path"
+        );
+    }
+
+    #[test]
+    fn test_strip_jsonc_comments_preserves_escaped_quotes() {
+        // A string containing an escaped quote followed by // must not confuse the scanner.
+        let input = r##"{"msg": "a \"quoted//\" end", "n": 1 // comment
+}"##;
+        let stripped = strip_jsonc_comments(input);
+        let parsed: Value =
+            serde_json::from_str(&stripped).expect("stripped jsonc must be valid JSON");
+        assert_eq!(parsed.get("msg").unwrap(), "a \"quoted//\" end");
+        assert_eq!(parsed.get("n").unwrap(), 1);
+    }
+
+    /// strip_jsonc_trailing_commas must drop a comma right before `}` or `]` (with
+    /// optional whitespace between), while keeping commas that separate real elements.
+    #[test]
+    fn test_strip_jsonc_trailing_commas() {
+        let input = "{\n  \"a\": 1,\n  \"b\": 2,\n}"; // trailing comma before }
+        let stripped = strip_jsonc_trailing_commas(input);
+        let parsed: Value =
+            serde_json::from_str(&stripped).expect("stripped must be valid JSON");
+        assert_eq!(parsed.get("a").unwrap(), 1);
+        assert_eq!(parsed.get("b").unwrap(), 2);
+    }
+
+    #[test]
+    fn test_strip_jsonc_trailing_commas_in_nested_array() {
+        // trailing comma before ] and before }, with whitespace/newlines in between.
+        let input = "{\n  \"arr\": [1, 2, 3,],\n  \"obj\": { \"k\": \"v\", },\n}";
+        let stripped = strip_jsonc_trailing_commas(input);
+        let parsed: Value =
+            serde_json::from_str(&stripped).expect("stripped must be valid JSON");
+        assert_eq!(parsed.get("arr").unwrap().as_array().unwrap().len(), 3);
+        assert_eq!(
+            parsed.get("obj").unwrap().get("k").unwrap(),
+            "v"
+        );
+    }
+
+    #[test]
+    fn test_strip_jsonc_trailing_commas_keeps_real_commas_in_strings() {
+        // A comma inside a string must NOT be removed even if followed by }.
+        let input = "{\"msg\": \"hello, }\",}";
+        let stripped = strip_jsonc_trailing_commas(input);
+        let parsed: Value =
+            serde_json::from_str(&stripped).expect("stripped must be valid JSON");
+        assert_eq!(parsed.get("msg").unwrap(), "hello, }");
+    }
+
+    /// parse_config_file must read a jsonc file with BOTH comments and trailing commas
+    /// — this is the regression for the user-reported "config destroyed" case where a
+    /// trailing comma made serde_json fail and the whole config was replaced with {}.
+    #[test]
+    fn test_parse_config_file_handles_jsonc_comments_and_trailing_commas() {
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let path = tmp.path().join("opencode.jsonc");
+        std::fs::write(
+            &path,
+            r#"{
+  // user's config with a trailing comma (valid JSONC, invalid strict JSON)
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "myown": { "name": "My Own Provider" },
+  },
+}"#,
+        )
+        .unwrap();
+
+        let parsed = parse_config_file(&path).expect("jsonc with trailing comma must parse");
+        assert_eq!(
+            parsed
+                .get("provider")
+                .unwrap()
+                .get("myown")
+                .unwrap()
+                .get("name")
+                .unwrap(),
+            "My Own Provider"
+        );
+    }
+
+    /// parse_config_file must read a jsonc file (with comments) into a Value.
+    #[test]
+    fn test_parse_config_file_handles_jsonc_comments() {
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let path = tmp.path().join("opencode.jsonc");
+        std::fs::write(
+            &path,
+            r#"{
+  // my opencode config
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "myown": { "name": "My Own Provider" }
+  }
+}"#,
+        )
+        .unwrap();
+
+        let parsed = parse_config_file(&path).expect("jsonc file must parse");
+        assert_eq!(
+            parsed
+                .get("provider")
+                .unwrap()
+                .get("myown")
+                .unwrap()
+                .get("name")
+                .unwrap(),
+            "My Own Provider"
+        );
+    }
+
+    /// The frontend-provided display name must flow through to the config for models
+    /// that aren't in the catalog. This is the regression for the user-reported case
+    /// where "Gemini 3.5 Flash (High)" became a stripped "Gemini 3 5 Flash Low".
+    #[test]
+    fn test_sync_uses_frontend_display_name_for_unknown_model() {
+        let config = serde_json::json!({});
+        let models_to_sync = [
+            minput_named("gemini-3.5-flash-low", "Gemini 3.5 Flash (High)"),
+            minput_named("gemini-3-flash-agent", "Gemini 3 Flash Agent"),
+        ];
+
+        let result = apply_sync_to_config(
+            config,
+            "http://localhost:3000",
+            "test-api-key",
+            Some(&models_to_sync),
+        );
+
+        let models = result
+            .get("provider")
+            .unwrap()
+            .get(ANTIGRAVITY_PROVIDER_ID)
+            .unwrap()
+            .get("models")
+            .unwrap()
+            .as_object()
+            .unwrap();
+
+        // The display name must be used as-is, preserving parentheses/variant info.
+        assert_eq!(
+            models
+                .get("gemini-3.5-flash-low")
+                .unwrap()
+                .get("name")
+                .unwrap(),
+            "Gemini 3.5 Flash (High)"
+        );
+        assert_eq!(
+            models
+                .get("gemini-3-flash-agent")
+                .unwrap()
+                .get("name")
+                .unwrap(),
+            "Gemini 3 Flash Agent"
+        );
+
+        // And because these are gemini-3.x ids, they should also get series defaults.
+        assert!(
+            models
+                .get("gemini-3.5-flash-low")
+                .unwrap()
+                .get("limit")
+                .is_some(),
+            "gemini-3.x fallback should include limit/modalities"
+        );
+    }
 }
 
 pub fn read_opencode_config_content(file_name: Option<String>) -> Result<String, String> {
@@ -1659,22 +2853,28 @@ pub fn read_opencode_config_content(file_name: Option<String>) -> Result<String,
     // Allowlist of permitted file names
     let allowed_files = [
         OPENCODE_CONFIG_FILE,
+        OPENCODE_CONFIG_FILE_JSONC,
         ANTIGRAVITY_CONFIG_FILE,
         ANTIGRAVITY_ACCOUNTS_FILE,
     ];
 
-    // Determine which file to read
+    // Determine which file to read. Both opencode.json and opencode.jsonc map to the
+    // active opencode config path (which is resolved by probing the directory), so a
+    // caller asking for "opencode.json" still gets the user's actual config when it
+    // happens to be opencode.jsonc.
     let target_path = match file_name.as_deref() {
         Some(name) if name == ANTIGRAVITY_CONFIG_FILE => ag_config_path,
         Some(name) if name == ANTIGRAVITY_ACCOUNTS_FILE => ag_accounts_path,
-        Some(name) if name == OPENCODE_CONFIG_FILE => opencode_path,
+        Some(name) if name == OPENCODE_CONFIG_FILE || name == OPENCODE_CONFIG_FILE_JSONC => {
+            opencode_path
+        }
         Some(name) => {
             return Err(format!(
                 "Invalid file name: {}. Allowed: {:?}",
                 name, allowed_files
             ))
         }
-        None => opencode_path, // Default to opencode.json
+        None => opencode_path, // Default to the active opencode config (json or jsonc)
     };
 
     if !target_path.exists() {
@@ -1698,6 +2898,7 @@ pub async fn get_opencode_sync_status(proxy_url: String) -> Result<OpencodeStatu
             current_base_url,
             files: vec![
                 OPENCODE_CONFIG_FILE.to_string(),
+                OPENCODE_CONFIG_FILE_JSONC.to_string(),
                 ANTIGRAVITY_CONFIG_FILE.to_string(),
                 ANTIGRAVITY_ACCOUNTS_FILE.to_string(),
             ],
@@ -1708,11 +2909,37 @@ pub async fn get_opencode_sync_status(proxy_url: String) -> Result<OpencodeStatu
 }
 
 #[tauri::command]
+pub fn get_canonical_families() -> Vec<CanonicalFamilyDto> {
+    GEMINI_FAMILIES
+        .iter()
+        .map(|family| {
+            let mut normalized_match_ids = HashSet::new();
+            let mut match_ids = Vec::new();
+
+            for match_id in std::iter::once(family.canonical_id)
+                .chain(family.aliases.iter().map(|(alias, _)| *alias))
+                .chain(family.tiers.iter().map(|(_, spec)| spec.id))
+            {
+                if normalized_match_ids.insert(match_id.to_lowercase()) {
+                    match_ids.push(match_id.to_string());
+                }
+            }
+
+            CanonicalFamilyDto {
+                canonical_id: family.canonical_id.to_string(),
+                display_name: family.display_name.to_string(),
+                match_ids,
+            }
+        })
+        .collect()
+}
+
+#[tauri::command]
 pub async fn execute_opencode_sync(
     proxy_url: String,
     api_key: String,
     sync_accounts: Option<bool>,
-    models: Option<Vec<String>>,
+    models: Option<Vec<ModelInput>>,
 ) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
         sync_opencode_config(&proxy_url, &api_key, sync_accounts.unwrap_or(false), models)
@@ -1783,8 +3010,9 @@ fn clear_opencode_config(proxy_url: Option<String>, clear_legacy: bool) -> Resul
         let content = fs::read_to_string(&config_path)
             .map_err(|e| format!("Failed to read config: {}", e))?;
 
-        let config: Value =
-            serde_json::from_str(&content).map_err(|e| format!("Failed to parse config: {}", e))?;
+        // Tolerate JSONC (comments + trailing commas) when the user's config is opencode.jsonc.
+        let config: Value = parse_jsonc(&content)
+            .ok_or_else(|| "Failed to parse config (not valid JSON/JSONC)".to_string())?;
         let config = apply_clear_to_config(config, proxy_url.as_deref(), clear_legacy);
 
         // Write updated config
@@ -1872,4 +3100,74 @@ pub async fn execute_opencode_clear(
     clear_legacy: Option<bool>,
 ) -> Result<(), String> {
     clear_opencode_config(proxy_url, clear_legacy.unwrap_or(false))
+}
+
+#[cfg(test)]
+mod canonical_family_tests {
+    use super::*;
+
+    #[test]
+    fn canonical_families_expose_the_complete_public_dto() {
+        let families = get_canonical_families();
+
+        assert_eq!(families.len(), GEMINI_FAMILIES.len());
+        assert_eq!(
+            families,
+            vec![
+                CanonicalFamilyDto {
+                    canonical_id: "gemini-3.5-flash".to_string(),
+                    display_name: "Gemini 3.5 Flash".to_string(),
+                    match_ids: vec![
+                        "gemini-3.5-flash".to_string(),
+                        "gemini-3.5-flash-high".to_string(),
+                        "gemini-3.5-flash-medium".to_string(),
+                        "gemini-3.5-flash-low".to_string(),
+                        "gemini-3-flash".to_string(),
+                        "gemini-3.5-flash-extra-low".to_string(),
+                        "gemini-3-flash-agent".to_string(),
+                    ],
+                },
+                CanonicalFamilyDto {
+                    canonical_id: "gemini-3.1-pro".to_string(),
+                    display_name: "Gemini 3.1 Pro".to_string(),
+                    match_ids: vec![
+                        "gemini-3.1-pro".to_string(),
+                        "gemini-3.1-pro-high".to_string(),
+                        "gemini-pro".to_string(),
+                        "gemini-3.1-pro-low".to_string(),
+                        "gemini-pro-agent".to_string(),
+                    ],
+                },
+            ]
+        );
+
+        let serialized = serde_json::to_string(&families).unwrap();
+        assert!(!serialized.contains("thinking_budget"));
+        assert!(!serialized.contains("max_output_tokens"));
+    }
+
+    #[test]
+    fn canonical_families_match_ids_are_unique_globally_after_normalization() {
+        let mut owners = HashMap::new();
+
+        for family in get_canonical_families() {
+            let mut family_match_ids = HashSet::new();
+            for match_id in &family.match_ids {
+                let normalized = match_id.to_lowercase();
+                assert!(
+                    family_match_ids.insert(normalized.clone()),
+                    "{} contains duplicate match ID {}",
+                    family.canonical_id,
+                    match_id
+                );
+                assert!(
+                    owners
+                        .insert(normalized.clone(), family.canonical_id.clone())
+                        .is_none(),
+                    "{} belongs to multiple canonical families",
+                    normalized
+                );
+            }
+        }
+    }
 }

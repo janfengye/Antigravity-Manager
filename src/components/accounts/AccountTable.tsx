@@ -46,13 +46,14 @@ import {
     Repeat2,
     Terminal,
 } from 'lucide-react';
-import { Account } from '../../types/account';
+import type { Account, ModelQuota } from '../../types/account';
 import { useTranslation } from 'react-i18next';
 import { cn } from '../../utils/cn';
 
 import { useConfigStore } from '../../stores/useConfigStore';
 import { QuotaItem } from './QuotaItem';
-import { MODEL_CONFIG, sortModels } from '../../config/modelConfig';
+import { MODEL_CONFIG, sortModels, resolveQuotaModels, ensurePinnedImageSelector } from '../../config/modelConfig';
+import { categorizeModel, getModelProtectionKey } from '../../utils/modelCategory';
 import { getValidationBlockedStatusLabel } from './accountValidationStatus';
 import { getLiveLimitForModel } from '../../utils/liveLimit';
 
@@ -126,72 +127,28 @@ interface AccountRowContentProps {
 
 
 
-// ============================================================================
-// 模型分组配置
-// ============================================================================
-
-const MODEL_GROUPS = {
-    CLAUDE: [
-        'claude-opus-4-6-thinking',
-        'claude'
-    ],
-    GEMINI_PRO: [
-        'gemini-3.1-pro-high',
-        'gemini-3.1-pro-low',
-        'gemini-3.1-pro-preview',
-        'gemini-3-pro-high',
-        'gemini-3-pro-low',
-        'gemini-3-pro-preview'
-    ],
-    GEMINI_FLASH: [
-        'gemini-3-flash'
-    ]
-};
-
-const MODEL_ID_ALIASES: Record<string, string[]> = {
-    'gemini-3-pro-high': ['gemini-3-pro-high', 'gemini-3.1-pro-high'],
-    'gemini-3-pro-low': ['gemini-3-pro-low', 'gemini-3.1-pro-low'],
-    'gemini-3-pro-preview': ['gemini-3-pro-preview', 'gemini-3.1-pro-preview'],
-    'gemini-3.1-pro-high': ['gemini-3.1-pro-high', 'gemini-3-pro-high'],
-    'gemini-3.1-pro-low': ['gemini-3.1-pro-low', 'gemini-3-pro-low'],
-    'gemini-3.1-pro-preview': ['gemini-3.1-pro-preview', 'gemini-3-pro-preview'],
-};
-
-function getModelAliases(modelId: string): string[] {
-    return MODEL_ID_ALIASES[modelId] || [modelId];
-}
-
 function isModelProtected(protectedModels: string[] | undefined, modelName: string): boolean {
     if (!protectedModels || protectedModels.length === 0) return false;
     const lowerName = modelName.toLowerCase();
 
-    // Helper to check if any model in the group is protected
-    const isGroupProtected = (group: string[]) => {
-        return group.some(m => protectedModels.includes(m));
-    };
-
-    // UI Column Keys Mapping (for backward compatibility with hardcoded UI calls)
-    if (lowerName === 'gemini-pro') return isGroupProtected(MODEL_GROUPS.GEMINI_PRO);
-    if (lowerName === 'gemini-flash') return isGroupProtected(MODEL_GROUPS.GEMINI_FLASH);
-    if (lowerName === 'claude-sonnet') return isGroupProtected(MODEL_GROUPS.CLAUDE);
-
-    // 1. Gemini Pro Group
-    if (MODEL_GROUPS.GEMINI_PRO.some(m => lowerName === m)) {
-        return isGroupProtected(MODEL_GROUPS.GEMINI_PRO);
+    if (lowerName === 'gemini-pro') {
+        return protectedModels.some((model) =>
+            categorizeModel(model) === 'gemini-pro' && getModelProtectionKey(model) === 'gemini-3-pro-high',
+        );
+    }
+    if (lowerName === 'gemini-flash') {
+        return protectedModels.some((model) =>
+            categorizeModel(model) === 'gemini-flash' && getModelProtectionKey(model) === 'gemini-3-flash',
+        );
+    }
+    if (lowerName === 'claude-sonnet') {
+        return protectedModels.some((model) =>
+            categorizeModel(model) === 'claude' && getModelProtectionKey(model) === 'claude',
+        );
     }
 
-    // 2. Claude Group
-    if (MODEL_GROUPS.CLAUDE.some(m => lowerName === m)) {
-        return isGroupProtected(MODEL_GROUPS.CLAUDE);
-    }
-
-    // 3. Gemini Flash Group
-    if (MODEL_GROUPS.GEMINI_FLASH.some(m => lowerName === m)) {
-        return isGroupProtected(MODEL_GROUPS.GEMINI_FLASH);
-    }
-
-    // 兜底直接检查 (Strict check for exact match or normalized ID)
-    return protectedModels.includes(lowerName);
+    const protectionKey = getModelProtectionKey(lowerName);
+    return protectionKey ? protectedModels.includes(protectionKey) : false;
 }
 
 // ============================================================================
@@ -343,7 +300,9 @@ function AccountRowContent({
     // 使用统一的模型配置
 
     // 获取要显示的模型列表
-    const pinnedModels = config?.pinned_quota_models?.models || Object.keys(MODEL_CONFIG);
+    const pinnedModels = ensurePinnedImageSelector(
+        config?.pinned_quota_models?.models || Object.keys(MODEL_CONFIG),
+    );
 
     // 根据 show_all 状态决定显示哪些模型
     const uniqueLabels = new Set<string>();
@@ -359,19 +318,24 @@ function AccountRowContent({
                     data: m
                 };
             })
-            : pinnedModels.map(modelId => {
-                const m = account.quota?.models.find(m => m.name === modelId || getModelAliases(modelId).includes(m.name.toLowerCase()));
-                const config = MODEL_CONFIG[modelId];
-                if (!config && !m) return null; // Safe guard for unknown models that aren't fetched
-                const label = m?.display_name || (config?.i18nKey ? t(config.i18nKey) : (config?.shortLabel || config?.label || modelId));
+            : resolveQuotaModels(account.quota?.models, pinnedModels).map(sel => {
+                const selectorConfig = MODEL_CONFIG[sel.selectorId.toLowerCase()];
+                const resolvedConfig = sel.model ? MODEL_CONFIG[sel.model.name.toLowerCase()] : undefined;
+                if (!selectorConfig && !sel.model) return null;
+                const label = sel.model?.display_name
+                    || (resolvedConfig?.shortLabel || resolvedConfig?.label)
+                    || (selectorConfig?.shortLabel || selectorConfig?.label)
+                    || (resolvedConfig?.i18nKey ? t(resolvedConfig.i18nKey) : undefined)
+                    || (selectorConfig?.i18nKey ? t(selectorConfig.i18nKey) : undefined)
+                    || sel.selectorId;
                 return {
-                    id: modelId,
-                    label: label,
-                    protectedKey: config?.protectedKey || modelId,
-                    data: m
+                    id: sel.model?.name.toLowerCase() ?? sel.selectorId.toLowerCase(),
+                    label,
+                    protectedKey: getModelProtectionKey(sel.model?.name ?? sel.selectorId) ?? resolvedConfig?.protectedKey ?? selectorConfig?.protectedKey ?? sel.selectorId,
+                    data: sel.model,
                 };
-            }).filter(Boolean) as any[]
-        ).filter(m => {
+            }).filter((item): item is { id: string; label: string; protectedKey: string; data: ModelQuota | undefined } => item !== null)
+    ).filter(m => {
             // 过滤特定的 Claude/Gemini 思考变体 (在列表页隐藏)
             const isHiddenThinking = m.id.includes('thinking');
 

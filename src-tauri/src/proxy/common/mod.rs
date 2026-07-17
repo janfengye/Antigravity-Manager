@@ -11,3 +11,4 @@ pub mod session;
 pub mod tool_adapter;
 pub mod tool_adapters;
 pub mod utils; // [ADDED v4.1.24] Tools for deriving stable session identifiers
+pub mod variant_mapping; // Canonical model + variant → real model ID + params

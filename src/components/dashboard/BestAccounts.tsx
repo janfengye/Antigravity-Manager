@@ -1,5 +1,6 @@
 import { TrendingUp } from 'lucide-react';
 import { Account } from '../../types/account';
+import { findQuotaModel } from '../../config/modelConfig';
 
 interface BestAccountsProps {
     accounts: Account[];
@@ -15,15 +16,8 @@ function BestAccounts({ accounts, currentAccountId, onSwitch }: BestAccountsProp
     const geminiSorted = accounts
         .filter(a => a.id !== currentAccountId)
         .map(a => {
-            const proQuota = (a.quota?.models || [])
-                .filter(m =>
-                    m.name.toLowerCase() === 'gemini-3-pro-high'
-                    || m.name.toLowerCase() === 'gemini-3-pro-low'
-                    || m.name.toLowerCase() === 'gemini-3.1-pro-high'
-                    || m.name.toLowerCase() === 'gemini-3.1-pro-low'
-                )
-                .reduce((best, model) => Math.max(best, model.percentage || 0), 0);
-            const flashQuota = a.quota?.models.find(m => m.name.toLowerCase() === 'gemini-3-flash')?.percentage || 0;
+            const proQuota = findQuotaModel(a.quota?.models, 'gemini-pro')?.percentage || 0;
+            const flashQuota = findQuotaModel(a.quota?.models, 'gemini-flash')?.percentage || 0;
             // 综合评分：Pro 权重更高 (70%)，Flash 权重 30%
             return {
                 ...a,
@@ -37,7 +31,7 @@ function BestAccounts({ accounts, currentAccountId, onSwitch }: BestAccountsProp
         .filter(a => a.id !== currentAccountId)
         .map(a => ({
             ...a,
-            quotaVal: a.quota?.models.find(m => m.name.toLowerCase().includes('claude'))?.percentage || 0,
+            quotaVal: findQuotaModel(a.quota?.models, 'claude')?.percentage || 0,
         }))
         .filter(a => a.quotaVal > 0)
         .sort((a, b) => b.quotaVal - a.quotaVal);

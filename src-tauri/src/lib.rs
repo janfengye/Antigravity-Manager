@@ -624,6 +624,7 @@ pub fn run() {
             proxy::cli_sync::execute_cli_restore,
             proxy::cli_sync::get_cli_config_content,
             proxy::opencode_sync::get_opencode_sync_status,
+            proxy::opencode_sync::get_canonical_families,
             proxy::opencode_sync::execute_opencode_sync,
             proxy::opencode_sync::execute_opencode_restore,
             proxy::opencode_sync::get_opencode_config_content,

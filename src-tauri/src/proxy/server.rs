@@ -587,6 +587,10 @@ impl AxumServer {
                 "/proxy/opencode/config",
                 post(admin_get_opencode_config_content),
             )
+            .route(
+                "/proxy/opencode/families",
+                get(admin_get_opencode_families),
+            )
             .route("/proxy/droid/status", post(admin_get_droid_sync_status))
             .route("/proxy/droid/sync", post(admin_execute_droid_sync))
             .route("/proxy/droid/restore", post(admin_execute_droid_restore))
@@ -3688,6 +3692,10 @@ async fn admin_get_opencode_sync_status(
         })
 }
 
+async fn admin_get_opencode_families() -> impl IntoResponse {
+    Json(crate::proxy::opencode_sync::get_canonical_families())
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct OpencodeSyncRequest {
@@ -3695,7 +3703,7 @@ struct OpencodeSyncRequest {
     api_key: String,
     #[serde(default)]
     sync_accounts: bool,
-    pub models: Option<Vec<String>>,
+    pub models: Option<Vec<crate::proxy::opencode_sync::ModelInput>>,
 }
 
 async fn admin_execute_opencode_sync(

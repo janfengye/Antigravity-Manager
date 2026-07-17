@@ -537,6 +537,7 @@ export const CliSyncCard = ({ proxyUrl, apiKey, className }: CliSyncCardProps) =
                     proxyUrl={proxyUrl}
                     apiKey={apiKey}
                     getFormattedProxyUrl={getFormattedProxyUrl}
+                    syncAccounts={syncAccounts}
                     onClose={() => setOpenCodeSyncModal(false)}
                     onSyncDone={() => checkStatus('OpenCode')}
                 />

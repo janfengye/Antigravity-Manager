@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> Professional AI Account Management & Protocol Proxy System (v4.4.5)
+> Professional AI Account Management & Protocol Proxy System (v4.4.6)
 
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
@@ -9,7 +9,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.4.5-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.4.6-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -134,7 +134,7 @@ Automatically detects your OS, architecture, and package manager — one command
 
 **Linux / macOS:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.4.5/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.4.6/install.sh | bash
 ```
 
 **Windows (PowerShell):**
@@ -144,7 +144,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **Supported formats**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **Advanced usage**: Install a specific version `curl -fsSL ... | bash -s -- --version 4.4.5`，dry-run mode `curl -fsSL ... | bash -s -- --dry-run`
+> **Advanced usage**: Install a specific version `curl -fsSL ... | bash -s -- --version 4.4.6`，dry-run mode `curl -fsSL ... | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 If you have [Homebrew](https://brew.sh/) installed, you can also install via:
@@ -427,6 +427,15 @@ In clients that support OpenAI protocol (e.g., Cherry Studio), you can configure
 ## 📝 Developer & Community
 
 *   **Version History (Changelog)**:
+    *   **v4.4.6 (2026-07-17)**:
+        -   **[Core Feature] Variant Mapping and OpenCode Configuration Sync**:
+            -   **Dynamic Model Routing**: Introduced a variant mapping mechanism for `canonical` models. It now dynamically maps to upstream target model IDs (like `gemini-3-flash-agent`) based on the client's intelligent tier selection (low/medium/high) while precisely injecting calibrated `thinkingBudget` and `maxOutputTokens` parameters.
+            -   **Comprehensive Protocol Support**: The variant resolution system is fully injected into Claude and OpenAI adapters, flawlessly supporting the Anthropic `effort` routing for new Gemini 3 variants.
+            -   *Related PR*: See [PR #3255](https://github.com/lbjlaq/Antigravity-Manager/pull/3255).
+        -   **[Frontend Optimization] Quota Dashboard Refactoring & New Model Support**:
+            -   **Unified Logic & Dynamic Fallback**: Completely overhauled the quota lookup logic across various dashboards, account tables, and cards (extracted into unified functions like `resolveQuotaModels`), eliminating hardcoded references. Introduced a display name fallback mechanism to prioritize remote API names.
+            -   **Full Gemini 3 Series Support**: Dashboards and quota filters now natively support displaying and protecting usage metrics for `gemini-3.5-flash` and `gemini-3.1-pro`.
+            -   *Related PR*: See [PR #3256](https://github.com/lbjlaq/Antigravity-Manager/pull/3256).
     *   **v4.4.5 (2026-07-16)**:
         -   **[Bug Fix] Fix Incorrect IDE Launch on "Classic" Button Click (Fix Classic Mode Downgrade Bug)**:
             -   **Eliminate IDE Fallback**: Removed the aggressive fallback logic that launched Antigravity IDE when the Classic version (`target_ide` is `None`) path was not configured or found.

@@ -80,6 +80,46 @@ export const MODEL_CONFIG: Record<string, ModelConfig> = {
         group: 'Gemini 3',
         tags: ['image'],
     },
+    'gemini-3.5-flash': {
+        label: 'Gemini 3.5 Flash',
+        shortLabel: 'G3.5 Flash',
+        protectedKey: 'gemini-flash',
+        Icon: Gemini.Color,
+        i18nKey: 'proxy.model.flash_preview',
+        i18nDescKey: 'proxy.model.flash_preview',
+        group: 'Gemini 3',
+        tags: ['flash'],
+    },
+    'gemini-3.1-pro': {
+        label: 'Gemini 3.1 Pro',
+        shortLabel: 'G3.1 Pro',
+        protectedKey: 'gemini-pro',
+        Icon: Gemini.Color,
+        i18nKey: 'proxy.model.pro_high',
+        i18nDescKey: 'proxy.model.pro_high',
+        group: 'Gemini 3',
+        tags: ['pro'],
+    },
+    'gemini-3-flash-agent': {
+        label: 'Gemini 3.5 Flash (High)',
+        shortLabel: 'G3.5 Flash',
+        protectedKey: 'gemini-flash',
+        Icon: Gemini.Color,
+        i18nKey: 'proxy.model.flash_preview',
+        i18nDescKey: 'proxy.model.flash_preview',
+        group: 'Gemini 3',
+        tags: ['flash', 'high'],
+    },
+    'gemini-pro-agent': {
+        label: 'Gemini 3.1 Pro (High)',
+        shortLabel: 'G3.1 Pro',
+        protectedKey: 'gemini-pro',
+        Icon: Gemini.Color,
+        i18nKey: 'proxy.model.pro_high',
+        i18nDescKey: 'proxy.model.pro_high',
+        group: 'Gemini 3',
+        tags: ['pro', 'high'],
+    },
     'gemini-3.1-pro-low': {
         label: 'Gemini 3.1 Pro Low',
         shortLabel: 'G3.1 Low',
@@ -282,3 +322,18 @@ export function sortModels<T extends { id: string }>(models: T[]): T[] {
         return a.id.localeCompare(b.id);
     });
 }
+
+// ── 模型分类与保护键（实现在 src/utils/modelCategory.ts，此处只 re-export）───
+
+export {
+    categorizeModel,
+    getModelProtectionKey,
+    getModelDisplayName,
+    findQuotaModel,
+    findImageQuotaModel,
+    ensurePinnedImageSelector,
+    DEFAULT_IMAGE_PIN_SELECTOR,
+    resolveQuotaModels,
+    type ModelCategory,
+    type QuotaModelSelection,
+} from '../utils/modelCategory';

@@ -1,18 +1,37 @@
-import { useMemo, useEffect } from 'react';
+import { useMemo, useEffect, useState } from 'react';
 import { MODEL_CONFIG } from '../config/modelConfig';
 import { useAccountStore } from '../stores/useAccountStore';
 import { Bot } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { request } from '../utils/request';
+
+export interface CanonicalFamilyDto {
+    canonical_id: string;
+    display_name: string;
+    match_ids: string[];
+}
 
 export const useProxyModels = () => {
     const { t } = useTranslation();
     const { accounts, fetchAccounts } = useAccountStore();
+    const [canonicalFamilies, setCanonicalFamilies] = useState<CanonicalFamilyDto[]>([]);
 
     // 确保账号数据已加载（针对未触发 fetchAccounts 的页面，如 ApiProxy）
     useEffect(() => {
         if (accounts.length === 0) {
             fetchAccounts();
         }
+
+        let cancelled = false;
+        request<CanonicalFamilyDto[]>('get_canonical_families')
+            .then(data => {
+                if (!cancelled && data) {
+                    setCanonicalFamilies(data);
+                }
+            })
+            .catch(err => console.error('Failed to fetch canonical families:', err));
+
+        return () => { cancelled = true; };
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
     const models = useMemo(() => {
@@ -21,9 +40,23 @@ export const useProxyModels = () => {
         const dynamicMap = new Map<string, { name: string; display_name?: string }>();
         for (const account of accounts) {
             for (const m of account.quota?.models ?? []) {
-                const key = m.name.toLowerCase();
-                if (!dynamicMap.has(key) || m.display_name) {
-                    dynamicMap.set(key, { name: m.name, display_name: m.display_name });
+                let key = m.name.toLowerCase();
+                let name = m.name;
+                let display_name = m.display_name;
+
+                if (canonicalFamilies.length > 0) {
+                    for (const family of canonicalFamilies) {
+                        if (family.match_ids.includes(key)) {
+                            key = family.canonical_id.toLowerCase();
+                            name = family.canonical_id;
+                            display_name = family.display_name;
+                            break;
+                        }
+                    }
+                }
+
+                if (!dynamicMap.has(key) || display_name) {
+                    dynamicMap.set(key, { name, display_name });
                 }
             }
         }
@@ -86,7 +119,7 @@ export const useProxyModels = () => {
         }
 
         return result;
-    }, [accounts, t]);
+    }, [accounts, t, canonicalFamilies]);
 
-    return { models };
+    return { models, canonicalFamilies };
 };

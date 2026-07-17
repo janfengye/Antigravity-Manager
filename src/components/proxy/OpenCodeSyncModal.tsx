@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { RefreshCw, X, CodeXml } from 'lucide-react';
 import {
@@ -18,17 +18,17 @@ interface OpenCodeSyncModalProps {
     proxyUrl: string;
     apiKey: string;
     getFormattedProxyUrl: (app: 'Claude' | 'Codex' | 'Gemini' | 'OpenCode' | 'Droid') => string;
+    syncAccounts: boolean;
     onClose: () => void;
     onSyncDone: () => void;
 }
 
-export function OpenCodeSyncModal({ proxyUrl, apiKey, onClose, onSyncDone }: OpenCodeSyncModalProps) {
+export function OpenCodeSyncModal({ proxyUrl, apiKey, getFormattedProxyUrl, syncAccounts, onClose, onSyncDone }: OpenCodeSyncModalProps) {
     const { t } = useTranslation();
-    const { models: antigravityModels } = useProxyModels();
+    const { models: antigravityModels, canonicalFamilies } = useProxyModels();
     const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set());
     const [previewModels, setPreviewModels] = useState<PreviewModelEntry[]>([]);
     const [syncing, setSyncing] = useState(false);
-    const [configLoaded, setConfigLoaded] = useState(false);
     const [hasAuthPlugin, setHasAuthPlugin] = useState(false);
     const [customBaseUrl, setCustomBaseUrl] = useState(proxyUrl);
 
@@ -54,26 +54,46 @@ export function OpenCodeSyncModal({ proxyUrl, apiKey, onClose, onSyncDone }: Ope
         setPreviewModels(newEntries);
     }, [antigravityModels, apiKey]);
 
-    // 初始加载 opencode.json
-    if (!configLoaded) {
-        setConfigLoaded(true);
+    // 初始加载 opencode 配置（json 或 jsonc，由后端探测决定实际文件）
+    useEffect(() => {
+        let cancelled = false;
         invoke<string>('get_opencode_config_content', { request: { fileName: 'opencode.json' } })
             .then(content => {
+                if (cancelled) return;
                 const parsed = JSON.parse(content);
                 const existingModelIds = new Set<string>();
 
+                const addModelId = (k: string) => {
+                    let canonicalId = k;
+                    if (canonicalFamilies && canonicalFamilies.length > 0) {
+                        for (const family of canonicalFamilies) {
+                            if (family.match_ids.includes(k.toLowerCase())) {
+                                canonicalId = family.canonical_id;
+                                break;
+                            }
+                        }
+                    }
+                    existingModelIds.add(canonicalId);
+                };
+
                 // Priority 1: Read from antigravity-manager provider
                 if (parsed.provider?.['antigravity-manager']?.models) {
-                    Object.keys(parsed.provider['antigravity-manager'].models).forEach(k => existingModelIds.add(k));
+                    for (const k of Object.keys(parsed.provider['antigravity-manager'].models)) {
+                        addModelId(k);
+                    }
                 }
 
                 // Fallback: legacy anthropic/google providers
                 if (existingModelIds.size === 0) {
                     if (parsed.provider?.anthropic?.models) {
-                        Object.keys(parsed.provider.anthropic.models).forEach(k => existingModelIds.add(k));
+                        for (const k of Object.keys(parsed.provider.anthropic.models)) {
+                            addModelId(k);
+                        }
                     }
                     if (parsed.provider?.google?.models) {
-                        Object.keys(parsed.provider.google.models).forEach(k => existingModelIds.add(k));
+                        for (const k of Object.keys(parsed.provider.google.models)) {
+                            addModelId(k);
+                        }
                     }
                 }
 
@@ -90,8 +110,11 @@ export function OpenCodeSyncModal({ proxyUrl, apiKey, onClose, onSyncDone }: Ope
                 setSelectedModels(existingModelIds);
                 rebuildPreview(existingModelIds);
             })
-            .catch(() => rebuildPreview(new Set()));
-    }
+            .catch(() => {
+                if (!cancelled) rebuildPreview(new Set());
+            });
+        return () => { cancelled = true; };
+    }, [rebuildPreview, canonicalFamilies]);
 
     const allSelected = antigravityModels.length > 0 && antigravityModels.every(m => selectedModels.has(m.id));
     const toggleAll = () => {
@@ -128,11 +151,18 @@ export function OpenCodeSyncModal({ proxyUrl, apiKey, onClose, onSyncDone }: Ope
     const executeOpenCodeSync = async () => {
         setSyncing(true);
         try {
-            const models = previewModels.map(m => m.model);
+            // Send both the model id and its display name so the backend can write a
+            // correct, recognizable `name` for models not in its catalog (instead of a
+            // machine-derived name that loses variant info like "(High)").
+            const models = previewModels.map(m => ({ id: m.model, name: m.displayName }));
+            // OpenCode follows the OpenAI protocol and requires a baseURL ending in /v1.
+            // If the user has overridden the BaseURL in the input box, honor it as-is;
+            // otherwise apply the canonical /v1 formatting via getFormattedProxyUrl.
+            const effectiveProxyUrl = customBaseUrl.trim() || getFormattedProxyUrl('OpenCode');
             await invoke('execute_opencode_sync', {
-                proxyUrl: customBaseUrl || proxyUrl,
+                proxyUrl: effectiveProxyUrl,
                 apiKey,
-                syncAccounts: true,
+                syncAccounts,
                 models
             });
             showToast(t('proxy.opencode_sync.toast.sync_success', { defaultValue: 'OpenCode 同步成功' }), 'success');
@@ -161,10 +191,10 @@ export function OpenCodeSyncModal({ proxyUrl, apiKey, onClose, onSyncDone }: Ope
                                 <h3 className="text-sm font-bold text-gray-900 dark:text-base-content">
                                     {t('proxy.config.opencode_sync.modal_title', { defaultValue: '选择 OpenCode 模型' })}
                                 </h3>
-                                <p className="text-[10px] text-gray-400 mt-0.5">~/.config/opencode/opencode.json</p>
+                                <p className="text-[10px] text-gray-400 mt-0.5">~/.config/opencode/opencode.json (or .jsonc)</p>
                             </div>
                         </div>
-                        <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-base-300 transition-colors">
+                        <button type="button" onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-base-300 transition-colors">
                             <X size={16} className="text-gray-400" />
                         </button>
                     </div>
@@ -174,7 +204,7 @@ export function OpenCodeSyncModal({ proxyUrl, apiKey, onClose, onSyncDone }: Ope
                 <div className="px-5 py-2 shrink-0 border-b border-gray-100 dark:border-base-200 bg-gray-50/50 dark:bg-base-200/30">
                     <div className="flex flex-col gap-1.5">
                         <div className="flex items-center justify-between">
-                            <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">
+                            <label htmlFor="customBaseUrl" className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">
                                 {t('proxy.config.opencode_sync.custom_base_url_label', { defaultValue: 'Custom Manager BaseURL' })}
                             </label>
                             <span className="text-[9px] text-gray-400 italic font-medium">
@@ -183,6 +213,7 @@ export function OpenCodeSyncModal({ proxyUrl, apiKey, onClose, onSyncDone }: Ope
                         </div>
                         <div className="relative group">
                             <input
+                                id="customBaseUrl"
                                 type="text"
                                 value={customBaseUrl}
                                 onChange={(e) => setCustomBaseUrl(e.target.value)}
@@ -191,6 +222,7 @@ export function OpenCodeSyncModal({ proxyUrl, apiKey, onClose, onSyncDone }: Ope
                             />
                             {customBaseUrl !== proxyUrl && (
                                 <button
+                                    type="button"
                                     onClick={() => setCustomBaseUrl(proxyUrl)}
                                     className="absolute right-2 top-1/2 -translate-y-1/2 text-[9px] text-blue-500 hover:text-blue-600 font-medium"
                                 >
@@ -208,7 +240,7 @@ export function OpenCodeSyncModal({ proxyUrl, apiKey, onClose, onSyncDone }: Ope
                             {t('proxy.config.opencode_sync.select_models', { defaultValue: '选择要同步的模型' })}
                             <span className="ml-2 text-gray-300">{selectedModels.size}/{antigravityModels.length}</span>
                         </span>
-                        <button onClick={toggleAll} className="text-[10px] text-blue-500 hover:text-blue-600 font-medium transition-colors">
+                        <button type="button" onClick={toggleAll} className="text-[10px] text-blue-500 hover:text-blue-600 font-medium transition-colors">
                             {allSelected ? t('common.deselect_all', { defaultValue: '取消全选' }) : t('common.select_all', { defaultValue: '全选' })}
                         </button>
                     </div>
@@ -223,6 +255,7 @@ export function OpenCodeSyncModal({ proxyUrl, apiKey, onClose, onSyncDone }: Ope
                                             const selected = selectedModels.has(m.id);
                                             return (
                                                 <button
+                                                    type="button"
                                                     key={m.id}
                                                     onClick={() => toggleModel(m.id)}
                                                     className={cn(
@@ -283,10 +316,11 @@ export function OpenCodeSyncModal({ proxyUrl, apiKey, onClose, onSyncDone }: Ope
 
                 {/* Footer */}
                 <div className="px-5 py-3 border-t border-gray-100 dark:border-base-200 flex items-center justify-end gap-2 shrink-0">
-                    <button className="px-3 py-1.5 text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 rounded-lg hover:bg-gray-100 dark:hover:bg-base-300 transition-colors" onClick={onClose}>
+                    <button type="button" className="px-3 py-1.5 text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 rounded-lg hover:bg-gray-100 dark:hover:bg-base-300 transition-colors" onClick={onClose}>
                         {t('common.cancel', { defaultValue: '取消' })}
                     </button>
                     <button
+                        type="button"
                         className={cn(
                             "px-4 py-1.5 text-xs font-bold rounded-lg transition-all flex items-center gap-1.5",
                             previewModels.length > 0

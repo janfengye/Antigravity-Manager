@@ -65,7 +65,7 @@ function Settings() {
             monitored_models: []
         },
         pinned_quota_models: {
-            models: ['gemini-3-pro-high', 'gemini-3-flash', 'gemini-3-pro-image', 'claude-opus-4-6-thinking']
+            models: ['gemini-pro-agent', 'gemini-3-flash-agent', 'gemini-3.1-flash-image', 'claude-opus-4-6-thinking']
         },
         cloudflared: {
             enabled: false,
@@ -1405,7 +1405,7 @@ function Settings() {
                                     <div>
                                         <h3 className="text-3xl font-black text-gray-900 dark:text-base-content tracking-tight mb-2">{t('common.app_name', 'Antigravity Tools')}</h3>
                                         <div className="flex items-center justify-center gap-2 text-sm">
-                                            v4.4.5
+                                            v4.4.6
                                             <span className="text-gray-400 dark:text-gray-600">•</span>
                                             <span className="text-gray-500 dark:text-gray-400">{t('settings.branding.subtitle')}</span>
                                         </div>

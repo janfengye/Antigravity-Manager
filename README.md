@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> 专业级 AI 账号管理与协议代理系统 (v4.4.5)
+> 专业级 AI 账号管理与协议代理系统 (v4.4.6)
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
 
@@ -8,7 +8,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.4.5-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.4.6-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -133,7 +133,7 @@ graph TD
 
 **Linux / macOS:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.4.5/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.4.6/install.sh | bash
 ```
 
 **Windows (PowerShell):**
@@ -143,7 +143,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **支持的格式**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **高级用法**: 安装指定版本 `curl -fsSL ... | bash -s -- --version 4.4.5`，预览模式 `curl -fsSL ... | bash -s -- --dry-run`
+> **高级用法**: 安装指定版本 `curl -fsSL ... | bash -s -- --version 4.4.6`，预览模式 `curl -fsSL ... | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 如果您已安装 [Homebrew](https://brew.sh/)，也可以通过以下命令安装：
@@ -439,6 +439,15 @@ response = client.chat.completions.create(
 ## 📝 开发者与社区
 
 *   **版本演进 (Changelog)**:
+    *   **v4.4.6 (2026-07-17)**:
+        -   **[核心特性] 引入变体映射与 OpenCode 配置同步 (Variant Mapping & OpenCode Sync)**:
+            -   **动态模型路由**: 新增 `canonical` 模型的变体映射机制。现在可以根据客户端指定的智能档位（low/medium/high tiers），动态映射到上游对应的目标模型 ID（如 `gemini-3-flash-agent`），并准确注入校准后的 `thinkingBudget` 和 `maxOutputTokens` 参数。
+            -   **全协议覆盖支持**: 变体解析系统已完全注入 Claude、OpenAI 等适配器中，完美支持 Gemini 3 新变体的 Anthropic `effort` 路由解析。
+            -   *相关 PR*: 详见 [PR #3255](https://github.com/lbjlaq/Antigravity-Manager/pull/3255)。
+        -   **[前端优化] 仪表盘配额展示重构与新模型支持 (Quota Display Refactoring)**:
+            -   **逻辑统一与动态回退**: 对多处仪表盘、账号表格与卡片的配额查找逻辑进行了彻底重构（提取为通用的 `resolveQuotaModels` 等函数），消除硬编码。新加入显示名回退机制，优先拉取 API 远端显示名称。
+            -   **全面适配 Gemini 3 系列**: 仪表盘与配额过滤器现已原生支持展示并保护 `gemini-3.5-flash` 和 `gemini-3.1-pro` 及其用量明细。
+            -   *相关 PR*: 详见 [PR #3256](https://github.com/lbjlaq/Antigravity-Manager/pull/3256)。
     *   **v4.4.5 (2026-07-16)**:
         -   **[问题修复] 修复点击“经典版”按钮时错误调起 IDE 的问题 (Fix Classic Mode Downgrade Bug)**:
             -   **移除 IDE 降级回退**: 取消了在经典版（`target_ide` 为 `None`）未配置路径或未找到时，自动降级去查找并启动 Antigravity IDE 的逻辑。
