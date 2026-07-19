@@ -214,13 +214,17 @@ pub fn is_antigravity_running(target_ide: Option<&str>) -> bool {
 }
 
 #[cfg(target_os = "linux")]
-/// Get PID set of current process and all direct relatives (ancestors + descendants)
+/// Get PID set of current process and all ancestors.
+/// Only ancestors (parents/grandparents) are excluded to prevent accidentally killing
+/// the launcher or shell that started the Manager.
+/// Child processes spawned by the Manager (e.g., the IDE) must remain killable, so
+/// descendants are intentionally NOT included here.
 fn get_self_family_pids(system: &sysinfo::System) -> std::collections::HashSet<u32> {
     let current_pid = std::process::id();
     let mut family_pids = std::collections::HashSet::new();
     family_pids.insert(current_pid);
 
-    // 1. Look up all ancestors (Ancestors) - prevent killing the launcher
+    // Traverse upward to find all ancestors - prevent killing the launcher/shell
     let mut next_pid = current_pid;
     // Prevent infinite loop, max depth 10
     for _ in 0..10 {
@@ -238,29 +242,6 @@ fn get_self_family_pids(system: &sysinfo::System) -> std::collections::HashSet<u
             }
         } else {
             break;
-        }
-    }
-
-    // 2. Look down all descendants (Descendants)
-    // Build parent-child relationship map (Parent -> Children)
-    let mut adj: std::collections::HashMap<u32, Vec<u32>> = std::collections::HashMap::new();
-    for (pid, process) in system.processes() {
-        if let Some(parent) = process.parent() {
-            adj.entry(parent.as_u32()).or_default().push(pid.as_u32());
-        }
-    }
-
-    // BFS traversal to find all descendants
-    let mut queue = std::collections::VecDeque::new();
-    queue.push_back(current_pid);
-
-    while let Some(pid) = queue.pop_front() {
-        if let Some(children) = adj.get(&pid) {
-            for &child in children {
-                if family_pids.insert(child) {
-                    queue.push_back(child);
-                }
-            }
         }
     }
 

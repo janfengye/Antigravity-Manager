@@ -15,7 +15,7 @@ interface UpdateInfo {
   source?: string;
 }
 
-type UpdateState = 'checking' | 'downloading' | 'ready' | 'error' | 'none';
+type UpdateState = 'checking' | 'downloading' | 'ready' | 'error' | 'none' | 'manual';
 
 interface UpdateNotificationProps {
   onClose: () => void;
@@ -50,6 +50,17 @@ export const UpdateNotification: React.FC<UpdateNotificationProps> = ({ onClose 
         console.warn('Auto update is only available in Tauri environment');
         onClose();
         return;
+      }
+
+      // Check if Linux and not AppImage (e.g. RPM or DEB packages).
+      // Tauri updater only supports AppImage on Linux.
+      if (navigator.userAgent.toLowerCase().includes('linux')) {
+        const isAppImage = await invoke<boolean>('check_appimage_installation');
+        if (!isAppImage) {
+          setUpdateState('manual');
+          setTimeout(() => setIsVisible(true), 100);
+          return;
+        }
       }
 
       // 3. Start background download immediately
@@ -161,7 +172,7 @@ export const UpdateNotification: React.FC<UpdateNotificationProps> = ({ onClose 
               </div>
             </div>
 
-            {(updateState === 'error' || updateState === 'ready') && (
+            {(updateState === 'error' || updateState === 'ready' || updateState === 'manual') && (
               <button
                 onClick={handleClose}
                 className="
@@ -183,6 +194,11 @@ export const UpdateNotification: React.FC<UpdateNotificationProps> = ({ onClose 
               {updateState === 'downloading' && t('update_notification.downloading')}
               {updateState === 'ready' && t('update_notification.restart_prompt')}
               {updateState === 'error' && `${t('update_notification.toast.failed')}`}
+              {updateState === 'manual' && (
+                navigator.language.startsWith('zh')
+                  ? '检测到您当前运行的不是 AppImage 格式，自动更新仅支持 AppImage。请点击下方按钮手动下载更新。'
+                  : 'We detected that you are not running the AppImage version. Auto-updates are only supported for AppImage. Please download the update manually.'
+              )}
             </p>
           </div>
 
@@ -222,6 +238,49 @@ export const UpdateNotification: React.FC<UpdateNotificationProps> = ({ onClose 
                 <RotateCcw className="w-4 h-4" />
                 <span>{t('update_notification.btn_restart')}</span>
                 <div className="absolute inset-0 -translate-x-full group-hover/btn:animate-[shimmer_1.5s_infinite] bg-gradient-to-r from-transparent via-white/20 to-transparent z-20 pointer-events-none" />
+              </button>
+              <button
+                onClick={handleClose}
+                className="
+                  px-3 py-2.5 rounded-xl
+                  text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200
+                  hover:bg-black/5 dark:hover:bg-white/10
+                  transition-all duration-200
+                  text-sm font-medium
+                "
+              >
+                {t('update_notification.btn_later')}
+              </button>
+            </div>
+          )}
+
+          {/* Manual download button */}
+          {updateState === 'manual' && (
+            <div className="flex gap-2">
+              <button
+                onClick={async () => {
+                  if (updateInfo) {
+                    try {
+                      const { openUrl } = await import('@tauri-apps/plugin-opener');
+                      await openUrl(updateInfo.download_url);
+                    } catch (e) {
+                      window.open(updateInfo.download_url, '_blank');
+                    }
+                  }
+                }}
+                className="
+                  flex-1 group/btn
+                  relative overflow-hidden
+                  bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500
+                  text-white font-medium
+                  py-2.5 px-4 rounded-xl
+                  shadow-lg shadow-blue-500/25
+                  transition-all duration-300
+                  flex items-center justify-center gap-2
+                  active:scale-[0.98]
+                "
+              >
+                <span>{navigator.language.startsWith('zh') ? '手动下载' : 'Download Manually'}</span>
               </button>
               <button
                 onClick={handleClose}

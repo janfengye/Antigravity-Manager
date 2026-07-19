@@ -427,6 +427,28 @@ pub fn is_homebrew_installed() -> bool {
     false
 }
 
+/// Detect if the app is currently running as an AppImage (Linux only).
+///
+/// The AppImage runtime always sets the `APPIMAGE` environment variable to the
+/// absolute path of the source `.AppImage` file before mounting and executing the
+/// bundled application. This is the canonical way to detect an AppImage execution
+/// context without inspecting the filesystem.
+///
+/// This is used to gate Tauri's native auto-updater on Linux: Tauri's updater plugin
+/// only supports AppImage bundles on Linux. Attempting to use it on RPM/DEB-installed
+/// binaries results in an `ENOEXEC` error because the downloaded artifact is an
+/// AppImage that cannot be executed without FUSE support (or proper permissions).
+pub fn is_appimage_running() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        std::env::var("APPIMAGE").is_ok()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
+}
+
 /// Execute `brew upgrade --cask antigravity-tools` with timeout (macOS only)
 #[cfg(not(target_os = "macos"))]
 pub async fn brew_upgrade_cask() -> Result<String, String> {

@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> Professional AI Account Management & Protocol Proxy System (v4.4.6)
+> Professional AI Account Management & Protocol Proxy System (v4.4.7)
 
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
@@ -9,7 +9,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.4.6-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.4.7-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -134,7 +134,7 @@ Automatically detects your OS, architecture, and package manager — one command
 
 **Linux / macOS:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.4.6/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.4.7/install.sh | bash
 ```
 
 **Windows (PowerShell):**
@@ -144,7 +144,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **Supported formats**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **Advanced usage**: Install a specific version `curl -fsSL ... | bash -s -- --version 4.4.6`，dry-run mode `curl -fsSL ... | bash -s -- --dry-run`
+> **Advanced usage**: Install a specific version `curl -fsSL ... | bash -s -- --version 4.4.7`，dry-run mode `curl -fsSL ... | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 If you have [Homebrew](https://brew.sh/) installed, you can also install via:
@@ -427,6 +427,12 @@ In clients that support OpenAI protocol (e.g., Cherry Studio), you can configure
 ## 📝 Developer & Community
 
 *   **Version History (Changelog)**:
+    *   **v4.4.7 (2026-07-19)**:
+        -   **[Bug Fix] Fix Linux Auto-Update & Process Close Issues**:
+            -   **Family Process Tree Correction**: Fixed family process tree traversal to prevent children (like the IDE) from being excluded from the close list, allowing it to be terminated properly.
+            -   **Keyring Write Timeout**: Added a thread-based 10s timeout protection for `secret-tool` commands on Linux to prevent account switching from locking up under Wayland when D-Bus is unreachable.
+            -   **Non-AppImage Update Gateway**: Added AppImage environment verification. Non-AppImage (e.g. RPM/DEB) package users will now be blocked from native auto-replacement (avoiding `ENOEXEC` issues) and guided to the GitHub release page to update manually.
+            -   *Related Issue*: See [Issue #3260](https://github.com/lbjlaq/Antigravity-Manager/issues/3260).
     *   **v4.4.6 (2026-07-17)**:
         -   **[Core Feature] Variant Mapping and OpenCode Configuration Sync**:
             -   **Dynamic Model Routing**: Introduced a variant mapping mechanism for `canonical` models. It now dynamically maps to upstream target model IDs (like `gemini-3-flash-agent`) based on the client's intelligent tier selection (low/medium/high) while precisely injecting calibrated `thinkingBudget` and `maxOutputTokens` parameters.

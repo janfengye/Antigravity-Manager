@@ -924,6 +924,14 @@ pub async fn check_homebrew_installation() -> Result<bool, String> {
     Ok(crate::modules::update_checker::is_homebrew_installed())
 }
 
+/// 检测是否以 AppImage 方式运行（Linux 专用）
+/// Tauri 的原生更新器在 Linux 上只支持 AppImage，
+/// RPM/DEB 安装的用户不应触发原生自动更新以避免 ENOEXEC 错误。
+#[tauri::command]
+pub async fn check_appimage_installation() -> Result<bool, String> {
+    Ok(crate::modules::update_checker::is_appimage_running())
+}
+
 /// 通过 Homebrew Cask 升级应用
 #[tauri::command]
 pub async fn brew_upgrade_cask() -> Result<String, String> {

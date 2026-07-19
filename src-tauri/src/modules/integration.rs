@@ -341,6 +341,8 @@ fn write_to_system_keyring(account: &crate::models::Account) -> Result<(), Strin
     {
         // 2.3 Linux Secret Service API
         use std::io::Write;
+        use std::sync::mpsc;
+
         let mut child = Command::new("secret-tool")
             .args([
                 "store",
@@ -360,11 +362,39 @@ fn write_to_system_keyring(account: &crate::models::Account) -> Result<(), Strin
             stdin
                 .write_all(payload_json.as_bytes())
                 .map_err(|e| format!("Failed to write to secret-tool stdin: {}", e))?;
+            // stdin is dropped here, closing the pipe and signalling EOF to secret-tool
         }
 
-        let output = child
-            .wait_with_output()
-            .map_err(|e| format!("Failed to wait for secret-tool: {}", e))?;
+        // Protect against indefinite blocking when D-Bus is unavailable (common on Wayland
+        // sessions where DBUS_SESSION_BUS_ADDRESS is not inherited by the Tauri process).
+        let child_pid = child.id();
+        let (tx, rx) = mpsc::channel::<Result<std::process::Output, std::io::Error>>();
+        std::thread::spawn(move || {
+            let _ = tx.send(child.wait_with_output());
+        });
+
+        let output = match rx.recv_timeout(std::time::Duration::from_secs(10)) {
+            Ok(result) => result.map_err(|e| format!("Failed to wait for secret-tool: {}", e))?,
+            Err(_) => {
+                // secret-tool has been blocked for more than 10 seconds.
+                // Most likely cause: D-Bus session bus is not reachable from the Tauri process
+                // (typical on Wayland without proper DBUS_SESSION_BUS_ADDRESS propagation).
+                // Kill the hung subprocess before returning the error.
+                let _ = Command::new("kill")
+                    .args(["-9", &child_pid.to_string()])
+                    .output();
+                crate::modules::logger::log_error(
+                    "[Desktop] secret-tool store blocked for >10s — D-Bus session bus unreachable. \
+                     Ensure gnome-keyring/kwallet is running and DBUS_SESSION_BUS_ADDRESS is exported.",
+                );
+                return Err(
+                    "Keyring write timed out (10s). The D-Bus session bus is not reachable from this process, \
+                     which is common on Wayland without proper session setup. \
+                     Please ensure gnome-keyring or kwallet is running."
+                        .to_string(),
+                );
+            }
+        };
 
         if !output.status.success() {
             let err_msg = String::from_utf8_lossy(&output.stderr);
