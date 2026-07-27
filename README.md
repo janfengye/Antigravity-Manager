@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> 专业级 AI 账号管理与协议代理系统 (v4.4.7)
+> 专业级 AI 账号管理与协议代理系统 (v4.4.8)
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
 
@@ -8,7 +8,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.4.7-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.4.8-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -132,7 +132,7 @@ graph TD
 
 **Linux / macOS:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.4.7/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.4.8/install.sh | bash
 ```
 
 **Windows (PowerShell):**
@@ -142,7 +142,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **支持的格式**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **高级用法**: 安装指定版本 `curl -fsSL ... | bash -s -- --version 4.4.7`，预览模式 `curl -fsSL ... | bash -s -- --dry-run`
+> **高级用法**: 安装指定版本 `curl -fsSL ... | bash -s -- --version 4.4.8`，预览模式 `curl -fsSL ... | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 如果您已安装 [Homebrew](https://brew.sh/)，也可以通过以下命令安装：
@@ -438,6 +438,14 @@ response = client.chat.completions.create(
 ## 📝 开发者与社区
 
 *   **版本演进 (Changelog)**:
+    *   **v4.4.8 (2026-07-27)**:
+        -   **[问题修复] 用户 Token 永不过期校验逻辑修复 (Fix Never Expire Token Validation)**:
+            -   当 User Token 的 `expires_type` 设置为 `"never"`（永不过期）且 `expires_at` 为 `0` 时，不再误判为已过期（`403 Forbidden`）。
+            -   修复测试套件中 `claude.rs` 的重复测试模块命名冲突问题。
+            -   *相关 PR*: 详见 [PR #3266](https://github.com/lbjlaq/Antigravity-Manager/pull/3266)。
+        -   **[问题修复] 配额恢复后及时清理限流锁定状态 (Clear Stale Live Limit Locks on Quota Recovery)**:
+            -   账号刷新配额恢复（配额比率 `percentage > 0%`）后，自动清除内存中 `RateLimitTracker` 的限流锁，并从本地账号 JSON 数据中移除过期的 `live_limited_models` 标记，避免前端误显锁定状态。
+            -   *相关 PR*: 详见 [PR #3267](https://github.com/lbjlaq/Antigravity-Manager/pull/3267)。
     *   **v4.4.7 (2026-07-19)**:
         -   **[问题修复] 修复 Linux 平台上的自动更新与进程关闭问题 (Fix Linux Auto-Update & Process Close Bugs)**:
             -   **免杀家族树修正**: 修复了获取家族进程树时误将子孙进程纳入豁免名单的问题。现在可以正确识别并关闭由 Manager 调起的 `antigravity-ide` 进程。

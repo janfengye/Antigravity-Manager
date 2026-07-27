@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> Professional AI Account Management & Protocol Proxy System (v4.4.7)
+> Professional AI Account Management & Protocol Proxy System (v4.4.8)
 
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
@@ -9,7 +9,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.4.7-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.4.8-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -134,7 +134,7 @@ Automatically detects your OS, architecture, and package manager — one command
 
 **Linux / macOS:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.4.7/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.4.8/install.sh | bash
 ```
 
 **Windows (PowerShell):**
@@ -144,7 +144,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **Supported formats**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **Advanced usage**: Install a specific version `curl -fsSL ... | bash -s -- --version 4.4.7`，dry-run mode `curl -fsSL ... | bash -s -- --dry-run`
+> **Advanced usage**: Install a specific version `curl -fsSL ... | bash -s -- --version 4.4.8`，dry-run mode `curl -fsSL ... | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 If you have [Homebrew](https://brew.sh/) installed, you can also install via:
@@ -427,6 +427,14 @@ In clients that support OpenAI protocol (e.g., Cherry Studio), you can configure
 ## 📝 Developer & Community
 
 *   **Version History (Changelog)**:
+    *   **v4.4.8 (2026-07-27)**:
+        -   **[Bug Fix] Fix Never Expire Token Validation**:
+            -   When User Token's `expires_type` is set to `"never"` and `expires_at` is `0`, it is no longer incorrectly flagged as expired (`403 Forbidden`).
+            -   Resolved duplicate test module name conflict in `claude.rs`.
+            -   *Related PR*: See [PR #3266](https://github.com/lbjlaq/Antigravity-Manager/pull/3266).
+        -   **[Bug Fix] Clear Stale Live Limit Locks on Quota Recovery**:
+            -   When account quota recovers (`percentage > 0%`), automatically clear the `RateLimitTracker` lock in memory and remove stale `live_limited_models` flags from local account JSON files to prevent false UI limit locks.
+            -   *Related PR*: See [PR #3267](https://github.com/lbjlaq/Antigravity-Manager/pull/3267).
     *   **v4.4.7 (2026-07-19)**:
         -   **[Bug Fix] Fix Linux Auto-Update & Process Close Issues**:
             -   **Family Process Tree Correction**: Fixed family process tree traversal to prevent children (like the IDE) from being excluded from the close list, allowing it to be terminated properly.
