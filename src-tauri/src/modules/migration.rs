@@ -7,10 +7,10 @@ use std::fs;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
-struct ImportedOAuthState {
-    refresh_token: String,
-    is_gcp_tos: bool,
-    project_id: Option<String>,
+pub struct ImportedOAuthState {
+    pub refresh_token: String,
+    pub is_gcp_tos: bool,
+    pub project_id: Option<String>,
 }
 
 /// Scan and import V1 data
@@ -278,10 +278,104 @@ pub async fn import_from_custom_db_path(path_str: String) -> Result<Account, Str
     account::upsert_account(email.clone(), user_info.name, token_data)
 }
 
-/// Import current logged-in account from default IDE database
+/// Scan all local sources (Keyring/Keychain, IDE Databases, V1/CLI Directories) and import all unique accounts
+pub async fn import_all_local_accounts(target_ide: Option<&str>) -> Result<Vec<Account>, String> {
+    use crate::modules::{integration, oauth};
+
+    let mut imported_accounts = Vec::new();
+    let mut seen_refresh_tokens = std::collections::HashSet::new();
+
+    // 1. Check System Keyring / Keychain
+    if let Ok(oauth_state) = integration::read_from_system_keyring() {
+        let refresh_token = oauth_state.refresh_token.clone();
+        if !refresh_token.is_empty() && seen_refresh_tokens.insert(refresh_token.clone()) {
+            crate::modules::logger::log_info(
+                "Discovered OAuth state in System Keyring/Keychain",
+            );
+            if let Ok(token_resp) = oauth::refresh_access_token(&refresh_token, None).await {
+                let email = match oauth::get_user_info(&token_resp.access_token, None).await {
+                    Ok(info) => info.email,
+                    Err(_) => "Unknown".to_string(),
+                };
+                let token_data = TokenData::new(
+                    token_resp.access_token,
+                    refresh_token,
+                    token_resp.expires_in,
+                    Some(email.clone()),
+                    oauth_state.project_id,
+                    None,
+                    oauth_state.is_gcp_tos,
+                    token_resp.id_token,
+                )
+                .with_oauth_client_key(token_resp.oauth_client_key);
+
+                if let Ok(acc) = account::upsert_account(email, None, token_data) {
+                    imported_accounts.push(acc);
+                }
+            }
+        }
+    }
+
+    // 2. Scan all candidate database paths
+    let candidate_paths = db::get_all_candidate_db_paths(target_ide);
+    for db_path in candidate_paths {
+        if db_path.exists() {
+            if let Ok(oauth_state) = extract_oauth_state_from_file(&db_path) {
+                let refresh_token = oauth_state.refresh_token.clone();
+                if !refresh_token.is_empty() && seen_refresh_tokens.insert(refresh_token.clone()) {
+                    crate::modules::logger::log_info(&format!(
+                        "Discovered OAuth state in DB path: {:?}",
+                        db_path
+                    ));
+                    if let Ok(token_resp) = oauth::refresh_access_token(&refresh_token, None).await {
+                        let email = match oauth::get_user_info(&token_resp.access_token, None).await {
+                            Ok(info) => info.email,
+                            Err(_) => "Unknown".to_string(),
+                        };
+                        let token_data = TokenData::new(
+                            token_resp.access_token,
+                            refresh_token,
+                            token_resp.expires_in,
+                            Some(email.clone()),
+                            oauth_state.project_id,
+                            None,
+                            oauth_state.is_gcp_tos,
+                            token_resp.id_token,
+                        )
+                        .with_oauth_client_key(token_resp.oauth_client_key);
+
+                        if let Ok(acc) = account::upsert_account(email, None, token_data) {
+                            imported_accounts.push(acc);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. Scan V1 / CLI agent directory (~/.antigravity-agent)
+    if let Ok(v1_accounts) = import_from_v1().await {
+        for acc in v1_accounts {
+            if seen_refresh_tokens.insert(acc.token.refresh_token.clone()) {
+                imported_accounts.push(acc);
+            }
+        }
+    }
+
+    if imported_accounts.is_empty() {
+        return Err("No login state data found across Keyring, IDE databases, or CLI directories".to_string());
+    }
+
+    Ok(imported_accounts)
+}
+
+/// Import current logged-in accounts from all local sources (Keyring, candidate DBs, V1 CLI)
 pub async fn import_from_db(target_ide: Option<&str>) -> Result<Account, String> {
-    let db_path = db::get_db_path(target_ide)?;
-    import_from_custom_db_path(db_path.to_string_lossy().to_string()).await
+    let accounts = import_all_local_accounts(target_ide).await?;
+    accounts
+        .into_iter()
+        .next()
+        .ok_or_else(|| "No accounts found".to_string())
 }
 
 /// Get current Refresh Token from database (common logic)
@@ -407,8 +501,22 @@ fn extract_oauth_state_from_file(db_path: &PathBuf) -> Result<ImportedOAuthState
     })
 }
 
-/// Get current Refresh Token from default database (backwards compatibility)
+/// Get current Refresh Token from System Keyring or candidate databases
 pub fn get_refresh_token_from_db(target_ide: Option<&str>) -> Result<String, String> {
-    let db_path = db::get_db_path(target_ide)?;
-    extract_refresh_token_from_file(&db_path)
+    use crate::modules::integration;
+
+    if let Ok(oauth_state) = integration::read_from_system_keyring() {
+        return Ok(oauth_state.refresh_token);
+    }
+
+    let candidate_paths = db::get_all_candidate_db_paths(target_ide);
+    for db_path in candidate_paths {
+        if db_path.exists() {
+            if let Ok(token) = extract_refresh_token_from_file(&db_path) {
+                return Ok(token);
+            }
+        }
+    }
+
+    Err("Login state data not found in keyring or any database format".to_string())
 }

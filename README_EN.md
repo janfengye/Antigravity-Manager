@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> Professional AI Account Management & Protocol Proxy System (v4.4.8)
+> Professional AI Account Management & Protocol Proxy System (v4.4.9)
 
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
@@ -9,7 +9,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.4.8-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.4.9-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -134,7 +134,7 @@ Automatically detects your OS, architecture, and package manager — one command
 
 **Linux / macOS:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.4.8/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.4.9/install.sh | bash
 ```
 
 **Windows (PowerShell):**
@@ -144,7 +144,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **Supported formats**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **Advanced usage**: Install a specific version `curl -fsSL ... | bash -s -- --version 4.4.8`，dry-run mode `curl -fsSL ... | bash -s -- --dry-run`
+> **Advanced usage**: Install a specific version `curl -fsSL ... | bash -s -- --version 4.4.9`，dry-run mode `curl -fsSL ... | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 If you have [Homebrew](https://brew.sh/) installed, you can also install via:
@@ -427,6 +427,12 @@ In clients that support OpenAI protocol (e.g., Cherry Studio), you can configure
 ## 📝 Developer & Community
 
 *   **Version History (Changelog)**:
+    *   **v4.4.9 (2026-07-28)**:
+        -   **[Core Feature] Multi-Source Account Auto-Discovery & Batch Import**:
+            -   **System Keyring/Keychain Extraction**: Supported automatic reading and decrypting credentials stored in macOS Keychain (`security`), Windows Credential Manager (`CredReadW`), and Linux Secret Service (`secret-tool`), compatible with latest Antigravity IDE (2.0+) and CLI tool `agy`.
+            -   **Multi-Path Candidate Database Search**: Automatically searched and resolved candidate SQLite databases (`state.vscdb`) across standard, portable, and custom paths for both standalone Antigravity IDE and VS Code / Cursor extensions.
+            -   **One-Click Full Multi-Source Batch Import**: Concurrent multi-source scanning across Keyring, IDE, extension databases, and CLI directories (`~/.antigravity-agent/`) with automatic token deduplication and batch importing of all unique local accounts.
+            -   *Related Issue*: See [Issue #3269](https://github.com/lbjlaq/Antigravity-Manager/issues/3269).
     *   **v4.4.8 (2026-07-27)**:
         -   **[Bug Fix] Fix Never Expire Token Validation**:
             -   When User Token's `expires_type` is set to `"never"` and `expires_at` is `0`, it is no longer incorrectly flagged as expired (`403 Forbidden`).

@@ -575,24 +575,27 @@ pub async fn import_v1_accounts(
 pub async fn import_from_db(
     app: tauri::AppHandle,
     proxy_state: tauri::State<'_, crate::commands::proxy::ProxyServiceState>,
-) -> Result<Account, String> {
-    // 同步函数包装为 async
-    let mut account = modules::migration::import_from_db(None).await?;
+    target_ide: Option<String>,
+) -> Result<Vec<Account>, String> {
+    let imported_accounts =
+        modules::migration::import_all_local_accounts(target_ide.as_deref()).await?;
 
-    // 既然是从数据库导入（即 IDE 当前账号），自动将其设为 Manager 的当前账号
-    let account_id = account.id.clone();
-    modules::account::set_current_account_id(&account_id)?;
+    if let Some(first_acc) = imported_accounts.first() {
+        let account_id = first_acc.id.clone();
+        let _ = modules::account::set_current_account_id_with_target(
+            &account_id,
+            target_ide.as_deref(),
+        );
+    }
 
-    // 自动触发刷新额度
-    let _ = internal_refresh_account_quota(&app, &mut account).await;
+    for mut account in imported_accounts.clone() {
+        let _ = internal_refresh_account_quota(&app, &mut account).await;
+    }
 
-    // 刷新托盘图标展示
     crate::modules::tray::update_tray_menus(&app);
-
-    // Reload token pool
     let _ = crate::commands::proxy::reload_proxy_accounts(proxy_state).await;
 
-    Ok(account)
+    Ok(imported_accounts)
 }
 
 #[tauri::command]

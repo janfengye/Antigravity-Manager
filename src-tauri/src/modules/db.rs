@@ -14,98 +14,87 @@ fn get_antigravity_path(target_ide: Option<&str>) -> Option<PathBuf> {
     crate::modules::process::get_antigravity_executable_path(target_ide)
 }
 
-/// Get Antigravity database path (cross-platform)
-pub fn get_db_path(target_ide: Option<&str>) -> Result<PathBuf, String> {
-    // Prefer path specified by --user-data-dir argument
+/// Get all possible Antigravity database candidate paths
+pub fn get_all_candidate_db_paths(target_ide: Option<&str>) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+
     if let Some(user_data_dir) = crate::modules::process::get_user_data_dir_from_process(target_ide)
     {
-        let custom_db_path = user_data_dir
-            .join("User")
-            .join("globalStorage")
-            .join("state.vscdb");
-        if custom_db_path.exists() {
-            return Ok(custom_db_path);
-        }
-    }
-
-    // Check if in portable mode
-    if let Some(antigravity_path) = get_antigravity_path(target_ide) {
-        if let Some(parent_dir) = antigravity_path.parent() {
-            let portable_db_path = PathBuf::from(parent_dir)
-                .join("data")
-                .join("user-data")
+        paths.push(
+            user_data_dir
                 .join("User")
                 .join("globalStorage")
-                .join("state.vscdb");
+                .join("state.vscdb"),
+        );
+    }
 
-            if portable_db_path.exists() {
-                return Ok(portable_db_path);
-            }
+    if let Some(antigravity_path) = get_antigravity_path(target_ide) {
+        if let Some(parent_dir) = antigravity_path.parent() {
+            paths.push(
+                PathBuf::from(parent_dir)
+                    .join("data")
+                    .join("user-data")
+                    .join("User")
+                    .join("globalStorage")
+                    .join("state.vscdb"),
+            );
         }
     }
 
     let folder_names: &[&str] = if target_ide == Some("ide") {
-        &["Antigravity IDE"]
+        &["Antigravity IDE", "Antigravity"]
     } else if target_ide == Some("code") || target_ide == Some("cursor") {
-        &["Antigravity"]
+        &["Antigravity", "Antigravity IDE"]
     } else {
         &["Antigravity IDE", "Antigravity"]
     };
 
-    // Standard mode: use system default path
     #[cfg(target_os = "macos")]
-    {
-        let home = dirs::home_dir().ok_or("Failed to get home directory")?;
+    if let Some(home) = dirs::home_dir() {
         for folder_name in folder_names {
-            let path = home.join(format!(
+            paths.push(home.join(format!(
                 "Library/Application Support/{}/User/globalStorage/state.vscdb",
                 folder_name
-            ));
-            if path.exists() {
-                return Ok(path);
-            }
+            )));
         }
-        // Fall back to first candidate even if it doesn't exist
-        Ok(home.join(format!(
-            "Library/Application Support/{}/User/globalStorage/state.vscdb",
-            folder_names[0]
-        )))
     }
 
     #[cfg(target_os = "windows")]
-    {
-        let appdata = std::env::var("APPDATA")
-            .map_err(|_| "Failed to get APPDATA environment variable".to_string())?;
+    if let Ok(appdata) = std::env::var("APPDATA") {
         for folder_name in folder_names {
-            let path = PathBuf::from(&appdata)
-                .join(folder_name)
-                .join("User\\globalStorage\\state.vscdb");
-            if path.exists() {
-                return Ok(path);
-            }
+            paths.push(
+                PathBuf::from(&appdata)
+                    .join(folder_name)
+                    .join("User\\globalStorage\\state.vscdb"),
+            );
         }
-        Ok(PathBuf::from(appdata)
-            .join(folder_names[0])
-            .join("User\\globalStorage\\state.vscdb"))
     }
 
     #[cfg(target_os = "linux")]
-    {
-        let home = dirs::home_dir().ok_or("Failed to get home directory")?;
+    if let Some(home) = dirs::home_dir() {
         for folder_name in folder_names {
-            let path = home.join(format!(
+            paths.push(home.join(format!(
                 ".config/{}/User/globalStorage/state.vscdb",
                 folder_name
-            ));
-            if path.exists() {
-                return Ok(path);
-            }
+            )));
         }
-        Ok(home.join(format!(
-            ".config/{}/User/globalStorage/state.vscdb",
-            folder_names[0]
-        )))
     }
+
+    paths
+}
+
+/// Get Antigravity database path (cross-platform)
+pub fn get_db_path(target_ide: Option<&str>) -> Result<PathBuf, String> {
+    let candidates = get_all_candidate_db_paths(target_ide);
+    for path in &candidates {
+        if path.exists() {
+            return Ok(path.clone());
+        }
+    }
+    candidates
+        .into_iter()
+        .next()
+        .ok_or_else(|| "Failed to locate database path".to_string())
 }
 
 /// Inject Token and Email into database

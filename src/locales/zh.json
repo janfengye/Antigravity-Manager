@@ -286,9 +286,9 @@
         "batch_fail": "导入失败"
       },
       "import": {
-        "scheme_a": "方案 A: 从当前 IDE 数据库",
-        "scheme_a_desc": "自动从本地 Antigravity 数据库读取当前登录的账号信息。",
-        "btn_db": "导入当前登录账号",
+        "scheme_a": "方案 A: 自动扫描本地已登录账号",
+        "scheme_a_desc": "自动对本地系统 Keyring/Keychain、Antigravity IDE、插件版及 CLI 进行全量扫描并批量导入已登录账号。",
+        "btn_db": "一键导入所有本地已登录账号",
         "or": "或者",
         "scheme_b": "方案 B: 从 V1 版本备份",
         "scheme_b_desc": "扫描 ~/.antigravity-agent 目录，批量导入旧版本的账号数据。",
