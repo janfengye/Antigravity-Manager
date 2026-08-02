@@ -2262,7 +2262,23 @@ print(response.choices[0].message.content)`;
                                             {t('proxy.router.subtitle_simple')}
                                         </p>
                                     </div>
-                                    <div className="flex flex-wrap items-center gap-2 bg-white dark:bg-base-100 p-1.5 rounded-xl border border-gray-100 dark:border-gray-700/50 shadow-sm">
+                                    <div className="flex flex-wrap items-center gap-2.5 bg-white dark:bg-base-100 p-1.5 rounded-xl border border-gray-100 dark:border-gray-700/50 shadow-sm">
+                                        {/* 仅暴露真实配额模型开关 */}
+                                        <label
+                                            className="flex items-center gap-2 px-3 py-1 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50/80 dark:bg-base-200 cursor-pointer hover:bg-gray-100 dark:hover:bg-base-300 transition-colors h-9 select-none"
+                                            title={t('proxy.router.only_raw_quota_models_tooltip')}
+                                        >
+                                            <span className="text-xs font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
+                                                {t('proxy.router.only_raw_quota_models')}
+                                            </span>
+                                            <input
+                                                type="checkbox"
+                                                className="toggle toggle-sm bg-gray-300 dark:bg-gray-700 border-gray-400 dark:border-gray-600 checked:bg-blue-600 checked:border-blue-600 cursor-pointer"
+                                                checked={appConfig.proxy.only_raw_quota_models ?? false}
+                                                onChange={(e) => updateProxyConfig({ only_raw_quota_models: e.target.checked })}
+                                            />
+                                        </label>
+
                                         {/* 预设选择下拉框 */}
                                         <div className="relative min-w-[140px]">
                                             <select

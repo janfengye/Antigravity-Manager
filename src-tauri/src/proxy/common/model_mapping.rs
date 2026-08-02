@@ -145,16 +145,12 @@ pub fn get_supported_models() -> Vec<String> {
 pub async fn get_all_dynamic_models(
     custom_mapping: &tokio::sync::RwLock<std::collections::HashMap<String, String>>,
     token_manager: Option<&crate::proxy::token_manager::TokenManager>,
+    only_raw_quota_models: bool,
 ) -> Vec<String> {
     use std::collections::HashSet;
     let mut model_ids = HashSet::new();
 
-    // 1. 获取所有内置映射模型
-    for m in get_supported_models() {
-        model_ids.insert(m);
-    }
-
-    // 2. 获取所有自定义映射模型 (Custom)
+    // 1. 获取所有自定义映射模型 (Custom)
     {
         let mapping = custom_mapping.read().await;
         for key in mapping.keys() {
@@ -162,36 +158,43 @@ pub async fn get_all_dynamic_models(
         }
     }
 
-    // 3. [NEW] 获取所有账号从官方接口汇聚而来的动态模型
+    // 2. 获取所有账号从官方接口汇聚而来的动态模型 (Quota Models)
     if let Some(tm) = token_manager {
         for dynamic_model in tm.get_all_collected_models() {
             model_ids.insert(dynamic_model);
         }
     }
 
-    // 5. 确保包含常用的 Gemini/画画模型 ID
-    model_ids.insert("gemini-3.1-pro-low".to_string());
-
-    // [NEW] Issue #247: Dynamically generate all Image Gen Combinations
-    let base = "gemini-3-pro-image";
-    let resolutions = vec!["", "-2k", "-4k"];
-    let ratios = vec!["", "-1x1", "-4x3", "-3x4", "-16x9", "-9x16", "-21x9"];
-
-    for res in resolutions {
-        for ratio in ratios.iter() {
-            let mut id = base.to_string();
-            id.push_str(res);
-            id.push_str(ratio);
-            model_ids.insert(id);
+    // 如果未开启 only_raw_quota_models，则追加内置映射别名与硬编码画画/变体模型
+    if !only_raw_quota_models {
+        // 3. 获取所有内置映射模型
+        for m in get_supported_models() {
+            model_ids.insert(m);
         }
-    }
 
-    model_ids.insert("gemini-2.0-flash-exp".to_string());
-    model_ids.insert("gemini-2.5-flash".to_string());
-    // gemini-2.5-pro removed
-    model_ids.insert("gemini-3-flash".to_string());
-    model_ids.insert("gemini-3.1-pro-high".to_string());
-    model_ids.insert("gemini-3.1-pro-low".to_string());
+        // 4. 确保包含常用的 Gemini/画画模型 ID
+        model_ids.insert("gemini-3.1-pro-low".to_string());
+
+        // Issue #247: Dynamically generate all Image Gen Combinations
+        let base = "gemini-3-pro-image";
+        let resolutions = vec!["", "-2k", "-4k"];
+        let ratios = vec!["", "-1x1", "-4x3", "-3x4", "-16x9", "-9x16", "-21x9"];
+
+        for res in resolutions {
+            for ratio in ratios.iter() {
+                let mut id = base.to_string();
+                id.push_str(res);
+                id.push_str(ratio);
+                model_ids.insert(id);
+            }
+        }
+
+        model_ids.insert("gemini-2.0-flash-exp".to_string());
+        model_ids.insert("gemini-2.5-flash".to_string());
+        model_ids.insert("gemini-3-flash".to_string());
+        model_ids.insert("gemini-3.1-pro-high".to_string());
+        model_ids.insert("gemini-3.1-pro-low".to_string());
+    }
 
     let mut sorted_ids: Vec<_> = model_ids.into_iter().collect();
     sorted_ids.sort();

@@ -1913,7 +1913,9 @@ pub async fn handle_messages(
 pub async fn handle_list_models(State(state): State<AppState>) -> impl IntoResponse {
     use crate::proxy::common::model_mapping::get_all_dynamic_models;
 
-    let model_ids = get_all_dynamic_models(&state.custom_mapping, Some(&state.token_manager)).await;
+    let only_raw = *state.only_raw_quota_models.read().await;
+    let model_ids =
+        get_all_dynamic_models(&state.custom_mapping, Some(&state.token_manager), only_raw).await;
 
     let data: Vec<_> = model_ids
         .into_iter()

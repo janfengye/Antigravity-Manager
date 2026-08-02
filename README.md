@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> 专业级 AI 账号管理与协议代理系统 (v4.4.9)
+> 专业级 AI 账号管理与协议代理系统 (v4.5.0)
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
 
@@ -8,7 +8,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.4.9-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.5.0-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -43,7 +43,7 @@
 | <img src="docs/images/packycode_logo.png" width="200" alt="PackyCode Logo"> | 感谢 **PackyCode** 对本项目的赞助！PackyCode 是一家可靠高效的 API 中转服务商，提供 Claude Code、Codex、Gemini 等多种服务的中转。PackyCode 为本项目的用户提供了特别优惠：使用[此链接](https://www.packyapi.com/register?aff=Ctrler)注册，并在充值时输入 **“Ctrler”** 优惠码即可享受 **九折优惠**。 |
 | <img src="docs/images/APIKEYFUN.png" width="200" alt="APIKEYFUN Logo"> | 感谢 APIKEY.FUN 赞助本项目！APIKEY.FUN 是一家专业的企业级 AI 中转站，致力于为企业和个人开发者提供稳定、高效、低成本的 AI 模型 API 接入服务。平台支持 Claude、OpenAI、Gemini 等主流热门模型，价格低至官方原价的 7%。通过本项目[专属链接](https://apikey.fun/register?aff=Ctrler)注册，还可享受最高 **充值永久 95 折** 专属优惠。 |
 | <img src="docs/images/claudeapilogo.png" width="200" alt="Claude API Logo"> | 感谢 **Claude API** 对本项目的支持！claudeapi.com 是一家走**官方与 AWS 渠道**接入的 **Claude API** 中转站，专注 Claude，主打高稳定、低延迟，完整支持 Claude Code。为本项目用户提供专属福利：通过[专属链接](https://console.claudeapi.com/register?source=antigravity)注册即送**免费测试额度，零门槛跑通**；充值再享 **95 折**专属优惠(联系客服）。 |
-| <img src="docs/images/AICodeMirror.jpg" width="200" alt="AICodeMirror Logo"> | 感谢 AICodeMirror 赞助了本项目！AICodeMirror 提供 Claude Code / Codex / Gemini CLI 官方高稳定中转服务，支持企业级高并发、极速开票、7×24 专属技术支持。 Claude Code / Codex / Gemini 官方渠道低至 3.8 / 0.2 / 0.9 折，充值更有折上折！AICodeMirror 为 Antigravity-Manager 的用户提供了特别福利，通过[此链接](https://www.aicodemirror.com/register?invitecode=MV5XUM)注册的用户，可享受首充8折，企业客户最高可享 7.5 折！ |
+| <img src="docs/images/AICodeMirror.jpg" width="200" alt="AICodeMirror Logo"> | 感谢 AICodeMirror 赞助了本项目！AICodeMirror 提供 Claude Code / Codex / Gemini CLI 官方高稳定中转服务，支持企业级高并发、极速开票、7×24 专属技术支持。 Claude Code / Codex / Gemini 官方渠道低至 3.8 / 0.2 / 0.9 折，充值更有折上折！AICodeMirror 为 Antigravity-Manager 的用户提供了特别福利，通过[此链接](https://aicodemirror.ai/register?invitecode=MV5XUM)注册的用户，可享受首充8折，企业客户最高可享 7.5 折！ |
 
 
 
@@ -132,7 +132,7 @@ graph TD
 
 **Linux / macOS:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.4.9/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash
 ```
 
 **Windows (PowerShell):**
@@ -142,7 +142,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **支持的格式**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **高级用法**: 安装指定版本 `curl -fsSL ... | bash -s -- --version 4.4.9`，预览模式 `curl -fsSL ... | bash -s -- --dry-run`
+> **高级用法**: 安装指定版本 `curl -fsSL ... | bash -s -- --version 4.5.0`，预览模式 `curl -fsSL ... | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 如果您已安装 [Homebrew](https://brew.sh/)，也可以通过以下命令安装：
@@ -438,6 +438,13 @@ response = client.chat.completions.create(
 ## 📝 开发者与社区
 
 *   **版本演进 (Changelog)**:
+    *   **v4.5.0 (2026-08-02)**:
+        -   **[问题修复] 自动兼容 ChatGPT CLI (.chatgpt) 路径与配置同步**:
+            -   解决最新版 OpenAI CLI 将配置路径由 `~/.codex/` 变更/重命名为 `~/.chatgpt/` 导致无法一键同步 API Key 与代理 URL 的问题。支持智能级联识别 `~/.chatgpt` 与 `~/.codex` 双路径。
+            -   *相关 Issue*: 详见 [Issue #3275](https://github.com/lbjlaq/Antigravity-Manager/issues/3275)。
+        -   **[功能增强] 支持选择仅暴露真实 Quota 配额模型 (Only Raw Quota Models Mode)**:
+            -   **精简第三方模型下拉选单**: 在 `gui_config.json` 的 `proxy` 配置及前端**模型路由中心操作栏**中新增“仅暴露真实配额模型”开关。开启后 `/v1/models` 接口将自动隐藏所有内置的虚拟别名模型（如 `gpt-4o`、`claude-3-5-sonnet` 等）及各种画幅变体模型，仅暴露当前已连接账号实际获取到的底层真实模型 ID 与用户自定义映射规则，大幅改善 Cherry Studio / NextChat / LobeChat 等第三方客户端的模型选择体验。
+            -   *相关 Issue*: 详见 [Issue #3273](https://github.com/lbjlaq/Antigravity-Manager/issues/3273)。
     *   **v4.4.9 (2026-07-28)**:
         -   **[核心特性] 账号多源一键全量扫描与导入 (Multi-Source Account Auto-Discovery & Batch Import)**:
             -   **系统 Keyring/Keychain 凭据提取**: 支持从 macOS Keychain (`security`)、Windows 凭据管理器 (`CredReadW`) 以及 Linux Secret Service (`secret-tool`) 中自动读取并解密存取的系统凭据，兼容最新版 Antigravity IDE (2.0+) 与 CLI 工具 `agy`。

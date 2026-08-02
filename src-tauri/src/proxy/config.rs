@@ -615,6 +615,10 @@ pub struct ProxyConfig {
     #[serde(default)]
     pub upstream_proxy: UpstreamProxyConfig,
 
+    /// 是否只在 /v1/models 中暴露真实配额模型（隐藏内置虚拟别名）
+    #[serde(default)]
+    pub only_raw_quota_models: bool,
+
     /// z.ai provider configuration (Anthropic-compatible).
     #[serde(default)]
     pub zai: ZaiConfig,
@@ -690,6 +694,7 @@ impl Default for ProxyConfig {
             enable_logging: true, // 默认开启，支持 token 统计功能
             debug_logging: DebugLoggingConfig::default(),
             upstream_proxy: UpstreamProxyConfig::default(),
+            only_raw_quota_models: false,
             zai: ZaiConfig::default(),
             scheduling: crate::proxy::sticky_config::StickySessionConfig::default(),
             experimental: ExperimentalConfig::default(),

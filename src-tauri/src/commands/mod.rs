@@ -409,6 +409,11 @@ pub async fn save_config(
     if let Some(instance) = instance_lock.as_ref() {
         // 更新模型映射
         instance.axum_server.update_mapping(&config.proxy).await;
+        // 更新仅暴露真实配额模型开关
+        instance
+            .axum_server
+            .update_only_raw_quota_models(config.proxy.only_raw_quota_models)
+            .await;
         // 更新上游代理
         instance
             .axum_server

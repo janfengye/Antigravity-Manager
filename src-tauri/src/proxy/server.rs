@@ -112,6 +112,7 @@ pub struct AppState {
     pub port: u16,                     // [NEW] 本地监听端口 (v4.0.8 修复)
     pub proxy_pool_state: Arc<tokio::sync::RwLock<crate::proxy::config::ProxyPoolConfig>>, // [FIX Web Mode]
     pub proxy_pool_manager: Arc<crate::proxy::proxy_pool::ProxyPoolManager>, // [FIX Web Mode]
+    pub only_raw_quota_models: Arc<tokio::sync::RwLock<bool>>, // [NEW] 是否只暴露真实配额模型
 }
 
 // 为 AppState 实现 FromRef，以便中间件提取 security 状态
@@ -272,9 +273,16 @@ pub struct AxumServer {
     pub token_manager: Arc<TokenManager>, // [NEW] 暴露出 TokenManager 供反代服务复用
     pub proxy_pool_state: Arc<tokio::sync::RwLock<crate::proxy::config::ProxyPoolConfig>>, // [NEW] 代理池配置状态
     pub proxy_pool_manager: Arc<crate::proxy::proxy_pool::ProxyPoolManager>, // [NEW] 暴露代理池管理器供命令调用
+    pub only_raw_quota_models: Arc<tokio::sync::RwLock<bool>>,
 }
 
 impl AxumServer {
+    pub async fn update_only_raw_quota_models(&self, only_raw: bool) {
+        let mut r = self.only_raw_quota_models.write().await;
+        *r = only_raw;
+        tracing::debug!("only_raw_quota_models 已更新: {}", only_raw);
+    }
+
     pub async fn update_mapping(&self, config: &crate::proxy::config::ProxyConfig) {
         {
             let mut m = self.custom_mapping.write().await;
@@ -381,6 +389,8 @@ impl AxumServer {
         let debug_logging_state = Arc::new(RwLock::new(debug_logging));
         let is_running_state = Arc::new(RwLock::new(false));
 
+        let only_raw_quota_models_state = Arc::new(tokio::sync::RwLock::new(false));
+
         let state = AppState {
             token_manager: token_manager.clone(),
             custom_mapping: custom_mapping_state.clone(),
@@ -417,6 +427,7 @@ impl AxumServer {
             port,
             proxy_pool_state: proxy_pool_state.clone(),
             proxy_pool_manager: proxy_pool_manager.clone(),
+            only_raw_quota_models: only_raw_quota_models_state.clone(),
         };
 
         // 构建路由 - 使用新架构的 handlers！
@@ -829,6 +840,7 @@ impl AxumServer {
             token_manager: token_manager.clone(),
             proxy_pool_state,
             proxy_pool_manager,
+            only_raw_quota_models: only_raw_quota_models_state,
         };
 
         // 在新任务中启动服务器

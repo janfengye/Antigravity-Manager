@@ -210,16 +210,23 @@ impl CliApp {
                     path: home.join(".claude").join("settings.json"),
                 },
             ],
-            CliApp::Codex => vec![
-                CliConfigFile {
-                    name: "auth.json".to_string(),
-                    path: home.join(".codex").join("auth.json"),
-                },
-                CliConfigFile {
-                    name: "config.toml".to_string(),
-                    path: home.join(".codex").join("config.toml"),
-                },
-            ],
+            CliApp::Codex => {
+                let codex_dir = if home.join(".chatgpt").exists() || !home.join(".codex").exists() {
+                    home.join(".chatgpt")
+                } else {
+                    home.join(".codex")
+                };
+                vec![
+                    CliConfigFile {
+                        name: "auth.json".to_string(),
+                        path: codex_dir.join("auth.json"),
+                    },
+                    CliConfigFile {
+                        name: "config.toml".to_string(),
+                        path: codex_dir.join("config.toml"),
+                    },
+                ]
+            },
             CliApp::Gemini => vec![
                 CliConfigFile {
                     name: ".env".to_string(),

@@ -24,6 +24,7 @@ function Settings() {
     const { config, loadConfig, saveConfig, updateLanguage, updateTheme } = useConfigStore();
     const { enable, disable, isEnabled } = useDebugConsole();
     const [activeTab, setActiveTab] = useState<'general' | 'account' | 'proxy' | 'advanced' | 'debug' | 'about'>('general');
+    const [appVersion, setAppVersion] = useState<string>('4.5.0');
     const [formData, setFormData] = useState<AppConfig>({
         language: 'zh',
         theme: 'system',
@@ -134,6 +135,13 @@ function Settings() {
                 setFormData(prev => ({ ...prev, auto_launch: enabled }));
             })
             .catch(err => console.error('Failed to get auto launch status:', err));
+
+        // 获取应用真实版本号
+        if (isTauri()) {
+            import('@tauri-apps/api/app').then(({ getVersion }) => {
+                getVersion().then(v => setAppVersion(v)).catch(() => {});
+            });
+        }
 
         // 检测是否通过 Homebrew Cask 安装 (仅 Tauri 环境)
         if (isTauri()) {
@@ -1405,7 +1413,7 @@ function Settings() {
                                     <div>
                                         <h3 className="text-3xl font-black text-gray-900 dark:text-base-content tracking-tight mb-2">{t('common.app_name', 'Antigravity Tools')}</h3>
                                         <div className="flex items-center justify-center gap-2 text-sm">
-                                            v4.4.9
+                                            v{appVersion}
                                             <span className="text-gray-400 dark:text-gray-600">•</span>
                                             <span className="text-gray-500 dark:text-gray-400">{t('settings.branding.subtitle')}</span>
                                         </div>
