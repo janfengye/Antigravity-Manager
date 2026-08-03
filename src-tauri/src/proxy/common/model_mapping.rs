@@ -150,23 +150,23 @@ pub async fn get_all_dynamic_models(
     use std::collections::HashSet;
     let mut model_ids = HashSet::new();
 
-    // 1. 获取所有自定义映射模型 (Custom)
-    {
-        let mapping = custom_mapping.read().await;
-        for key in mapping.keys() {
-            model_ids.insert(key.clone());
-        }
-    }
-
-    // 2. 获取所有账号从官方接口汇聚而来的动态模型 (Quota Models)
+    // 1. 获取所有账号从官方接口汇聚而来的动态模型 (Quota Models)
     if let Some(tm) = token_manager {
         for dynamic_model in tm.get_all_collected_models() {
             model_ids.insert(dynamic_model);
         }
     }
 
-    // 如果未开启 only_raw_quota_models，则追加内置映射别名与硬编码画画/变体模型
+    // 如果未开启 only_raw_quota_models，则追加 custom_mapping、内置映射别名与硬编码画画/变体模型
     if !only_raw_quota_models {
+        // 2. 获取所有自定义映射模型 (Custom)
+        {
+            let mapping = custom_mapping.read().await;
+            for key in mapping.keys() {
+                model_ids.insert(key.clone());
+            }
+        }
+
         // 3. 获取所有内置映射模型
         for m in get_supported_models() {
             model_ids.insert(m);
@@ -398,6 +398,27 @@ mod tests {
             map_claude_model_to_gemini("gemini-3-pro-low"),
             "gemini-3-pro-low"
         );
+    }
+
+    #[tokio::test]
+    async fn test_get_all_dynamic_models_only_raw_quota_models() {
+        let custom_mapping = tokio::sync::RwLock::new(
+            [("gpt-4o".to_string(), "gemini-3.1-pro-high".to_string())]
+                .into_iter()
+                .collect(),
+        );
+
+        // When only_raw_quota_models is TRUE, custom_mapping & built-in aliases (like gpt-4o) should be filtered out
+        let models_raw = get_all_dynamic_models(&custom_mapping, None, true).await;
+        assert!(!models_raw.contains(&"gpt-4o".to_string()));
+
+        // When only_raw_quota_models is FALSE, custom_mapping should be included
+        let models_all = get_all_dynamic_models(&custom_mapping, None, false).await;
+        assert!(models_all.contains(&"gpt-4o".to_string()));
+    }
+
+    #[test]
+    fn test_mappings_continued() {
         assert_eq!(
             map_claude_model_to_gemini("gemini-3.1-pro-high"),
             "gemini-pro-agent"

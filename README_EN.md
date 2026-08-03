@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> Professional AI Account Management & Protocol Proxy System (v4.5.0)
+> Professional AI Account Management & Protocol Proxy System (v4.5.1)
 
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
@@ -9,7 +9,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.5.0-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.5.1-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -144,7 +144,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **Supported formats**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **Advanced usage**: Install a specific version `curl -fsSL ... | bash -s -- --version 4.5.0`, dry-run mode `curl -fsSL ... | bash -s -- --dry-run`
+> **Advanced usage**: Install a specific version `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --version 4.5.1`, dry-run mode `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 If you have [Homebrew](https://brew.sh/) installed, you can also install via:
@@ -427,6 +427,17 @@ In clients that support OpenAI protocol (e.g., Cherry Studio), you can configure
 ## 📝 Developer & Community
 
 *   **Version History (Changelog)**:
+    *   **v4.5.1 (2026-08-03)**:
+        -   **[Bug Fix] Linux Wayland Self-Adaptive Tray Detection**:
+            -   Added automatic system library detection for `libayatana-appindicator3` / `libappindicator3` under Linux Wayland sessions. Tray is enabled automatically if libraries exist without requiring manual environment flags.
+            -   *Related Issue*: See [Issue #3278](https://github.com/lbjlaq/Antigravity-Manager/issues/3278).
+        -   **[Bug Fix] Fix Preset Aliases Restoration when Only Expose Raw Quota Models is Enabled**:
+            -   Updated `/v1/models` discovery logic to filter out `custom_mapping` preset aliases when `only_raw_quota_models` is enabled, ensuring strictly underlying physical Quota models are exposed.
+            -   *Related Issue*: See [Issue #3280](https://github.com/lbjlaq/Antigravity-Manager/issues/3280).
+        -   **[UX] macOS Tray Icon Light/Dark Theme Adaptation**:
+            -   Adapted to macOS menu bar Template Icon specification, supporting automatic icon color switching (dark/white) based on system appearance.
+            -   Re-extracted clean alpha shape of the core logo to eliminate black background blocks and blurry edges.
+            -   *Related Issue*: See [Issue #3283](https://github.com/lbjlaq/Antigravity-Manager/issues/3283).
     *   **v4.5.0 (2026-08-02)**:
         -   **[Bug Fix] Compatible with ChatGPT CLI (.chatgpt) Config Path & Sync**:
             -   Resolved issue where the latest OpenAI CLI renamed its config directory from `~/.codex/` to `~/.chatgpt/`, breaking one-click API Key and proxy BaseURL syncing. Added intelligent cascade discovery for both `~/.chatgpt` and `~/.codex` paths.

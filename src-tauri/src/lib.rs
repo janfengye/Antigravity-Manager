@@ -46,8 +46,25 @@ fn should_enable_tray() -> bool {
     #[cfg(target_os = "linux")]
     {
         if is_wayland_session() && !env_flag_enabled("ANTIGRAVITY_FORCE_TRAY") {
+            // 智能自适应检测：检查系统中是否存在有效的 AppIndicator / StatusNotifier 动态链接库
+            let has_appindicator = [
+                "/usr/lib/x86_64-linux-gnu/libayatana-appindicator3.so.1",
+                "/usr/lib/x86_64-linux-gnu/libappindicator3.so.1",
+                "/usr/lib64/libayatana-appindicator3.so.1",
+                "/usr/lib64/libappindicator3.so.1",
+                "/usr/lib/libayatana-appindicator3.so.1",
+                "/usr/lib/libappindicator3.so.1",
+            ]
+            .iter()
+            .any(|path| std::path::Path::new(path).exists());
+
+            if has_appindicator {
+                info!("Linux Wayland session detected with valid AppIndicator libraries. Enabling tray automatically.");
+                return true;
+            }
+
             warn!(
-                "Linux Wayland session detected; disabling tray by default to avoid GTK/AppIndicator crashes. Set ANTIGRAVITY_FORCE_TRAY=1 to force-enable."
+                "Linux Wayland session detected without AppIndicator libraries; disabling tray by default to avoid GTK crashes. Install libayatana-appindicator3 or set ANTIGRAVITY_FORCE_TRAY=1 to force-enable."
             );
             return false;
         }

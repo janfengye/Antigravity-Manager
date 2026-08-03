@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> 专业级 AI 账号管理与协议代理系统 (v4.5.0)
+> 专业级 AI 账号管理与协议代理系统 (v4.5.1)
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
 
@@ -8,7 +8,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.5.0-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.5.1-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -142,7 +142,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **支持的格式**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **高级用法**: 安装指定版本 `curl -fsSL ... | bash -s -- --version 4.5.0`，预览模式 `curl -fsSL ... | bash -s -- --dry-run`
+> **高级用法**: 安装指定版本 `curl -fsSL ... | bash -s -- --version 4.5.1`，预览模式 `curl -fsSL ... | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 如果您已安装 [Homebrew](https://brew.sh/)，也可以通过以下命令安装：
@@ -438,6 +438,17 @@ response = client.chat.completions.create(
 ## 📝 开发者与社区
 
 *   **版本演进 (Changelog)**:
+    *   **v4.5.1 (2026-08-03)**:
+        -   **[问题修复] Linux Wayland 环境托盘智能自适应感知**:
+            -   自动识别 Linux Wayland 环境下的 `libayatana-appindicator3` / `libappindicator3` 系统库。安装有托盘扩展库时自动正常启用托盘，无需手动配置环境变量；缺少依赖时安全防护避坑。
+            -   *相关 Issue*: 详见 [Issue #3278](https://github.com/lbjlaq/Antigravity-Manager/issues/3278)。
+        -   **[问题修复] 开启“仅暴露真实模型”时应用预设假模型还原缺陷**:
+            -   修正后端获取模型列表接口（`/v1/models`）的隔离逻辑，开启 `only_raw_quota_models` 时同步屏蔽 `custom_mapping` 中保存的硬编码别名，确保仅展现底层实际 Quota 物理模型。
+            -   *相关 Issue*: 详见 [Issue #3280](https://github.com/lbjlaq/Antigravity-Manager/issues/3280)。
+        -   **[体验优化] macOS 状态栏图标自适应深浅色主题**:
+            -   适配 macOS 状态栏 Template 图标规范，支持系统浅色（Light Mode）与深色（Dark Mode）外观自动切换图标颜色（深色/白色）。
+            -   重新精确提取核心 Logo 的透明 Alpha 形状，解决状态栏背景显示黑色块及模糊不清的问题。
+            -   *相关 Issue*: 详见 [Issue #3283](https://github.com/lbjlaq/Antigravity-Manager/issues/3283)。
     *   **v4.5.0 (2026-08-02)**:
         -   **[问题修复] 自动兼容 ChatGPT CLI (.chatgpt) 路径与配置同步**:
             -   解决最新版 OpenAI CLI 将配置路径由 `~/.codex/` 变更/重命名为 `~/.chatgpt/` 导致无法一键同步 API Key 与代理 URL 的问题。支持智能级联识别 `~/.chatgpt` 与 `~/.codex` 双路径。
