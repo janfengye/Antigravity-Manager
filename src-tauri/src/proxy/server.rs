@@ -372,6 +372,7 @@ impl AxumServer {
         integration: crate::modules::integration::SystemManager,
         cloudflared_state: Arc<crate::commands::cloudflared::CloudflaredState>,
         proxy_pool_config: crate::proxy::config::ProxyPoolConfig, // [NEW]
+        only_raw_quota_models: bool,
     ) -> Result<(Self, tokio::task::JoinHandle<()>), String> {
         let custom_mapping_state = Arc::new(tokio::sync::RwLock::new(custom_mapping));
         let proxy_state = Arc::new(tokio::sync::RwLock::new(upstream_proxy.clone()));
@@ -389,7 +390,7 @@ impl AxumServer {
         let debug_logging_state = Arc::new(RwLock::new(debug_logging));
         let is_running_state = Arc::new(RwLock::new(false));
 
-        let only_raw_quota_models_state = Arc::new(tokio::sync::RwLock::new(false));
+        let only_raw_quota_models_state = Arc::new(tokio::sync::RwLock::new(only_raw_quota_models));
 
         let state = AppState {
             token_manager: token_manager.clone(),

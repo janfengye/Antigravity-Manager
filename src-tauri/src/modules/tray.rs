@@ -71,7 +71,7 @@ pub fn create_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
         .menu(&menu)
         .show_menu_on_left_click(false)
         .icon(icon)
-        .icon_as_template(true)
+        .icon_as_template(cfg!(target_os = "macos"))
         .on_menu_event(move |app, event| {
             let app_handle = app.clone();
             match event.id().as_ref() {

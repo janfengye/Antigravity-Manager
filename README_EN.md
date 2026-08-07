@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> Professional AI Account Management & Protocol Proxy System (v4.5.1)
+> Professional AI Account Management & Protocol Proxy System (v4.5.2)
 
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
@@ -9,7 +9,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.5.1-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.5.2-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -144,7 +144,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **Supported formats**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **Advanced usage**: Install a specific version `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --version 4.5.1`, dry-run mode `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --dry-run`
+> **Advanced usage**: Install a specific version `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --version 4.5.2`, dry-run mode `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 If you have [Homebrew](https://brew.sh/) installed, you can also install via:
@@ -427,6 +427,13 @@ In clients that support OpenAI protocol (e.g., Cherry Studio), you can configure
 ## 📝 Developer & Community
 
 *   **Version History (Changelog)**:
+    *   **v4.5.2 (2026-08-07)**:
+        -   **[Bug Fix] Fix "Only Expose Raw Quota Models" Config Not Applied After App Restart**:
+            -   Fixed issue where `AxumServer` hardcoded initial `only_raw_quota_models` state to `false` during startup. The service now correctly inherits and applies the `proxy.only_raw_quota_models` value from configuration upon launch without requiring manual toggle re-clicks.
+            -   *Related Issue*: See [Issue #3285](https://github.com/lbjlaq/Antigravity-Manager/issues/3285).
+        -   **[Bug Fix] Fix Linux AppImage Solid Black Tray Icon Display Issue**:
+            -   Restricted the `icon_as_template` tray property to macOS target only. Resolved the issue where GTK and AppIndicator under Ubuntu / AppImage environments forcibly applied a monochrome mask over non-template RGBA PNG tray icons, causing them to render as solid black squares.
+            -   *Related Issue*: See [Issue #3285](https://github.com/lbjlaq/Antigravity-Manager/issues/3285) & [Issue #3286](https://github.com/lbjlaq/Antigravity-Manager/issues/3286).
     *   **v4.5.1 (2026-08-03)**:
         -   **[Bug Fix] Linux Wayland Self-Adaptive Tray Detection**:
             -   Added automatic system library detection for `libayatana-appindicator3` / `libappindicator3` under Linux Wayland sessions. Tray is enabled automatically if libraries exist without requiring manual environment flags.

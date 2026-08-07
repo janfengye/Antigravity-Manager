@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> 专业级 AI 账号管理与协议代理系统 (v4.5.1)
+> 专业级 AI 账号管理与协议代理系统 (v4.5.2)
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
 
@@ -8,7 +8,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.5.1-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.5.2-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -142,7 +142,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **支持的格式**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **高级用法**: 安装指定版本 `curl -fsSL ... | bash -s -- --version 4.5.1`，预览模式 `curl -fsSL ... | bash -s -- --dry-run`
+> **高级用法**: 安装指定版本 `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --version 4.5.2`，预览模式 `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 如果您已安装 [Homebrew](https://brew.sh/)，也可以通过以下命令安装：
@@ -438,6 +438,13 @@ response = client.chat.completions.create(
 ## 📝 开发者与社区
 
 *   **版本演进 (Changelog)**:
+    *   **v4.5.2 (2026-08-07)**:
+        -   **[问题修复] 修复“仅暴露真实模型”配置重启后未自动生效缺陷**:
+            -   修复 `AxumServer` 启动时硬编码 `only_raw_quota_models` 初始状态为 `false` 的问题。服务启动时正确继承并应用配置文件中的 `proxy.only_raw_quota_models` 设置，无需在界面重新手动点击开关即可自动保持生效。
+            -   *相关 Issue*: 详见 [Issue #3285](https://github.com/lbjlaq/Antigravity-Manager/issues/3285)。
+        -   **[问题修复] 修复 Linux AppImage 模式下托盘图标显示为纯黑方块问题**:
+            -   修正 Linux 环境下托盘图标模板属性设置，将原本全局开启的 `icon_as_template` 限定为仅在 macOS 下启用。修复在 Ubuntu / AppImage 环境下 GTK 及 AppIndicator 强制应用遮罩导致托盘图标渲染为纯黑色方块的问题。
+            -   *相关 Issue*: 详见 [Issue #3286](https://github.com/lbjlaq/Antigravity-Manager/issues/3286)。
     *   **v4.5.1 (2026-08-03)**:
         -   **[问题修复] Linux Wayland 环境托盘智能自适应感知**:
             -   自动识别 Linux Wayland 环境下的 `libayatana-appindicator3` / `libappindicator3` 系统库。安装有托盘扩展库时自动正常启用托盘，无需手动配置环境变量；缺少依赖时安全防护避坑。
