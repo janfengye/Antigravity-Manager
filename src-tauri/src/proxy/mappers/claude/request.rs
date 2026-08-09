@@ -495,13 +495,7 @@ pub fn transform_claude_request_in(
     // Only models with "-thinking" suffix or Claude models support thinking
     // Regular Gemini models (gemini-2.5-flash, gemini-2.5-pro) do NOT support thinking
     // [FIX #1557] Allow "pro" models (e.g. gemini-3-pro, gemini-2.0-pro) to be recognized as thinking capable
-    let target_model_supports_thinking = mapped_model.contains("-thinking")
-        || mapped_model.starts_with("claude-")
-        || mapped_model.contains("gemini-2.0-pro")
-        || (mapped_model.contains("gemini-3-pro") && !mapped_model.contains("-high") && !mapped_model.contains("-low"))
-        || (mapped_model.contains("gemini-3.1-pro") && !mapped_model.contains("-high") && !mapped_model.contains("-low"))
-        // [FIX #2167] gemini-*-flash 支持 thinking，必须纳入识别范围
-        || (mapped_model.contains("gemini") && (mapped_model.contains("flash") || mapped_model.contains("-flash-")));
+    let target_model_supports_thinking = model_supports_thinking(&mapped_model);
 
     if is_thinking_enabled && !target_model_supports_thinking {
         tracing::warn!(
@@ -562,13 +556,11 @@ pub fn transform_claude_request_in(
                 &session_id,
             )
         {
-            // [FIX #2167] Flash 模型无签名时使用哨兵值而不是禁用 thinking
+            // [FIX #2167] Flash / gemini-pro-agent 无签名时使用哨兵值而不是禁用 thinking
             // 禁用 thinking 会导致模型失去思考能力，哨兵值可让 Gemini 跳过签名校验
-            let is_flash_model = mapped_model.contains("gemini-3-flash")
-                || mapped_model.contains("gemini-3.1-flash");
-            if is_flash_model {
+            if model_keeps_thinking_without_signature(&mapped_model) {
                 tracing::info!(
-                    "[Thinking-Mode] [FIX #2167] No signature for flash model function calls. \
+                    "[Thinking-Mode] [FIX #2167] No signature for model function calls. \
                      Will rely on sentinel injection in build_contents."
                 );
                 // 保持 is_thinking_enabled = true，由 build_contents 内的哨兵处理覆盖
@@ -772,6 +764,42 @@ fn should_enable_thinking_by_default(model: &str) -> bool {
     }
 
     false
+}
+
+/// Whether the mapped target model supports Gemini `thinkingConfig`.
+///
+/// `gemini-pro-agent` is the mapped target of `gemini-3.1-pro-high` /
+/// `gemini-3-pro-high` (`model_mapping.rs`) and is a forced-thinking Pro agent
+/// model. It is kept in sync with the OpenAI protocol path
+/// (`openai/request.rs` `is_gemini_3_thinking` includes `-pro-agent`) and the
+/// model spec `SPEC_PRO_AGENT { include_thoughts: true }` (`variant_mapping.rs`).
+fn model_supports_thinking(mapped_model: &str) -> bool {
+    mapped_model.contains("-thinking")
+        || mapped_model.starts_with("claude-")
+        || mapped_model.contains("gemini-2.0-pro")
+        || mapped_model.contains("gemini-pro-agent")
+        || (mapped_model.contains("gemini-3-pro")
+            && !mapped_model.contains("-high")
+            && !mapped_model.contains("-low"))
+        || (mapped_model.contains("gemini-3.1-pro")
+            && !mapped_model.contains("-high")
+            && !mapped_model.contains("-low"))
+        // [FIX #2167] gemini-*-flash 支持 thinking，必须纳入识别范围
+        || (mapped_model.contains("gemini")
+            && (mapped_model.contains("flash") || mapped_model.contains("-flash-")))
+}
+
+/// Whether a model should keep thinking enabled (and rely on the
+/// `skip_thought_signature_validator` sentinel injected by `build_contents`)
+/// when no valid signature is available, instead of disabling thinking.
+///
+/// `gemini-pro-agent` is a forced-thinking model: disabling thinking leaves
+/// historical `functionCall` parts without `thought_signature`, which Gemini
+/// rejects with HTTP 400.
+fn model_keeps_thinking_without_signature(mapped_model: &str) -> bool {
+    mapped_model.contains("gemini-3-flash")
+        || mapped_model.contains("gemini-3.1-flash")
+        || mapped_model.contains("gemini-pro-agent")
 }
 
 /// Minimum length for a valid thought_signature
@@ -3184,5 +3212,35 @@ mod tests {
             "Older Gemini models should NOT have mixed tools"
         );
         assert!(has_functions);
+    }
+
+    #[test]
+    fn test_model_supports_thinking() {
+        // gemini-pro-agent is the mapped target of gemini-3.1-pro-high /
+        // gemini-3-pro-high and is a forced-thinking Pro agent model.
+        assert!(model_supports_thinking("gemini-pro-agent"));
+        assert!(model_supports_thinking("gemini-3-pro"));
+        assert!(model_supports_thinking("gemini-3-pro-preview"));
+        assert!(model_supports_thinking("gemini-3.1-pro"));
+        assert!(model_supports_thinking("gemini-3.1-pro-preview"));
+        assert!(model_supports_thinking("gemini-2.0-pro"));
+        assert!(model_supports_thinking("gemini-3-flash"));
+        assert!(model_supports_thinking("gemini-3.1-flash"));
+        assert!(model_supports_thinking("claude-opus-4-6-thinking"));
+
+        // Regular non-thinking Gemini models stay excluded.
+        assert!(!model_supports_thinking("gemini-2.5-pro"));
+        assert!(!model_supports_thinking("gemini-1.5-pro"));
+    }
+
+    #[test]
+    fn test_model_keeps_thinking_without_signature() {
+        assert!(model_keeps_thinking_without_signature("gemini-3-flash"));
+        assert!(model_keeps_thinking_without_signature("gemini-3.1-flash"));
+        assert!(model_keeps_thinking_without_signature("gemini-pro-agent"));
+        assert!(!model_keeps_thinking_without_signature("gemini-3.1-pro"));
+        assert!(!model_keeps_thinking_without_signature(
+            "gemini-3.1-pro-preview"
+        ));
     }
 }
