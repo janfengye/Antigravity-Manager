@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> 专业级 AI 账号管理与协议代理系统 (v4.5.3)
+> 专业级 AI 账号管理与协议代理系统 (v4.5.4)
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
 
@@ -8,7 +8,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.5.3-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.5.4-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -142,7 +142,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **支持的格式**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **高级用法**: 安装指定版本 `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --version 4.5.3`，预览模式 `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --dry-run`
+> **高级用法**: 安装指定版本 `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --version 4.5.4`，预览模式 `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 如果您已安装 [Homebrew](https://brew.sh/)，也可以通过以下命令安装：
@@ -438,6 +438,10 @@ response = client.chat.completions.create(
 ## 📝 开发者与社区
 
 *   **版本演进 (Changelog)**:
+    *   **v4.5.4 (2026-08-10)**:
+        -   **[核心修复] 解决自适应熔断器设置输入框高频 IPC 调用导致前端 UI 卡死的 Bug (Circuit Breaker Input Freeze Fix)**:
+            -   **修改输入事件解耦与防抖**: 修正 `CircuitBreaker.tsx` 数字输入框绑定的 `onChange` 实时保存机制。修改为使用本地内部状态配合 `onBlur` 离开焦点时保存，避免用户连续编辑退避秒数时向 Rust 后端密集发送 `save_config` IPC 请求并导致应用界面冻结卡死。
+            -   *相关 Issue*: 详见 [Issue #3290](https://github.com/lbjlaq/Antigravity-Manager/issues/3290)。
     *   **v4.5.3 (2026-08-09)**:
         -   **[核心修复] 解决 Claude 协议接口下使用 gemini-pro-agent 触发 thought_signature 400 报错的 Bug (Claude gemini-pro-agent Thinking Model Fix)**:
             -   **思维模型判定范围补全**: 将 `gemini-pro-agent`（对应 `gemini-3.1-pro-high` / `gemini-3-pro-high` 等模型的映射目标）纳入 Claude 协议请求处理器的 Thinking 支持清单，解决此前因误判为非 Thinking 模型导致 `is_thinking_enabled` 被强制关闭的问题。

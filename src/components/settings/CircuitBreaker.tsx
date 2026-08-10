@@ -102,8 +102,9 @@ export default function CircuitBreaker({
                                 <div className="relative">
                                     <input
                                         type="number"
-                                        value={seconds}
-                                        onChange={(e) => handleLevelChange(idx, e.target.value)}
+                                        defaultValue={seconds}
+                                        key={`${idx}-${seconds}`}
+                                        onBlur={(e) => handleLevelChange(idx, e.target.value)}
                                         className="w-full bg-white dark:bg-base-100 border border-gray-200 dark:border-gray-700 rounded-lg px-3 py-1.5 text-sm font-mono focus:ring-2 focus:ring-blue-500/20 outline-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                         min="0"
                                     />

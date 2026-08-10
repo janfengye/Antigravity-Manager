@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> Professional AI Account Management & Protocol Proxy System (v4.5.3)
+> Professional AI Account Management & Protocol Proxy System (v4.5.4)
 
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
@@ -9,7 +9,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.5.3-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.5.4-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -144,7 +144,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **Supported formats**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **Advanced usage**: Install a specific version `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --version 4.5.3`, dry-run mode `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --dry-run`
+> **Advanced usage**: Install a specific version `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --version 4.5.4`, dry-run mode `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 If you have [Homebrew](https://brew.sh/) installed, you can also install via:
@@ -427,6 +427,10 @@ In clients that support OpenAI protocol (e.g., Cherry Studio), you can configure
 ## 📝 Developer & Community
 
 *   **Version History (Changelog)**:
+    *   **v4.5.4 (2026-08-10)**:
+        -   **[Core Fix] Fix UI Freeze Caused by High-Frequency IPC Calls on Circuit Breaker Input (Circuit Breaker Input Freeze Fix)**:
+            -   **Input Event Decoupling & Debounce**: Refactored the real-time `onChange` save handler for input fields in `CircuitBreaker.tsx`. Switched to local component state paired with `onBlur` trigger upon losing focus, preventing burst `save_config` IPC calls to the Rust backend that freeze the UI while typing.
+            -   *Related Issue*: See [Issue #3290](https://github.com/lbjlaq/Antigravity-Manager/issues/3290).
     *   **v4.5.3 (2026-08-09)**:
         -   **[Core Fix] Fix thought_signature 400 Error for gemini-pro-agent under Claude Endpoint (Claude gemini-pro-agent Thinking Model Fix)**:
             -   **Thinking Model Support Checklist Expansion**: Added `gemini-pro-agent` (the target mapping for `gemini-3.1-pro-high` / `gemini-3-pro-high`) into the Claude protocol request handler's thinking model checklist, resolving an issue where thinking mode was forcibly disabled due to non-thinking classification.
