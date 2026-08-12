@@ -3,7 +3,7 @@ use axum::{
     extract::State,
     extract::{Json, Path},
     http::StatusCode,
-    response::IntoResponse,
+    response::{IntoResponse, Response},
 };
 use serde_json::{json, Value};
 use tracing::{debug, error, info};
@@ -53,6 +53,11 @@ pub async fn handle_generate(
     }
 
     // 1. 验证方法
+    // [NEW] :countTokens 冒号语法，直接代理到上游 v1internal:countTokens
+    if method == "countTokens" {
+        return execute_count_tokens(state, model_name, body).await;
+    }
+
     if method != "generateContent" && method != "streamGenerateContent" {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -750,15 +755,55 @@ pub async fn handle_get_model(Path(model_name): Path<String>) -> impl IntoRespon
     }))
 }
 
+/// 处理 /countTokens 斜杠语法路由
+/// 委托给 execute_count_tokens，与 :countTokens 冒号语法共用同一实现
 pub async fn handle_count_tokens(
     State(state): State<AppState>,
-    Path(_model_name): Path<String>,
-    Json(_body): Json<Value>,
-) -> Result<impl IntoResponse, (StatusCode, String)> {
-    let model_group = "gemini";
-    let (_access_token, _project_id, _, _, _wait_ms) = state
+    Path(model_name): Path<String>,
+    Json(body): Json<Value>,
+) -> Response {
+    match execute_count_tokens(state, model_name, body).await {
+        Ok(resp) => resp,
+        Err((status, msg)) => (status, Json(json!({ "error": msg }))).into_response(),
+    }
+}
+
+/// 核心 countTokens 实现：透明代理到上游 v1internal:countTokens
+///
+/// 获取有效 OAuth Token，将标准 Gemini 请求体包装为 v1internal 格式后转发，
+/// 返回真实的 token 计数，而不是硬编码的 0
+pub async fn execute_count_tokens(
+    state: AppState,
+    model_name: String,
+    body: Value,
+) -> Result<Response, (StatusCode, String)> {
+    // 1. 模型路由解析
+    let mapped_model = crate::proxy::common::model_mapping::resolve_model_route(
+        &model_name,
+        &*state.custom_mapping.read().await,
+    );
+
+    // 2. 解析请求配置并获取 Token
+    let config = crate::proxy::mappers::common_utils::resolve_request_config(
+        &model_name,
+        &mapped_model,
+        &None,
+        None,
+        None,
+        None,
+        Some(&body),
+    );
+
+    let session_id = SessionManager::extract_gemini_session_id(&body, &model_name);
+
+    let (access_token, _project_id, email, account_id, _wait_ms) = state
         .token_manager
-        .get_token(model_group, false, None, "gemini")
+        .get_token(
+            &config.request_type,
+            false,
+            Some(&session_id),
+            &config.final_model,
+        )
         .await
         .map_err(|e| {
             (
@@ -767,5 +812,66 @@ pub async fn handle_count_tokens(
             )
         })?;
 
-    Ok(Json(json!({"totalTokens": 0})))
+    // 3. 包装为 v1internal 格式
+    // [已验证] countTokens 与 generateContent 不同: 顶层只允许 "request" 键,
+    // 携带 model/project 会被上游 400 拒绝 (Unknown name "model"/"project");
+    // request 内的 safetySettings 同样不被接受 (对齐 CLIProxyAPI 的处理)
+    let mut inner_body = body;
+    if let Some(obj) = inner_body.as_object_mut() {
+        obj.remove("safetySettings");
+    }
+    let wrapped_body = json!({
+        "request": inner_body,
+    });
+
+    // 4. 调用上游 v1internal:countTokens
+    let call_result = state
+        .upstream
+        .call_v1_internal_with_headers(
+            "countTokens",
+            &access_token,
+            wrapped_body,
+            None,
+            std::collections::HashMap::new(),
+            Some(account_id.as_str()),
+        )
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                format!("Upstream call error: {}", e),
+            )
+        })?;
+
+    let response = call_result.response;
+    let status = response.status();
+
+    if !status.is_success() {
+        let err_text = response.text().await.unwrap_or_default();
+        return Err((status, format!("Upstream countTokens error: {}", err_text)));
+    }
+
+    let gemini_resp: Value = response
+        .json()
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Parse error: {}", e)))?;
+
+    // 5. 提取 totalTokens (兼容 wrapped / unwrapped 两种响应格式)
+    let total_tokens = gemini_resp
+        .get("response")
+        .and_then(|r| r.get("totalTokens"))
+        .or_else(|| gemini_resp.get("totalTokens"))
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+
+    // 6. 返回标准 Gemini REST 响应
+    Ok((
+        StatusCode::OK,
+        [
+            ("X-Account-Email", email.as_str()),
+            ("X-Mapped-Model", mapped_model.as_str()),
+        ],
+        Json(json!({ "totalTokens": total_tokens })),
+    )
+        .into_response())
 }

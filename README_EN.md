@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> Professional AI Account Management & Protocol Proxy System (v4.5.4)
+> Professional AI Account Management & Protocol Proxy System (v4.5.5)
 
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
@@ -9,7 +9,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.5.4-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.5.5-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -144,7 +144,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **Supported formats**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **Advanced usage**: Install a specific version `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --version 4.5.4`, dry-run mode `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --dry-run`
+> **Advanced usage**: Install a specific version `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --version 4.5.5`, dry-run mode `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 If you have [Homebrew](https://brew.sh/) installed, you can also install via:
@@ -427,6 +427,15 @@ In clients that support OpenAI protocol (e.g., Cherry Studio), you can configure
 ## 📝 Developer & Community
 
 *   **Version History (Changelog)**:
+    *   **v4.5.5 (2026-08-12)**:
+        -   **[Core Feature] Proxy Gemini countTokens Requests to Real Upstream (Gemini countTokens Upstream Proxy)**:
+            -   **Real Token Count Proxying**: Refactored `/countTokens` (slash syntax, which previously returned hardcoded `{"totalTokens": 0}`) and `:countTokens` (colon syntax, which returned 400 rejection) to proxy requests to upstream `v1internal:countTokens`, returning real token usage statistics.
+            -   **Protocol Format & SafetySettings Stripping**: Top-level request structure now strictly wraps `request` and strips `safetySettings` per upstream protocol specification to prevent 400 errors, with support for parsing both flat and nested `response` totalTokens shapes.
+            -   *Related PR*: See [PR #3295](https://github.com/lbjlaq/Antigravity-Manager/pull/3295).
+        -   **[Build Fix] Repair Dockerfile.backend Local Build Failure (Dockerfile.backend Build Fix)**:
+            -   **Complete Rust/C Build Toolchain**: Added `perl`, `cmake`, `golang-go`, `clang`, `libclang-dev`, and `git` to the `Dockerfile.backend` builder stage to resolve cargo build panic in `rquest` / `boring-sys2`.
+            -   **Compile-Time Asset Dependency & BuildKit Fixes**: Created placeholder `/app/dist/index.html` to satisfy Tauri compile-time check and hoisted `ARG FRONTEND_IMAGE` before the first `FROM` for Docker BuildKit (29.x) compatibility.
+            -   *Related PR*: See [PR #3296](https://github.com/lbjlaq/Antigravity-Manager/pull/3296).
     *   **v4.5.4 (2026-08-10)**:
         -   **[Core Fix] Fix UI Freeze Caused by High-Frequency IPC Calls on Circuit Breaker Input (Circuit Breaker Input Freeze Fix)**:
             -   **Input Event Decoupling & Debounce**: Refactored the real-time `onChange` save handler for input fields in `CircuitBreaker.tsx`. Switched to local component state paired with `onBlur` trigger upon losing focus, preventing burst `save_config` IPC calls to the Rust backend that freeze the UI while typing.

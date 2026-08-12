@@ -1,4 +1,5 @@
 # --- Backend Build Stage (no frontend build) ---
+ARG FRONTEND_IMAGE=antigravity-manager:latest
 FROM rust:1-slim-bookworm AS backend-builder
 ARG USE_MIRROR=auto
 
@@ -25,6 +26,12 @@ RUN apt-get update && apt-get install -y \
     librsvg2-dev \
     libsoup-3.0-dev \
     libjavascriptcoregtk-4.1-dev \
+    perl \
+    cmake \
+    golang-go \
+    clang \
+    libclang-dev \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 # Use Aliyun mirror for Cargo if needed (Sparse Index)
@@ -40,6 +47,10 @@ RUN if [ "$USE_MIRROR" = "true" ] || ( [ "$USE_MIRROR" = "auto" ] && ! timeout 3
 WORKDIR /app
 COPY src-tauri ./src-tauri
 COPY src/locales ./src/locales
+
+# tauri::generate_context! requires ../dist to exist at compile time.
+# The real frontend dist is provided at runtime via ABV_DIST_PATH.
+RUN mkdir -p /app/dist && echo '<html><body>placeholder</body></html>' > /app/dist/index.html
 
 WORKDIR /app/src-tauri
 RUN --mount=type=cache,target=/root/.cargo/registry \

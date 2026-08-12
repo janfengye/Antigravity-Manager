@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> 专业级 AI 账号管理与协议代理系统 (v4.5.4)
+> 专业级 AI 账号管理与协议代理系统 (v4.5.5)
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
 
@@ -8,7 +8,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.5.4-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.5.5-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -142,7 +142,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **支持的格式**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **高级用法**: 安装指定版本 `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --version 4.5.4`，预览模式 `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --dry-run`
+> **高级用法**: 安装指定版本 `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --version 4.5.5`，预览模式 `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 如果您已安装 [Homebrew](https://brew.sh/)，也可以通过以下命令安装：
@@ -438,6 +438,15 @@ response = client.chat.completions.create(
 ## 📝 开发者与社区
 
 *   **版本演进 (Changelog)**:
+    *   **v4.5.5 (2026-08-12)**:
+        -   **[核心功能] 支持 Gemini countTokens 端点透明代理到真实上游 (Gemini countTokens Upstream Proxy)**:
+            -   **全面代理真实 Token 计数**: 将原本硬编码返回 `{"totalTokens": 0}` 的 `/countTokens`（斜杠语法）以及直接拒绝返回 400 的 `:countTokens`（冒号语法）统一代理到上游 `v1internal:countTokens` 端点，返回真实的 Token 统计数据。
+            -   **协议格式适配与字段剥离**: 依据上游协议约束规范，顶层只保留 `request` 包装并剔除 `safetySettings`，防止上游返回 400 错误，并兼容顶层及嵌套 `response` 格式的计数解析。
+            -   *相关 PR*: 详见 [PR #3295](https://github.com/lbjlaq/Antigravity-Manager/pull/3295)。
+        -   **[构建修复] 修复后端容器镜像本地构建失败缺陷 (Dockerfile.backend Build Fix)**:
+            -   **补全 Rust/C 原生依赖工具链**: 为 `Dockerfile.backend` 的 builder 阶段补充 `perl`, `cmake`, `golang-go`, `clang`, `libclang-dev`, `git` 编译工具链，修复 `rquest` / `boring-sys2` 在本地构建时的编译 panic。
+            -   **解决编译期前端产物依赖及 BuildKit 兼容性**: 增加占位 `/app/dist/index.html` 满足 Tauri 编译期路径检查，并将 `ARG FRONTEND_IMAGE` 置于首个 `FROM` 之前以兼容新版 Docker BuildKit (29.x)。
+            -   *相关 PR*: 详见 [PR #3296](https://github.com/lbjlaq/Antigravity-Manager/pull/3296)。
     *   **v4.5.4 (2026-08-10)**:
         -   **[核心修复] 解决自适应熔断器设置输入框高频 IPC 调用导致前端 UI 卡死的 Bug (Circuit Breaker Input Freeze Fix)**:
             -   **修改输入事件解耦与防抖**: 修正 `CircuitBreaker.tsx` 数字输入框绑定的 `onChange` 实时保存机制。修改为使用本地内部状态配合 `onBlur` 离开焦点时保存，避免用户连续编辑退避秒数时向 Rust 后端密集发送 `save_config` IPC 请求并导致应用界面冻结卡死。
