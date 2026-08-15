@@ -405,6 +405,107 @@ fn write_to_system_keyring(account: &crate::models::Account) -> Result<(), Strin
     crate::modules::logger::log_info(
         "[Desktop] Successfully wrote token to system credential store.",
     );
+
+    // 同步写入 ~/.gemini/ 目录下的文件凭据，兼容 SSH 会话、容器环境和无 Keyring/D-Bus 场景
+    if let Err(e) = write_to_file_credentials(account) {
+        crate::modules::logger::log_warn(&format!(
+            "[Desktop] File credential sync warning: {}",
+            e
+        ));
+    }
+
+    Ok(())
+}
+
+/// 辅助方法：同步写入本地文件凭据 (~/.gemini/oauth_creds.json 以及 ~/.gemini/google_accounts.json)
+/// 用于在 SSH 会话、容器环境或无系统 Keyring / D-Bus 的场景下保障 CLI/工具的凭据兼容性
+fn write_to_file_credentials(account: &crate::models::Account) -> Result<(), String> {
+    let home = match dirs::home_dir() {
+        Some(h) => h,
+        None => return Err("Failed to resolve user home directory".to_string()),
+    };
+    let gemini_dir = home.join(".gemini");
+
+    if !gemini_dir.exists() {
+        if let Err(e) = std::fs::create_dir_all(&gemini_dir) {
+            crate::modules::logger::log_warn(&format!(
+                "[Desktop] Failed to create .gemini directory: {}",
+                e
+            ));
+            return Err(format!("Failed to create .gemini directory: {}", e));
+        }
+    }
+
+    let expiry_ms = if account.token.expiry_timestamp > 10_000_000_000 {
+        account.token.expiry_timestamp
+    } else {
+        account.token.expiry_timestamp * 1000
+    };
+
+    #[derive(serde::Serialize)]
+    struct OAuthCredsFile {
+        access_token: String,
+        refresh_token: String,
+        token_type: String,
+        expiry_date: i64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id_token: Option<String>,
+        scope: String,
+    }
+
+    let creds = OAuthCredsFile {
+        access_token: account.token.access_token.clone(),
+        refresh_token: account.token.refresh_token.clone(),
+        token_type: "Bearer".to_string(),
+        expiry_date: expiry_ms,
+        id_token: account.token.id_token.clone(),
+        scope: "https://www.googleapis.com/auth/userinfo.email openid https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.profile".to_string(),
+    };
+
+    let creds_path = gemini_dir.join("oauth_creds.json");
+    let json_str = serde_json::to_string_pretty(&creds)
+        .map_err(|e| format!("Failed to serialize oauth_creds JSON: {}", e))?;
+
+    if let Err(e) = std::fs::write(&creds_path, json_str) {
+        crate::modules::logger::log_warn(&format!(
+            "[Desktop] Failed to write oauth_creds.json: {}",
+            e
+        ));
+        return Err(format!("Failed to write oauth_creds.json: {}", e));
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&creds_path, std::fs::Permissions::from_mode(0o600));
+    }
+
+    #[derive(serde::Serialize)]
+    struct GoogleAccountsFile {
+        active: String,
+        old: Vec<String>,
+    }
+
+    let accounts_info = GoogleAccountsFile {
+        active: account.email.clone(),
+        old: vec![],
+    };
+
+    let accounts_path = gemini_dir.join("google_accounts.json");
+    if let Ok(accounts_json_str) = serde_json::to_string_pretty(&accounts_info) {
+        let _ = std::fs::write(&accounts_path, accounts_json_str);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&accounts_path, std::fs::Permissions::from_mode(0o600));
+        }
+    }
+
+    crate::modules::logger::log_info(&format!(
+        "[Desktop] Successfully synced file-based credentials to ~/.gemini/oauth_creds.json for: {}",
+        account.email
+    ));
+
     Ok(())
 }
 

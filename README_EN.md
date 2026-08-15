@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> Professional AI Account Management & Protocol Proxy System (v4.5.5)
+> Professional AI Account Management & Protocol Proxy System (v4.5.6)
 
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
@@ -9,7 +9,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.5.5-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.5.6-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -144,7 +144,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **Supported formats**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **Advanced usage**: Install a specific version `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --version 4.5.5`, dry-run mode `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --dry-run`
+> **Advanced usage**: Install a specific version `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --version 4.5.6`, dry-run mode `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 If you have [Homebrew](https://brew.sh/) installed, you can also install via:
@@ -427,6 +427,23 @@ In clients that support OpenAI protocol (e.g., Cherry Studio), you can configure
 ## 📝 Developer & Community
 
 *   **Version History (Changelog)**:
+    *   **v4.5.6 (2026-08-15)**:
+        -   **[Core Optimization] Sync File-Based Credentials on Account Switch (Sync File-Based Credentials on Account Switch)**:
+            -   **SSH & Headless Container Support**: Fixed an issue where running CLI (`agy`) over SSH sessions, containers, or environments without D-Bus/Keyring fell back to `~/.gemini/oauth_creds.json` and failed to pick up GUI account switches.
+            -   **Dual Credential Sync & Permission Hardening**: Automatically syncs `~/.gemini/oauth_creds.json` and `~/.gemini/google_accounts.json` alongside system Keyring updates, enforcing strict `0o600` permissions on Unix systems.
+            -   *Related PR*: See [PR #3297](https://github.com/lbjlaq/Antigravity-Manager/pull/3297).
+        -   **[Core Fix] Harden OpenAI Responses API Compatibility Across Input & Output (OpenAI Responses API Hardening)**:
+            -   **Permissive Input Normalization**: Graciously accepts message items without explicit `type` fields, and supports string or array `content` shapes (preserving image parts).
+            -   **Terminal Assistant Prefill Guard**: Rewrites terminal plain-text assistant prefill messages to avoid upstream 400 rejection, and cleanly prunes orphan leading tool history artifacts.
+            -   **Standard Responses Output**: Unifies streaming and non-streaming converters to emit standard Responses `output_text`, `refusal`, `reasoning`, and top-level `function_call` items, preventing blank responses and dropped tool calls.
+            -   *Related PR*: See [PR #3305](https://github.com/lbjlaq/Antigravity-Manager/pull/3305) (Fixes [#3302](https://github.com/lbjlaq/Antigravity-Manager/issues/3302), [#3303](https://github.com/lbjlaq/Antigravity-Manager/issues/3303), [#3304](https://github.com/lbjlaq/Antigravity-Manager/issues/3304)).
+        -   **[Bug Fix] Align Tool Config with Google v1internal Schema and Fix Mixed-Tool 400 Errors (v1internal ToolConfig Alignment)**:
+            -   **Google ToolConfig Schema Alignment**: Injects both `includeServerSideToolInvocations` (camelCase) and `include_server_side_tool_invocations` (snake_case) across Claude, Gemini, and OpenAI adapter layers.
+            -   **Prevent Mixed-Tool 400 Rejections**: Disables simultaneous Function Calling and Google Search under the restricted `v1internal` architecture to prevent upstream `400 Bad Request`.
+            -   *Related PR*: See [PR #3306](https://github.com/lbjlaq/Antigravity-Manager/pull/3306).
+        -   **[Bug Fix] Fix Linux/Windows Solid Black Tray Icon Display Issue (Tray Icon Platform Isolation)**:
+            -   **Platform Icon Loading Isolation**: Loads `tray-icon.png` with `icon_as_template(true)` exclusively on macOS for dark/light menubar adaptive coloring; loads full-color `icon.png` without template mode on Windows / Linux, resolving solid black icon square artifacts in system taskbars.
+            -   *Related Issue*: See [Issue #3286](https://github.com/lbjlaq/Antigravity-Manager/issues/3286), [Issue #3310](https://github.com/lbjlaq/Antigravity-Manager/issues/3310)。
     *   **v4.5.5 (2026-08-12)**:
         -   **[Core Feature] Proxy Gemini countTokens Requests to Real Upstream (Gemini countTokens Upstream Proxy)**:
             -   **Real Token Count Proxying**: Refactored `/countTokens` (slash syntax, which previously returned hardcoded `{"totalTokens": 0}`) and `:countTokens` (colon syntax, which returned 400 rejection) to proxy requests to upstream `v1internal:countTokens`, returning real token usage statistics.

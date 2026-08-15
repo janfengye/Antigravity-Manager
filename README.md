@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> 专业级 AI 账号管理与协议代理系统 (v4.5.5)
+> 专业级 AI 账号管理与协议代理系统 (v4.5.6)
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
 
@@ -8,7 +8,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.5.5-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.5.6-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -142,7 +142,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **支持的格式**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **高级用法**: 安装指定版本 `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --version 4.5.5`，预览模式 `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --dry-run`
+> **高级用法**: 安装指定版本 `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --version 4.5.6`，预览模式 `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 如果您已安装 [Homebrew](https://brew.sh/)，也可以通过以下命令安装：
@@ -438,6 +438,23 @@ response = client.chat.completions.create(
 ## 📝 开发者与社区
 
 *   **版本演进 (Changelog)**:
+    *   **v4.5.6 (2026-08-15)**:
+        -   **[核心优化] 账号切换时同步写入本地文件凭据 (Sync File-Based Credentials on Account Switch)**:
+            -   **支持 SSH 与容器无头环境**: 修复在 SSH 远程会话、容器或无 D-Bus/Keyring 环境下使用 CLI (`agy`) 时，因环境探测自动回退读取 `~/.gemini/oauth_creds.json` 而无法感知图形端账号切换的问题。
+            -   **双通道凭据同步与权限保护**: 在写入系统 Keyring 的同时，自动同步更新 `~/.gemini/oauth_creds.json` 和 `~/.gemini/google_accounts.json`，并在 Unix 系统上强制设定 `0o600` 严格文件权限以保护凭据安全。
+            -   *相关 PR*: 详见 [PR #3297](https://github.com/lbjlaq/Antigravity-Manager/pull/3297)。
+        -   **[核心修复] OpenAI Responses API 协议全流程兼容性加固 (OpenAI Responses API Hardening)**:
+            -   **宽松输入归一化**: 容错解析客户端未提供 `type` 字段的消息项，并无缝兼容字符串或数组形式的 `content`（含多模态图片内容）。
+            -   **末尾 Assistant 预填充防护**: 针对上游拒绝末尾纯文本 Assistant 预填充导致的 400 错误，进行窄范围角色重写；同时自动清洗上下文转换残留的前置孤立工具历史。
+            -   **标准 Responses 格式输出**: 统一流式与非流式转换链路，标准化输出 `output_text`、`refusal`、`reasoning` 以及顶层 `function_call` 结构，彻底解决工具调用丢失及回复空白问题。
+            -   *相关 PR*: 详见 [PR #3305](https://github.com/lbjlaq/Antigravity-Manager/pull/3305) (修复 [#3302](https://github.com/lbjlaq/Antigravity-Manager/issues/3302), [#3303](https://github.com/lbjlaq/Antigravity-Manager/issues/3303), [#3304](https://github.com/lbjlaq/Antigravity-Manager/issues/3304))。
+        -   **[问题修复] 修复 v1internal 接口下的工具配置及混合调用 400 报错 (v1internal ToolConfig Alignment)**:
+            -   **对齐 Google 工具配置规范**: 在 Claude、Gemini、OpenAI 适配器中统一补齐 `includeServerSideToolInvocations` (camelCase) 与 `include_server_side_tool_invocations` (snake_case)。
+            -   **避免工具混合调用 400 异常**: 针对受限的 `v1internal` 架构禁用自定义 Function Calling 与 Google Search 联网搜索的混合调用，避免上游抛出 `400 Bad Request`。
+            -   *相关 PR*: 详见 [PR #3306](https://github.com/lbjlaq/Antigravity-Manager/pull/3306)。
+        -   **[问题修复] 修复 Linux/Windows 托盘图标显示为纯黑方块缺陷 (Tray Icon Platform Isolation)**:
+            -   **平台图标加载隔离**: macOS 环境加载 `tray-icon.png` 并启用 `icon_as_template(true)` 适配暗黑/明亮菜单栏自适应；Windows / Linux 环境加载原生彩色 `icon.png` 并禁用 Template 模式，彻底解决任务栏渲染为纯黑色方块的问题。
+            -   *相关 Issue*: 详见 [Issue #3286](https://github.com/lbjlaq/Antigravity-Manager/issues/3286), [Issue #3310](https://github.com/lbjlaq/Antigravity-Manager/issues/3310)。
     *   **v4.5.5 (2026-08-12)**:
         -   **[核心功能] 支持 Gemini countTokens 端点透明代理到真实上游 (Gemini countTokens Upstream Proxy)**:
             -   **全面代理真实 Token 计数**: 将原本硬编码返回 `{"totalTokens": 0}` 的 `/countTokens`（斜杠语法）以及直接拒绝返回 400 的 `:countTokens`（冒号语法）统一代理到上游 `v1internal:countTokens` 端点，返回真实的 Token 统计数据。

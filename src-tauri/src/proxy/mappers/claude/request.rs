@@ -619,11 +619,18 @@ pub fn transform_claude_request_in(
 
     if let Some(tools_val) = tools {
         inner_request["tools"] = tools_val;
-        // 显式设置工具配置模式为 VALIDATED
+        // 显式设置工具配置模式为 VALIDATED 并开启 includeServerSideToolInvocations (同时支持 camelCase 与 snake_case 以对齐 Google v1internal 接口)
         inner_request["toolConfig"] = json!({
             "functionCallingConfig": {
                 "mode": "VALIDATED"
-            }
+            },
+            "includeServerSideToolInvocations": true
+        });
+        inner_request["tool_config"] = json!({
+            "function_calling_config": {
+                "mode": "VALIDATED"
+            },
+            "include_server_side_tool_invocations": true
         });
     }
 
@@ -1818,11 +1825,9 @@ fn build_tools(
         let mut tool_list = Vec::new();
 
         // [优化] Gemini 2.0+ 及 3.0 系列模型通常支持混合工具调用 (Function Calling + Google Search)
-        // 只有针对老旧模型或特定受限环境才需要互斥。
-        let model_lower = mapped_model.to_lowercase();
-        let supports_mixed_tools = model_lower.contains("gemini-2.0")
-            || model_lower.contains("gemini-2.5")
-            || model_lower.contains("gemini-3");
+        // 但由于反代使用的 Google v1internal 接口为受限环境，不支持 include_server_side_tool_invocations，混合调用会报 400 错误。
+        // 因此在 v1internal 架构下，我们强制不开启混合工具调用以避免 400 报错。
+        let supports_mixed_tools = false;
 
         if !function_declarations.is_empty() {
             let mut func_obj = serde_json::Map::new();
@@ -3148,13 +3153,15 @@ mod tests {
             .iter()
             .any(|t| t.get("functionDeclarations").is_some());
 
+        // 在 v1internal 接口受限环境下，强制禁用混合工具调用以避免 400 报错
+        // 存在自定义工具时，优先使用 functionDeclarations，不注入 googleSearch
         assert!(
-            has_google_search,
-            "Gemini 2.0 should support mixed Google Search"
+            !has_google_search,
+            "v1internal should avoid mixed Google Search when functionDeclarations present"
         );
         assert!(
             has_functions,
-            "Gemini 2.0 should support mixed function declarations"
+            "Should have function declarations"
         );
     }
 

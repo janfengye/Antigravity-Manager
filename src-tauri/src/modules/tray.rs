@@ -11,8 +11,12 @@ pub fn create_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     let config = modules::load_app_config().unwrap_or_default();
     let texts = modules::i18n::get_tray_texts(&config.language);
 
-    // 2. Load icon (macOS uses Template Image)
-    let icon_bytes = include_bytes!("../../icons/tray-icon.png");
+    // 2. Load icon (macOS uses Template Image `tray-icon.png`, Windows/Linux uses full-color `icon.png`)
+    #[cfg(target_os = "macos")]
+    let icon_bytes: &[u8] = include_bytes!("../../icons/tray-icon.png");
+    #[cfg(not(target_os = "macos"))]
+    let icon_bytes: &[u8] = include_bytes!("../../icons/icon.png");
+
     let img = image::load_from_memory(icon_bytes)
         .map_err(|e| {
             tauri::Error::Io(std::io::Error::new(

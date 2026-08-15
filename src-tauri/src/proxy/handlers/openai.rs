@@ -8,7 +8,8 @@ use serde_json::{json, Value};
 use tracing::{debug, error, info}; // Import Engine trait for encode method
 
 use crate::proxy::mappers::openai::{
-    transform_openai_request, transform_openai_response, OpenAIMessage, OpenAIRequest,
+    transform_openai_request, transform_openai_response, OpenAIContent, OpenAIContentBlock,
+    OpenAIMessage, OpenAIRequest, OpenAIResponse,
 };
 // use crate::proxy::upstream::client::UpstreamClient; // 通过 state 获取
 use crate::proxy::debug_logger;
@@ -48,13 +49,225 @@ fn stream_chunk_has_error_event(bytes: &[u8]) -> bool {
     })
 }
 
+fn responses_input_item_type(item: &Value) -> &str {
+    item.get("type")
+        .and_then(Value::as_str)
+        .or_else(|| item.get("role").and_then(Value::as_str).map(|_| "message"))
+        .unwrap_or("")
+}
+
+fn responses_message_parts(item: &Value) -> (Vec<String>, Vec<Value>) {
+    let mut text_parts = Vec::new();
+    let mut image_parts = Vec::new();
+
+    match item.get("content") {
+        Some(Value::String(text)) => text_parts.push(text.clone()),
+        Some(Value::Array(parts)) => {
+            for part in parts {
+                if let Some(text) = part.get("text").and_then(Value::as_str) {
+                    text_parts.push(text.to_string());
+                } else if part.get("type").and_then(Value::as_str) == Some("input_image") {
+                    if let Some(image_url) = part.get("image_url").and_then(Value::as_str) {
+                        image_parts.push(json!({
+                            "type": "image_url",
+                            "image_url": { "url": image_url }
+                        }));
+                    }
+                } else if part.get("type").and_then(Value::as_str) == Some("image_url") {
+                    if let Some(image_url) = part.get("image_url") {
+                        image_parts.push(json!({
+                            "type": "image_url",
+                            "image_url": image_url.clone()
+                        }));
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+
+    (text_parts, image_parts)
+}
+
+fn rewrite_terminal_assistant_prefill(messages: &mut [Value]) -> bool {
+    let Some(last_message) = messages.last_mut() else {
+        return false;
+    };
+
+    if last_message.get("role").and_then(Value::as_str) != Some("assistant") {
+        return false;
+    }
+
+    let has_nonempty_plain_text = last_message
+        .get("content")
+        .and_then(Value::as_str)
+        .is_some_and(|content| !content.trim().is_empty());
+    if !has_nonempty_plain_text {
+        return false;
+    }
+
+    let has_tool_calls = match last_message.get("tool_calls") {
+        None | Some(Value::Null) => false,
+        Some(Value::Array(tool_calls)) => !tool_calls.is_empty(),
+        Some(_) => true,
+    };
+    if has_tool_calls {
+        return false;
+    }
+
+    let Some(message) = last_message.as_object_mut() else {
+        return false;
+    };
+    message.insert("role".to_string(), Value::String("user".to_string()));
+    true
+}
+
+fn is_tool_history_message(message: &Value) -> bool {
+    match message.get("role").and_then(Value::as_str) {
+        Some("tool" | "function") => true,
+        Some("assistant") => message
+            .get("tool_calls")
+            .and_then(Value::as_array)
+            .is_some_and(|tool_calls| !tool_calls.is_empty()),
+        _ => false,
+    }
+}
+
+fn drop_leading_orphan_tool_history(messages: &mut Vec<Value>) -> usize {
+    let conversation_start = messages
+        .iter()
+        .position(|message| message.get("role").and_then(Value::as_str) != Some("system"))
+        .unwrap_or(messages.len());
+    let orphan_count = messages[conversation_start..]
+        .iter()
+        .take_while(|message| is_tool_history_message(message))
+        .count();
+
+    if orphan_count > 0 {
+        messages.drain(conversation_start..conversation_start + orphan_count);
+    }
+    orphan_count
+}
+
+fn openai_content_text(content: &OpenAIContent) -> String {
+    match content {
+        OpenAIContent::String(text) => text.clone(),
+        OpenAIContent::Array(parts) => parts
+            .iter()
+            .filter_map(|part| match part {
+                OpenAIContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect(),
+    }
+}
+
+fn responses_usage_value(chat_response: &OpenAIResponse) -> Value {
+    chat_response
+        .usage
+        .as_ref()
+        .map(|usage| usage.to_responses_usage_value())
+        .unwrap_or_else(|| {
+            json!({
+                "input_tokens": 0,
+                "input_tokens_details": { "cached_tokens": 0 },
+                "output_tokens": 0,
+                "output_tokens_details": { "reasoning_tokens": 0 },
+                "total_tokens": 0
+            })
+        })
+}
+
+fn convert_chat_response_to_responses(chat_response: &OpenAIResponse) -> Value {
+    let mut output = Vec::new();
+
+    for choice in &chat_response.choices {
+        if let Some(reasoning) = choice
+            .message
+            .reasoning_content
+            .as_deref()
+            .filter(|reasoning| !reasoning.trim().is_empty())
+        {
+            output.push(json!({
+                "id": format!("rs_{}", uuid::Uuid::new_v4().simple()),
+                "type": "reasoning",
+                "status": "completed",
+                "summary": [{ "type": "summary_text", "text": reasoning }]
+            }));
+        }
+
+        let text = choice
+            .message
+            .content
+            .as_ref()
+            .map(openai_content_text)
+            .unwrap_or_default();
+        let refusal = choice
+            .message
+            .refusal
+            .as_deref()
+            .filter(|refusal| !refusal.is_empty());
+        if !text.is_empty() || refusal.is_some() {
+            let mut content = Vec::new();
+            if !text.is_empty() {
+                content.push(json!({
+                    "type": "output_text",
+                    "text": text,
+                    "annotations": []
+                }));
+            }
+            if let Some(refusal) = refusal {
+                content.push(json!({ "type": "refusal", "refusal": refusal }));
+            }
+            output.push(json!({
+                "id": format!("msg_{}", uuid::Uuid::new_v4().simple()),
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": content
+            }));
+        }
+
+        for tool_call in choice.message.tool_calls.iter().flatten() {
+            let Some(function) = tool_call.function.as_ref() else {
+                tracing::warn!(
+                    tool_call_id = %tool_call.id,
+                    "[Responses Compat] Skipping tool call without function payload"
+                );
+                continue;
+            };
+            let call_id = tool_call.call_id.as_deref().unwrap_or(&tool_call.id);
+            output.push(json!({
+                "id": format!("fc_{}", uuid::Uuid::new_v4().simple()),
+                "type": "function_call",
+                "status": "completed",
+                "call_id": call_id,
+                "name": function.name,
+                "arguments": function.arguments
+            }));
+        }
+    }
+
+    json!({
+        "id": format!("resp_{}", uuid::Uuid::new_v4().simple()),
+        "object": "response",
+        "type": "response",
+        "created_at": chrono::Utc::now().timestamp(),
+        "status": "completed",
+        "error": null,
+        "output": output,
+        "model": chat_response.model,
+        "usage": responses_usage_value(chat_response)
+    })
+}
+
 /// Visible Codex commentary is part of the local transcript, not Gemini
 /// conversation history. Codex omits output item IDs when it replays a task, so
 /// `phase=commentary` is the durable discriminator. The text-prefix fallback
 /// heals tasks written by builds that accidentally finalized a thought blob as
 /// a normal answer.
 fn is_codex_transcript_only_assistant_message(item: &Value, text: &str) -> bool {
-    if item.get("type").and_then(Value::as_str) != Some("message")
+    if responses_input_item_type(item) != "message"
         || item.get("role").and_then(Value::as_str) != Some("assistant")
     {
         return false;
@@ -70,7 +283,13 @@ fn is_codex_transcript_only_assistant_message(item: &Value, text: &str) -> bool 
 
 #[cfg(test)]
 mod stream_peek_tests {
+    use super::convert_chat_response_to_responses;
+    use super::convert_codex_to_openai_request;
+    use super::drop_leading_orphan_tool_history;
     use super::is_codex_transcript_only_assistant_message;
+    use super::responses_input_item_type;
+    use super::responses_message_parts;
+    use super::rewrite_terminal_assistant_prefill;
     use super::stream_chunk_has_error_event;
     use serde_json::json;
 
@@ -106,6 +325,207 @@ data: {"type":"response.failed","response":{"status":"failed","error":{"code":"u
 
 "#;
         assert!(!stream_chunk_has_error_event(chunk));
+    }
+
+    #[test]
+    fn responses_compat_accepts_optional_type_and_string_or_array_content() {
+        let string_message = json!({
+            "role": "system",
+            "content": "Follow the system instructions."
+        });
+        let array_message = json!({
+            "role": "user",
+            "content": [{"type": "input_text", "text": "Continue planning."}]
+        });
+
+        assert_eq!(responses_input_item_type(&string_message), "message");
+        assert_eq!(
+            responses_message_parts(&string_message).0,
+            vec!["Follow the system instructions."]
+        );
+        assert_eq!(
+            responses_message_parts(&array_message).0,
+            vec!["Continue planning."]
+        );
+
+        let converted = convert_codex_to_openai_request(json!({
+            "input": [
+                string_message,
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Previous output."}]
+                },
+                array_message
+            ]
+        }));
+
+        assert_eq!(
+            converted["messages"],
+            json!([
+                {"role": "system", "content": "Follow the system instructions."},
+                {"role": "assistant", "content": "Previous output."},
+                {"role": "user", "content": "Continue planning."}
+            ])
+        );
+    }
+
+    #[test]
+    fn responses_compat_rewrites_only_terminal_plain_text_assistant_prefill() {
+        let mut plain_text = vec![json!({
+            "role": "assistant",
+            "content": "Choose the next action."
+        })];
+        assert!(rewrite_terminal_assistant_prefill(&mut plain_text));
+        assert_eq!(plain_text[0]["role"], "user");
+
+        let unchanged_messages = [
+            json!({"role": "assistant", "content": "   "}),
+            json!({
+                "role": "assistant",
+                "content": [{
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/png;base64,AA=="}
+                }]
+            }),
+            json!({
+                "role": "assistant",
+                "content": "Call a tool.",
+                "tool_calls": [{
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "query_memory", "arguments": "{}"}
+                }]
+            }),
+        ];
+        for original in unchanged_messages {
+            let mut messages = vec![original.clone()];
+            assert!(!rewrite_terminal_assistant_prefill(&mut messages));
+            assert_eq!(messages[0], original);
+        }
+
+        let mut non_terminal = vec![
+            json!({"role": "assistant", "content": "Earlier output."}),
+            json!({"role": "user", "content": "Latest input."}),
+        ];
+        assert!(!rewrite_terminal_assistant_prefill(&mut non_terminal));
+        assert_eq!(non_terminal[0]["role"], "assistant");
+
+        let converted = convert_codex_to_openai_request(json!({
+            "input": [{
+                "role": "assistant",
+                "content": "Choose the next action."
+            }]
+        }));
+        assert_eq!(
+            converted["messages"],
+            json!([{"role": "user", "content": "Choose the next action."}])
+        );
+    }
+
+    #[test]
+    fn responses_compat_drops_only_leading_orphan_tool_history() {
+        let mut messages = vec![
+            json!({"role": "system", "content": "Plan safely."}),
+            json!({
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": "call_orphan",
+                    "type": "function",
+                    "function": {"name": "reply", "arguments": "{}"}
+                }]
+            }),
+            json!({
+                "role": "tool",
+                "tool_call_id": "call_orphan",
+                "content": "done"
+            }),
+            json!({"role": "user", "content": "Latest message"}),
+            json!({
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": "call_valid",
+                    "type": "function",
+                    "function": {"name": "query_memory", "arguments": "{}"}
+                }]
+            }),
+            json!({
+                "role": "tool",
+                "tool_call_id": "call_valid",
+                "content": "result"
+            }),
+        ];
+
+        assert_eq!(drop_leading_orphan_tool_history(&mut messages), 2);
+        assert_eq!(messages.len(), 4);
+        assert_eq!(messages[0]["role"], "system");
+        assert_eq!(messages[1]["role"], "user");
+        assert_eq!(messages[2]["tool_calls"][0]["id"], "call_valid");
+        assert_eq!(messages[3]["tool_call_id"], "call_valid");
+
+        let mut ordinary_history = vec![
+            json!({"role": "system", "content": "Plan safely."}),
+            json!({"role": "assistant", "content": "Earlier answer"}),
+            json!({"role": "user", "content": "Latest message"}),
+        ];
+        let original = ordinary_history.clone();
+        assert_eq!(drop_leading_orphan_tool_history(&mut ordinary_history), 0);
+        assert_eq!(ordinary_history, original);
+    }
+
+    #[test]
+    fn responses_compat_emits_standard_text_reasoning_and_function_calls() {
+        let chat_response = serde_json::from_value(json!({
+            "id": "chatcmpl_test",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "gemini-3.6-flash-high",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Visible answer",
+                    "reasoning_content": "Internal analysis",
+                    "tool_calls": [{
+                        "id": "call_reply",
+                        "type": "function",
+                        "function": {
+                            "name": "reply",
+                            "arguments": "{\"msg_id\":\"1\"}"
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15
+            }
+        }))
+        .expect("valid OpenAI response fixture");
+
+        let response = convert_chat_response_to_responses(&chat_response);
+        assert_eq!(response["object"], "response");
+        assert_eq!(response["output"][0]["type"], "reasoning");
+        assert_eq!(
+            response["output"][0]["summary"][0]["text"],
+            "Internal analysis"
+        );
+        assert_eq!(response["output"][1]["type"], "message");
+        assert_eq!(response["output"][1]["content"][0]["type"], "output_text");
+        assert_eq!(
+            response["output"][1]["content"][0]["text"],
+            "Visible answer"
+        );
+        assert_eq!(response["output"][2]["type"], "function_call");
+        assert_eq!(response["output"][2]["call_id"], "call_reply");
+        assert_eq!(response["output"][2]["name"], "reply");
+        assert!(response["output"][1]["content"][0]["text"]
+            .as_str()
+            .is_some_and(|text| !text.contains("Internal analysis")));
     }
 
     #[test]
@@ -1408,7 +1828,7 @@ pub async fn handle_completions(
         // Pass 1: Build Call ID to Name Map
         if let Some(items) = input_items {
             for item in items {
-                let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                let item_type = responses_input_item_type(item);
                 if item_type == "custom_tool_call"
                     && item.get("status").and_then(|v| v.as_str()) == Some("incomplete")
                 {
@@ -1456,7 +1876,7 @@ pub async fn handle_completions(
         // be replayed as model history.
         if let Some(items) = input_items {
             for item in items {
-                let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                let item_type = responses_input_item_type(item);
                 let step_marker = step_markers.pop_front();
                 if item_type == "custom_tool_call"
                     && item.get("status").and_then(|v| v.as_str()) == Some("incomplete")
@@ -1466,43 +1886,7 @@ pub async fn handle_completions(
                 match item_type {
                     "message" => {
                         let role = item.get("role").and_then(|v| v.as_str()).unwrap_or("user");
-                        let content = item.get("content").and_then(|v| v.as_array());
-                        let mut text_parts = Vec::new();
-                        let mut image_parts: Vec<Value> = Vec::new();
-
-                        if let Some(parts) = content {
-                            for part in parts {
-                                // 处理文本块
-                                if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
-                                    text_parts.push(text.to_string());
-                                }
-                                // [NEW] 处理图像块 (Codex input_image 格式)
-                                else if part.get("type").and_then(|v| v.as_str())
-                                    == Some("input_image")
-                                {
-                                    if let Some(image_url) =
-                                        part.get("image_url").and_then(|v| v.as_str())
-                                    {
-                                        image_parts.push(json!({
-                                            "type": "image_url",
-                                            "image_url": { "url": image_url }
-                                        }));
-                                        debug!("[Codex] Found input_image: {}", image_url);
-                                    }
-                                }
-                                // [NEW] 兼容标准 OpenAI image_url 格式
-                                else if part.get("type").and_then(|v| v.as_str())
-                                    == Some("image_url")
-                                {
-                                    if let Some(url_obj) = part.get("image_url") {
-                                        image_parts.push(json!({
-                                            "type": "image_url",
-                                            "image_url": url_obj.clone()
-                                        }));
-                                    }
-                                }
-                            }
-                        }
+                        let (text_parts, image_parts) = responses_message_parts(item);
 
                         let joined_text = text_parts.join("\n");
                         if is_codex_transcript_only_assistant_message(item, &joined_text) {
@@ -1750,7 +2134,8 @@ pub async fn handle_completions(
                     // 深度识别：像处理 messages 一样处理 input 数组，并自动映射 Responses API 的工具流
                     for item in arr {
                         if let Some(obj) = item.as_object() {
-                            if let Some(item_type) = obj.get("type").and_then(|v| v.as_str()) {
+                            let item_type = responses_input_item_type(item);
+                            if !item_type.is_empty() {
                                 match item_type {
                                     "message" => {
                                         let role = obj
@@ -1868,6 +2253,23 @@ pub async fn handle_completions(
         tracing::debug!(
             "[Codex] Skipping normalization (messages already populated by first pass)"
         );
+    }
+
+    if is_codex_style {
+        if let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) {
+            let dropped = drop_leading_orphan_tool_history(messages);
+            if dropped > 0 {
+                tracing::warn!(
+                    dropped_messages = dropped,
+                    "[Responses Compat] Dropped leading orphan tool history"
+                );
+            }
+            if rewrite_terminal_assistant_prefill(messages) {
+                tracing::debug!(
+                    "[Responses Compat] Rewrote terminal assistant text prefill as user input"
+                );
+            }
+        }
     }
 
     // [FIX] 在 openai_req 反序列化之前，从 body 中捕获原始 input 和 instructions
@@ -2547,61 +2949,7 @@ pub async fn handle_completions(
                             let is_responses_api = uri.path() == "/v1/responses";
 
                             if is_responses_api {
-                                let mut output = Vec::new();
-                                for c in chat_resp.choices.iter() {
-                                    let text = match &c.message.content {
-                                        Some(
-                                            crate::proxy::mappers::openai::OpenAIContent::String(s),
-                                        ) => s.clone(),
-                                        _ => "".to_string(),
-                                    };
-
-                                    let has_content = !text.is_empty();
-                                    let has_tools = c.message.tool_calls.is_some()
-                                        && !c.message.tool_calls.as_ref().unwrap().is_empty();
-
-                                    if has_content || has_tools {
-                                        let mut msg_obj = serde_json::Map::new();
-                                        msg_obj.insert("type".to_string(), json!("message"));
-                                        msg_obj.insert("role".to_string(), json!("assistant"));
-
-                                        if has_content {
-                                            msg_obj.insert("content".to_string(), json!(text));
-                                        }
-                                        if let Some(tool_calls) = &c.message.tool_calls {
-                                            msg_obj.insert(
-                                                "tool_calls".to_string(),
-                                                json!(tool_calls),
-                                            );
-                                        }
-                                        output.push(serde_json::Value::Object(msg_obj));
-                                    }
-                                }
-
-                                // Calculate usage if available
-                                let usage_value = if let Some(ref usage) = chat_resp.usage {
-                                    usage.to_responses_usage_value()
-                                } else {
-                                    json!({
-                                        "input_tokens": 0,
-                                        "input_tokens_details": {
-                                            "cached_tokens": 0
-                                        },
-                                        "output_tokens": 0,
-                                        "output_tokens_details": {
-                                            "reasoning_tokens": 0
-                                        },
-                                        "total_tokens": 0
-                                    })
-                                };
-
-                                let resp = json!({
-                                    "type": "response",
-                                    "id": format!("resp_{}", uuid::Uuid::new_v4().simple()),
-                                    "status": "completed",
-                                    "output": output,
-                                    "usage": usage_value
-                                });
+                                let resp = convert_chat_response_to_responses(&chat_resp);
                                 if debug_logger::is_enabled(&debug_cfg) {
                                     let payload = json!({
                                         "kind": "exchange_summary",
@@ -2729,56 +3077,7 @@ pub async fn handle_completions(
             let is_responses_api = uri.path() == "/v1/responses";
 
             if is_responses_api {
-                let mut output = Vec::new();
-                for c in chat_resp.choices.iter() {
-                    let text = match &c.message.content {
-                        Some(crate::proxy::mappers::openai::OpenAIContent::String(s)) => s.clone(),
-                        _ => "".to_string(),
-                    };
-
-                    let has_content = !text.is_empty();
-                    let has_tools = c.message.tool_calls.is_some()
-                        && !c.message.tool_calls.as_ref().unwrap().is_empty();
-
-                    if has_content || has_tools {
-                        let mut msg_obj = serde_json::Map::new();
-                        msg_obj.insert("type".to_string(), json!("message"));
-                        msg_obj.insert("role".to_string(), json!("assistant"));
-
-                        if has_content {
-                            msg_obj.insert("content".to_string(), json!(text));
-                        }
-                        if let Some(tool_calls) = &c.message.tool_calls {
-                            msg_obj.insert("tool_calls".to_string(), json!(tool_calls));
-                        }
-                        output.push(serde_json::Value::Object(msg_obj));
-                    }
-                }
-
-                // Calculate usage if available
-                let usage_value = if let Some(ref usage) = chat_resp.usage {
-                    usage.to_responses_usage_value()
-                } else {
-                    json!({
-                        "input_tokens": 0,
-                        "input_tokens_details": {
-                            "cached_tokens": 0
-                        },
-                        "output_tokens": 0,
-                        "output_tokens_details": {
-                            "reasoning_tokens": 0
-                        },
-                        "total_tokens": 0
-                    })
-                };
-
-                let resp = json!({
-                    "type": "response",
-                    "id": format!("resp_{}", uuid::Uuid::new_v4().simple()),
-                    "status": "completed",
-                    "output": output,
-                    "usage": usage_value
-                });
+                let resp = convert_chat_response_to_responses(&chat_resp);
                 if debug_logger::is_enabled(&debug_cfg) {
                     let payload = json!({
                         "kind": "exchange_summary",
@@ -4429,7 +4728,7 @@ fn should_replace_websocket_transcript(payload: &Value) -> bool {
     }
     if let Some(input_array) = payload.get("input").and_then(|v| v.as_array()) {
         for item in input_array {
-            let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            let item_type = responses_input_item_type(item);
             if item_type == "function_call" || item_type == "custom_tool_call" {
                 return true;
             }
@@ -4589,7 +4888,7 @@ fn convert_codex_to_openai_request(mut body: Value) -> Value {
 
     if let Some(items) = input_items {
         for item in items {
-            let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            let item_type = responses_input_item_type(item);
             if item_type == "custom_tool_call"
                 && item.get("status").and_then(|v| v.as_str()) == Some("incomplete")
             {
@@ -4630,7 +4929,7 @@ fn convert_codex_to_openai_request(mut body: Value) -> Value {
         let mut seen_apply_patch_failures = std::collections::HashSet::new();
         let mut apply_patch_failure_distinct_count = 0usize;
         for item in items {
-            let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            let item_type = responses_input_item_type(item);
             let step_marker = step_markers.pop_front();
             if item_type == "custom_tool_call"
                 && item.get("status").and_then(|v| v.as_str()) == Some("incomplete")
@@ -4640,30 +4939,7 @@ fn convert_codex_to_openai_request(mut body: Value) -> Value {
             match item_type {
                 "message" => {
                     let role = item.get("role").and_then(|v| v.as_str()).unwrap_or("user");
-                    let content = item.get("content").and_then(|v| v.as_array());
-                    let mut text_parts = Vec::new();
-                    let mut image_parts = Vec::new();
-
-                    if let Some(parts) = content {
-                        for part in parts {
-                            if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
-                                text_parts.push(text.to_string());
-                            } else if part.get("type").and_then(|v| v.as_str())
-                                == Some("input_image")
-                            {
-                                if let Some(image_url) =
-                                    part.get("image_url").and_then(|v| v.as_str())
-                                {
-                                    image_parts.push(json!({ "type": "image_url", "image_url": { "url": image_url } }));
-                                }
-                            } else if part.get("type").and_then(|v| v.as_str()) == Some("image_url")
-                            {
-                                if let Some(url_obj) = part.get("image_url") {
-                                    image_parts.push(json!({ "type": "image_url", "image_url": url_obj.clone() }));
-                                }
-                            }
-                        }
-                    }
+                    let (text_parts, image_parts) = responses_message_parts(item);
 
                     if image_parts.is_empty() {
                         let content = prefix_with_step_marker(step_marker, text_parts.join("\n"));
@@ -4808,6 +5084,19 @@ fn convert_codex_to_openai_request(mut body: Value) -> Value {
                 _ => {}
             }
         }
+    }
+
+    let dropped = drop_leading_orphan_tool_history(&mut messages);
+    if dropped > 0 {
+        tracing::warn!(
+            dropped_messages = dropped,
+            "[Responses Compat] Dropped leading orphan websocket tool history"
+        );
+    }
+    if rewrite_terminal_assistant_prefill(&mut messages) {
+        tracing::debug!(
+            "[Responses Compat] Rewrote websocket terminal assistant text prefill as user input"
+        );
     }
 
     if let Some(obj) = body.as_object_mut() {

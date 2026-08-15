@@ -755,11 +755,30 @@ pub fn wrap_request_v2(
         }
     }
 
-    // [ADDED v4.1.24] 扩展 toolConfig 到 VALIDATED 模式
-    if inner_request.get("tools").is_some() && !inner_request.get("toolConfig").is_some() {
-        inner_request["toolConfig"] = json!({
-            "functionCallingConfig": { "mode": "VALIDATED" }
-        });
+    // [ADDED v4.1.24] 扩展 toolConfig 到 VALIDATED 模式并开启 includeServerSideToolInvocations (同时支持 camelCase 与 snake_case)
+    if inner_request.get("tools").is_some() {
+        // 1. camelCase
+        if let Some(tool_config) = inner_request.get_mut("toolConfig") {
+            if let Some(obj) = tool_config.as_object_mut() {
+                obj.insert("includeServerSideToolInvocations".to_string(), json!(true));
+            }
+        } else {
+            inner_request["toolConfig"] = json!({
+                "functionCallingConfig": { "mode": "VALIDATED" },
+                "includeServerSideToolInvocations": true
+            });
+        }
+        // 2. snake_case
+        if let Some(tool_config_snake) = inner_request.get_mut("tool_config") {
+            if let Some(obj) = tool_config_snake.as_object_mut() {
+                obj.insert("include_server_side_tool_invocations".to_string(), json!(true));
+            }
+        } else {
+            inner_request["tool_config"] = json!({
+                "function_calling_config": { "mode": "VALIDATED" },
+                "include_server_side_tool_invocations": true
+            });
+        }
     }
 
     // [ADDED v4.1.24] 注入基于账号的稳定 sessionId
