@@ -206,7 +206,10 @@
     "warmup_selected": "預熱 ({{count}})",
     "warmup_this": "預熱該帳號",
     "warmup_now": "立即預熱",
-    "warmup_batch_triggered": "已成功為 {{count}} 個帳號觸發預熱任務",
+    "warmup_batch_triggered": "已成功為 {{count}} 個帳號觸發預热任務",
+    "quota_window_5h": "5小時滑動配額",
+    "quota_window_weekly": "7天周配額",
+    "quota_window_weekly_short": "周配額",
     "quota_protected": "受保護",
     "details": {
       "title": "配額詳情",

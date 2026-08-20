@@ -2057,11 +2057,10 @@ pub async fn refresh_all_quotas_logic() -> Result<RefreshStats, String> {
         elapsed.as_millis()
     ));
 
-    // After quota refresh, immediately check and trigger warmup for recovered models
-    // [Disabled] Automatic warmup is temporarily disabled
-    // tokio::spawn(async {
-    //     check_and_trigger_warmup_for_recovered_models().await;
-    // });
+    // After quota refresh, immediately check and trigger warmup for weekly recovered models
+    tokio::spawn(async {
+        check_and_trigger_warmup_for_recovered_models().await;
+    });
 
     Ok(RefreshStats {
         total,

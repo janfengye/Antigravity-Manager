@@ -81,6 +81,7 @@ interface AccountTableProps {
     /** 拖拽排序回调，当用户完成拖拽时触发 */
     onReorder?: (accountIds: string[]) => void;
     onViewError: (accountId: string) => void;
+    quotaWindow?: '5h' | 'weekly';
 }
 
 interface SortableRowProps {
@@ -101,6 +102,7 @@ interface SortableRowProps {
     onWarmup?: () => void;
     onUpdateLabel?: (label: string) => void;
     onViewError: () => void;
+    quotaWindow?: '5h' | 'weekly';
 }
 
 interface AccountRowContentProps {
@@ -119,6 +121,7 @@ interface AccountRowContentProps {
     onWarmup?: () => void;
     onUpdateLabel?: (label: string) => void;
     onViewError: () => void;
+    quotaWindow?: '5h' | 'weekly';
 }
 
 // ============================================================================
@@ -177,6 +180,7 @@ function SortableAccountRow({
     onWarmup,
     onUpdateLabel,
     onViewError,
+    quotaWindow,
 }: SortableRowProps) {
     const { t } = useTranslation();
     const {
@@ -221,10 +225,10 @@ function SortableAccountRow({
             <td className="px-2 py-1 w-10 align-middle">
                 <input
                     type="checkbox"
-                    className="checkbox checkbox-xs rounded border-2 border-gray-400 dark:border-gray-500 checked:border-blue-600 checked:bg-blue-600 [--chkbg:theme(colors.blue.600)] [--chkfg:white]"
+                    className="checkbox checkbox-sm rounded border-2 border-gray-400 dark:border-gray-500 checked:border-blue-600 checked:bg-blue-600 [--chkbg:theme(colors.blue.600)] [--chkfg:white]"
                     checked={selected}
                     onChange={onSelect}
-                    onClick={(e) => e.stopPropagation()}
+                    disabled={isRefreshing}
                 />
             </td>
             <AccountRowContent
@@ -243,6 +247,7 @@ function SortableAccountRow({
                 onWarmup={onWarmup}
                 onUpdateLabel={onUpdateLabel}
                 onViewError={onViewError}
+                quotaWindow={quotaWindow}
             />
         </tr>
     );
@@ -268,6 +273,7 @@ function AccountRowContent({
     onWarmup,
     onUpdateLabel,
     onViewError,
+    quotaWindow,
 }: AccountRowContentProps) {
     const { t } = useTranslation();
     const { config, showAllQuotas } = useConfigStore();
@@ -297,7 +303,26 @@ function AccountRowContent({
         }
     };
 
-    // 使用统一的模型配置
+    // 解析周配额项 (当处于 weekly 视图时)
+    const weeklyItems = useMemo(() => {
+        if (quotaWindow !== 'weekly') return [];
+        return (account.quota?.quota_groups || []).flatMap(group => {
+            return group.buckets
+                .filter(b => b.window.toLowerCase().includes('week') || b.bucket_id.toLowerCase().includes('week'))
+                .map(b => {
+                    const shortGroupName = group.display_name
+                        .replace(/ models?$/i, '')
+                        .replace(/Claude and GPT/i, 'Claude/GPT');
+                    return {
+                        id: `${group.display_name}-${b.bucket_id}`,
+                        label: b.display_name ? `${shortGroupName} (${b.display_name})` : `${shortGroupName} (周)`,
+                        percentage: Math.round((b.remaining_fraction || 0) * 100),
+                        resetTime: b.reset_time,
+                        Icon: shortGroupName.toLowerCase().includes('claude') ? Sparkles : Bot,
+                    };
+                });
+        });
+    }, [quotaWindow, account.quota?.quota_groups]);
 
     // 获取要显示的模型列表
     const pinnedModels = ensurePinnedImageSelector(
@@ -509,23 +534,37 @@ function AccountRowContent({
                 ) : (
                     <div className={cn(
                         "grid gap-x-2 gap-y-1 py-0",
-                        displayModels.length === 1 ? "grid-cols-1" : "grid-cols-2"
+                        (quotaWindow === 'weekly' && weeklyItems.length > 0)
+                            ? (weeklyItems.length === 1 ? "grid-cols-1" : "grid-cols-2")
+                            : (displayModels.length === 1 ? "grid-cols-1" : "grid-cols-2")
                     )}>
-                        {displayModels.map((model) => {
-                            const modelData = model.data;
-
-                            return (
+                        {quotaWindow === 'weekly' && weeklyItems.length > 0 ? (
+                            weeklyItems.map((item) => (
                                 <QuotaItem
-                                    key={model.id}
-                                    label={model.label}
-                                    percentage={modelData?.percentage || 0}
-                                    resetTime={modelData?.reset_time}
-                                    isProtected={isModelProtected(account.protected_models, model.protectedKey)}
-                                    liveLimit={getLiveLimitForModel(account, model.id, model.protectedKey)}
-                                    Icon={MODEL_CONFIG[model.id]?.Icon || Bot}
+                                    key={item.id}
+                                    label={item.label}
+                                    percentage={item.percentage}
+                                    resetTime={item.resetTime}
+                                    Icon={item.Icon}
                                 />
-                            );
-                        })}
+                            ))
+                        ) : (
+                            displayModels.map((model) => {
+                                const modelData = model.data;
+
+                                return (
+                                    <QuotaItem
+                                        key={model.id}
+                                        label={model.label}
+                                        percentage={modelData?.percentage || 0}
+                                        resetTime={modelData?.reset_time}
+                                        isProtected={isModelProtected(account.protected_models, model.protectedKey)}
+                                        liveLimit={getLiveLimitForModel(account, model.id, model.protectedKey)}
+                                        Icon={MODEL_CONFIG[model.id]?.Icon || Bot}
+                                    />
+                                );
+                            })
+                        )}
                     </div>
                 )}
             </td>
@@ -686,6 +725,7 @@ function AccountTable({
     onWarmup,
     onUpdateLabel,
     onViewError,
+    quotaWindow,
 }: AccountTableProps) {
     const { t } = useTranslation();
 
@@ -756,7 +796,7 @@ function AccountTable({
                             </th>
                             <th className="px-2 py-1 text-left rtl:text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider w-[300px] whitespace-nowrap">{t('accounts.table.email')}</th>
                             <th className="px-2 py-1 text-left rtl:text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider min-w-[340px] whitespace-nowrap">
-                                {t('accounts.table.quota')}
+                                {quotaWindow === 'weekly' ? t('accounts.table.weekly_quota', '周配额') : t('accounts.table.quota')}
                             </th>
                             <th className="px-2 py-1 text-left rtl:text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider w-[90px] whitespace-nowrap">{t('accounts.table.last_used')}</th>
                             <th className="px-2 py-1 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider whitespace-nowrap sticky right-0 w-[220px] bg-gray-50 dark:bg-base-200 z-20 shadow-[-12px_0_12px_-12px_rgba(0,0,0,0.1)] dark:shadow-[-12px_0_12px_-12px_rgba(255,255,255,0.05)] text-center">{t('accounts.table.actions')}</th>
@@ -784,6 +824,7 @@ function AccountTable({
                                     onWarmup={onWarmup ? () => onWarmup(account.id) : undefined}
                                     onUpdateLabel={onUpdateLabel ? (label: string) => onUpdateLabel(account.id, label) : undefined}
                                     onViewError={() => onViewError(account.id)}
+                                    quotaWindow={quotaWindow}
                                 />
                             ))}
                         </tbody>
@@ -825,6 +866,7 @@ function AccountTable({
                                         onToggleProxy={() => { }}
                                         isDisabled={Boolean(activeAccount.disabled)}
                                         onViewError={() => { }}
+                                        quotaWindow={quotaWindow}
                                     />
                                 </tr>
                             </tbody>

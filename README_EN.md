@@ -1,15 +1,15 @@
 # Antigravity Tools 🚀
-> Professional AI Account Management & Protocol Proxy System (v4.5.6)
+> Professional AI Account Management & Protocol Proxy System (v4.5.7)
 
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
 
   <h3>Your Personal High-Performance AI Gateway</h3>
-  <p>More than account management—the ultimate solution to breaking down API call barriers.</p>
+  <p>Beyond account management — the ultimate solution for breaking through API calling barriers.</p>
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.5.6-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.5.7-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -144,7 +144,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **Supported formats**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **Advanced usage**: Install a specific version `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --version 4.5.6`, dry-run mode `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --dry-run`
+> **Advanced usage**: Install a specific version `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --version 4.5.7`, dry-run mode `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 If you have [Homebrew](https://brew.sh/) installed, you can also install via:
@@ -427,6 +427,20 @@ In clients that support OpenAI protocol (e.g., Cherry Studio), you can configure
 ## 📝 Developer & Community
 
 *   **Version History (Changelog)**:
+    *   **v4.5.7 (2026-08-20)**:
+        -   **[Core Feature] 5H / Weekly Quota View Switcher for Accounts (5H/Weekly Quota Switcher)**:
+            -   **Dual-Window Segmented Toggle**: Adds a segmented toggle on the Accounts page to switch between real-time 5-hour rolling quotas and 7-day weekly quota buckets (persisted to `localStorage`).
+            -   **Global Overview**: Renders grouped weekly quota percentages and reset countdowns (e.g., `5d 12h`) directly in table and card grid views without opening account detail modals.
+            -   *Related PR*: See [PR #3312](https://github.com/lbjlaq/Antigravity-Manager/pull/3312).
+        -   **[Core Optimization] 7-Day Weekly Reset-Aware Smart Warmup (7-Day Weekly Reset-Aware Smart Warmup)**:
+            -   **Zero Token Waste**: Refactored background warmup scheduler to trigger strictly once per 7-day reset cycle based on official `reset_time` timestamps, eliminating blind polling and token waste.
+            -   **Cycle Cooldown Lock**: Records 7-day weekly cooldown locks into `warmup_history.json` to prevent duplicate pings; re-enables Smart Warmup toggle in Settings (default: disabled).
+            -   **Internal Loopback Whitelist**: Whitelists `/internal/*` in proxy service status middleware to allow internal warmup pings even when the external proxy switch is disabled.
+            -   *Related PR*: See [PR #3312](https://github.com/lbjlaq/Antigravity-Manager/pull/3312).
+        -   **[Core Fix] Generalize thought_signature Whitelist to All Gemini Flash Models (Thought Signature Flash Generalization)**:
+            -   **Gemini Flash Family Matching**: Fixed Claude Code multi-turn tool calling throwing `400 Function call is missing a thought_signature` on `gemini-3.7-flash` models due to hardcoded 3/3.1 checks, extending support to 3.5/3.6/3.7 and future Flash models.
+            -   **Sentinel Signature Fallback**: Injects `skip_thought_signature_validator` sentinel signature in both disabled thinking fallback paths and empty session cache paths.
+            -   *Related PR*: See [PR #3314](https://github.com/lbjlaq/Antigravity-Manager/pull/3314) (Fixes [#3313](https://github.com/lbjlaq/Antigravity-Manager/issues/3313), Related [#3272](https://github.com/lbjlaq/Antigravity-Manager/issues/3272)).
     *   **v4.5.6 (2026-08-15)**:
         -   **[Core Optimization] Sync File-Based Credentials on Account Switch (Sync File-Based Credentials on Account Switch)**:
             -   **SSH & Headless Container Support**: Fixed an issue where running CLI (`agy`) over SSH sessions, containers, or environments without D-Bus/Keyring fell back to `~/.gemini/oauth_creds.json` and failed to pick up GUI account switches.

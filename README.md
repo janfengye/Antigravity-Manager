@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> 专业级 AI 账号管理与协议代理系统 (v4.5.6)
+> 专业级 AI 账号管理与协议代理系统 (v4.5.7)
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
 
@@ -8,7 +8,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.5.6-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.5.7-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -142,7 +142,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **支持的格式**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **高级用法**: 安装指定版本 `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --version 4.5.6`，预览模式 `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --dry-run`
+> **高级用法**: 安装指定版本 `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --version 4.5.7`，预览模式 `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 如果您已安装 [Homebrew](https://brew.sh/)，也可以通过以下命令安装：
@@ -438,6 +438,20 @@ response = client.chat.completions.create(
 ## 📝 开发者与社区
 
 *   **版本演进 (Changelog)**:
+    *   **v4.5.7 (2026-08-20)**:
+        -   **[核心功能] 账号列表支持 5小时 / 7天周配额全局视图无缝切换 (5H/Weekly Quota Switcher)**:
+            -   **双周期视图切换**: 在账号主管理页面顶部提供 `5小时滚动配额` 与 `7天周配额` 分段切换器（并持久化保存至本地存储）。
+            -   **全景视图一览**: 切换至周配额模式时，列表与卡片视图直接呈现分组周配额剩余比例及重置倒计时（例如 `5d 12h`），无需逐个打开详情弹窗。
+            -   *相关 PR*: 详见 [PR #3312](https://github.com/lbjlaq/Antigravity-Manager/pull/3312)。
+        -   **[核心优化] 智能预热重构为 7 天周期重置精准唤醒 (7-Day Weekly Reset-Aware Smart Warmup)**:
+            -   **精准触发与零浪费**: 调度器改为仅在检测到 `window == "WEEK"` 且到达官方 `reset_time` 重置时间戳后触发单次极小预热，及时激活新周期计时器，彻底杜绝盲轮询与额度浪费。
+            -   **周期冷却锁**: 记录周周期执行锁到 `warmup_history.json`，确保每个 7 天周期至多触发 1 次；设置中心重新开放智能预热设置项（默认保持关闭）。
+            -   **内部接口放行**: 服务状态检查中间件放行 `/internal/*` 本地回环请求，修复代理总开关关闭时预热报 503 的问题。
+            -   *相关 PR*: 详见 [PR #3312](https://github.com/lbjlaq/Antigravity-Manager/pull/3312)。
+        -   **[核心修复] 扩展 thought_signature 机制至 Gemini Flash 全系模型 (Thought Signature Flash Generalization)**:
+            -   **泛化 Flash 家族判断**: 修复因白名单写死 `3/3.1` 导致 `gemini-3.7-flash` 系列在 Claude Code 多轮工具调用时抛出 `400 Function call is missing a thought_signature` 的缺陷，自动覆盖 3.5/3.6/3.7 及未来新版 Flash 模型。
+            -   **哨兵签名兜底注入**: 在禁用 thinking 回退分支以及无 session 缓存分支中，均补齐注入 `skip_thought_signature_validator` 哨兵签名，保障多轮工具调用稳定。
+            -   *相关 PR*: 详见 [PR #3314](https://github.com/lbjlaq/Antigravity-Manager/pull/3314) (修复 [#3313](https://github.com/lbjlaq/Antigravity-Manager/issues/3313), 关联 [#3272](https://github.com/lbjlaq/Antigravity-Manager/issues/3272))。
     *   **v4.5.6 (2026-08-15)**:
         -   **[核心优化] 账号切换时同步写入本地文件凭据 (Sync File-Based Credentials on Account Switch)**:
             -   **支持 SSH 与容器无头环境**: 修复在 SSH 远程会话、容器或无 D-Bus/Keyring 环境下使用 CLI (`agy`) 时，因环境探测自动回退读取 `~/.gemini/oauth_creds.json` 而无法感知图形端账号切换的问题。

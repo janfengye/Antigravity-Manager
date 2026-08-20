@@ -240,6 +240,9 @@
     "warmup_this": "Warmup this account",
     "warmup_now": "Warmup Now",
     "warmup_batch_triggered": "Warmup tasks triggered for {{count}} accounts",
+    "quota_window_5h": "5-Hour Rolling Quota",
+    "quota_window_weekly": "7-Day Weekly Quota",
+    "quota_window_weekly_short": "Weekly",
     "quota_protected": "Protected",
     "details": {
       "title": "Quota Details",
@@ -379,8 +382,8 @@
       "sync_interval": "Sync Interval (minutes)"
     },
     "warmup": {
-      "title": "Smart Warmup",
-      "desc": "Automatically monitors all models and triggers warmup immediately when quota reaches 100%, keeping models warm"
+      "title": "7-Day Weekly Reset Warmup",
+      "desc": "Automatically sends a minimal ping once when the 7-day weekly quota resets, starting the countdown with zero extra token waste."
     },
     "quota_protection": {
       "title": "Quota Protection",

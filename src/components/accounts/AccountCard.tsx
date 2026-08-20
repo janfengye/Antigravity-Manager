@@ -26,6 +26,7 @@ interface AccountCardProps {
     onWarmup?: () => void;
     onUpdateLabel?: (label: string) => void;
     onViewError: () => void;
+    quotaWindow?: '5h' | 'weekly';
 }
 
 // 使用统一的模型配置
@@ -36,7 +37,7 @@ const DEFAULT_MODELS = Object.entries(MODEL_CONFIG).map(([id, config]) => ({
     Icon: config.Icon
 }));
 
-function AccountCard({ account, selected, onSelect, isCurrent: propIsCurrent, isRefreshing, isSwitching = false, onSwitch, onRefresh, onViewDetails, onExport, onDelete, onToggleProxy, onViewDevice, onWarmup, onUpdateLabel, onViewError }: AccountCardProps) {
+function AccountCard({ account, selected, onSelect, isCurrent: propIsCurrent, isRefreshing, isSwitching = false, onSwitch, onRefresh, onViewDetails, onExport, onDelete, onToggleProxy, onViewDevice, onWarmup, onUpdateLabel, onViewError, quotaWindow }: AccountCardProps) {
     const { t } = useTranslation();
     const { config, showAllQuotas } = useConfigStore();
     const isDisabled = Boolean(account.disabled);
@@ -128,6 +129,27 @@ function AccountCard({ account, selected, onSelect, isCurrent: propIsCurrent, is
         // 应用排序并过滤过期模型
         return sortModels(models).filter(m => m.id !== 'claude-sonnet-4-6-thinking' && m.id !== 'claude-sonnet-4-5-thinking' && m.id !== 'claude-opus-4-5-thinking');
     }, [config, account, showAllQuotas]);
+
+    // 解析周配额项 (当处于 weekly 视图时)
+    const weeklyItems = useMemo(() => {
+        if (quotaWindow !== 'weekly') return [];
+        return (account.quota?.quota_groups || []).flatMap(group => {
+            return group.buckets
+                .filter(b => b.window.toLowerCase().includes('week') || b.bucket_id.toLowerCase().includes('week'))
+                .map(b => {
+                    const shortGroupName = group.display_name
+                        .replace(/ models?$/i, '')
+                        .replace(/Claude and GPT/i, 'Claude/GPT');
+                    return {
+                        id: `${group.display_name}-${b.bucket_id}`,
+                        label: b.display_name ? `${shortGroupName} (${b.display_name})` : `${shortGroupName} (周)`,
+                        percentage: Math.round((b.remaining_fraction || 0) * 100),
+                        resetTime: b.reset_time,
+                        Icon: shortGroupName.toLowerCase().includes('claude') ? Sparkles : Bot,
+                    };
+                });
+        });
+    }, [quotaWindow, account.quota?.quota_groups]);
 
     const isModelProtected = (key?: string) => {
         if (!key) return false;
@@ -262,17 +284,29 @@ function AccountCard({ account, selected, onSelect, isCurrent: propIsCurrent, is
                     </div>
                 ) : (
                     <div className="grid grid-cols-1 gap-2 content-start">
-                        {displayModels.map((model) => (
-                            <QuotaItem
-                                key={model.id}
-                                label={model.label}
-                                percentage={model.data?.percentage || 0}
-                                resetTime={model.data?.reset_time}
-                                isProtected={isModelProtected(model.protectedKey)}
-                                liveLimit={getLiveLimitForModel(account, model.id, model.protectedKey)}
-                                Icon={model.Icon}
-                            />
-                        ))}
+                        {quotaWindow === 'weekly' && weeklyItems.length > 0 ? (
+                            weeklyItems.map((item) => (
+                                <QuotaItem
+                                    key={item.id}
+                                    label={item.label}
+                                    percentage={item.percentage}
+                                    resetTime={item.resetTime}
+                                    Icon={item.Icon}
+                                />
+                            ))
+                        ) : (
+                            displayModels.map((model) => (
+                                <QuotaItem
+                                    key={model.id}
+                                    label={model.label}
+                                    percentage={model.data?.percentage || 0}
+                                    resetTime={model.data?.reset_time}
+                                    isProtected={isModelProtected(model.protectedKey)}
+                                    liveLimit={getLiveLimitForModel(account, model.id, model.protectedKey)}
+                                    Icon={model.Icon}
+                                />
+                            ))
+                        )}
                     </div>
                 )}
             </div>

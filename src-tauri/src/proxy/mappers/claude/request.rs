@@ -803,10 +803,16 @@ fn model_supports_thinking(mapped_model: &str) -> bool {
 /// `gemini-pro-agent` is a forced-thinking model: disabling thinking leaves
 /// historical `functionCall` parts without `thought_signature`, which Gemini
 /// rejects with HTTP 400.
+fn model_is_gemini_flash_family(mapped_model: &str) -> bool {
+    mapped_model.contains("gemini")
+        && (mapped_model.contains("flash") || mapped_model.contains("-flash-"))
+}
+
 fn model_keeps_thinking_without_signature(mapped_model: &str) -> bool {
-    mapped_model.contains("gemini-3-flash")
-        || mapped_model.contains("gemini-3.1-flash")
-        || mapped_model.contains("gemini-pro-agent")
+    // Gemini 3.5/3.6/3.7 Flash (and later) all require thought_signature on
+    // functionCall parts. The old 3 / 3.1-only whitelist left 3.7 Flash
+    // disabling thinking, so Claude Code tool turns hit HTTP 400.
+    model_is_gemini_flash_family(mapped_model) || mapped_model.contains("gemini-pro-agent")
 }
 
 /// Minimum length for a valid thought_signature
@@ -1354,11 +1360,19 @@ fn build_contents(
                                 }
                             }
                         } else {
-                            // [NEW] Handle missing signature for Gemini thinking models
-                            // Use skip_thought_signature_validator as a sentinel value
+                            // Missing signature: Gemini Flash / agent models reject
+                            // functionCall without thought_signature even when thinking
+                            // was disabled as a fallback. Always inject the sentinel
+                            // for those models (Vertex AI still rejects it).
                             let is_google_cloud = mapped_model.starts_with("projects/");
-                            if is_thinking_enabled && !is_google_cloud {
-                                tracing::debug!("[Tool-Signature] Adding GEMINI_SKIP_SIGNATURE for tool_use: {}", id);
+                            let needs_sentinel = !is_google_cloud
+                                && (is_thinking_enabled
+                                    || model_keeps_thinking_without_signature(&mapped_model));
+                            if needs_sentinel {
+                                tracing::info!(
+                                    "[Tool-Signature] Adding GEMINI_SKIP_SIGNATURE for tool_use: {} (model: {})",
+                                    id, mapped_model
+                                );
                                 part["thoughtSignature"] =
                                     json!("skip_thought_signature_validator");
                                 part["thought_signature"] =
@@ -3244,6 +3258,11 @@ mod tests {
     fn test_model_keeps_thinking_without_signature() {
         assert!(model_keeps_thinking_without_signature("gemini-3-flash"));
         assert!(model_keeps_thinking_without_signature("gemini-3.1-flash"));
+        assert!(model_keeps_thinking_without_signature("gemini-3.7-flash-high"));
+        assert!(model_keeps_thinking_without_signature(
+            "gemini-3.6-flash-medium"
+        ));
+        assert!(model_keeps_thinking_without_signature("gemini-3.5-flash-low"));
         assert!(model_keeps_thinking_without_signature("gemini-pro-agent"));
         assert!(!model_keeps_thinking_without_signature("gemini-3.1-pro"));
         assert!(!model_keeps_thinking_without_signature(

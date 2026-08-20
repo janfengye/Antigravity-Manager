@@ -62,10 +62,10 @@ const SmartWarmup: React.FC<SmartWarmupProps> = ({ config, onChange }) => {
                     </div>
                     <div>
                         <div className="font-bold text-gray-900 dark:text-gray-100">
-                            {t('settings.warmup.title', '智能预热')}
+                            {t('settings.warmup.title', '7天周配额智能预热')}
                         </div>
                         <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                            {t('settings.warmup.desc')}
+                            {t('settings.warmup.desc', '在各账号的 7 天周配额到达重置时间后自动唤醒 1 次，启动当周计时器，零多余消耗。')}
                         </p>
                     </div>
                 </div>
@@ -85,7 +85,7 @@ const SmartWarmup: React.FC<SmartWarmupProps> = ({ config, onChange }) => {
                     <div className="space-y-3">
                         <div>
                             <label className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest block mb-2">
-                                {t('settings.quota_protection.monitored_models_label', '监控模型')}
+                                {t('settings.warmup.monitored_models_label', '预热模型范围')}
                             </label>
                             <div className="grid grid-cols-4 gap-2">
                                 {warmupModelsOptions.map((model) => {
@@ -115,7 +115,7 @@ const SmartWarmup: React.FC<SmartWarmupProps> = ({ config, onChange }) => {
                                 })}
                             </div>
                             <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-2 leading-relaxed">
-                                {t('settings.quota_protection.monitored_models_desc', '勾选需要监控的模型。当选中的任一模型利用率跌破阈值时，将触发保护')}
+                                {t('settings.warmup.monitored_models_desc', '勾选需要预热的模型。在周配额到达重置时间后将自动唤醒 1 次启动新周期。')}
                             </p>
                         </div>
                     </div>

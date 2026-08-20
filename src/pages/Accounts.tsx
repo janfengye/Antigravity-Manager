@@ -1,6 +1,8 @@
 
 
 import {
+  Calendar,
+  Clock,
   Download,
   LayoutGrid,
   List,
@@ -33,6 +35,7 @@ import { useTranslation } from "react-i18next";
 
 type FilterType = "all" | "pro" | "ultra" | "free";
 type ViewMode = "list" | "grid";
+export type QuotaWindow = "5h" | "weekly";
 
 
 function Accounts() {
@@ -64,10 +67,20 @@ function Accounts() {
     return (saved === 'list' || saved === 'grid') ? saved : 'list';
   });
 
+  const [quotaWindow, setQuotaWindow] = useState<QuotaWindow>(() => {
+    const saved = localStorage.getItem('accounts_quota_window');
+    return (saved === '5h' || saved === 'weekly') ? saved : '5h';
+  });
+
   // Save view mode preference
   useEffect(() => {
     localStorage.setItem('accounts_view_mode', viewMode);
   }, [viewMode]);
+
+  // Save quota window preference
+  useEffect(() => {
+    localStorage.setItem('accounts_quota_window', quotaWindow);
+  }, [quotaWindow]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [deviceAccount, setDeviceAccount] = useState<Account | null>(null);
   const [detailsAccount, setDetailsAccount] = useState<Account | null>(null);
@@ -791,6 +804,36 @@ function Accounts() {
           )}
         </div>
 
+        {/* 配额周期切换 (5H / 7天周配额) */}
+        <div className="flex gap-1 bg-gray-100 dark:bg-base-200 p-1 rounded-lg shrink-0 items-center">
+          <button
+            className={cn(
+              "px-2 py-1 text-xs font-semibold rounded-md transition-all flex items-center gap-1",
+              quotaWindow === "5h"
+                ? "bg-white dark:bg-base-100 text-blue-600 dark:text-blue-400 shadow-sm"
+                : "text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-base-content",
+            )}
+            onClick={() => setQuotaWindow("5h")}
+            title={t("accounts.quota_window_5h", "5小时滑动配额")}
+          >
+            <Clock className="w-3.5 h-3.5" />
+            <span>5H</span>
+          </button>
+          <button
+            className={cn(
+              "px-2 py-1 text-xs font-semibold rounded-md transition-all flex items-center gap-1",
+              quotaWindow === "weekly"
+                ? "bg-white dark:bg-base-100 text-blue-600 dark:text-blue-400 shadow-sm"
+                : "text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-base-content",
+            )}
+            onClick={() => setQuotaWindow("weekly")}
+            title={t("accounts.quota_window_weekly", "7天周配额")}
+          >
+            <Calendar className="w-3.5 h-3.5" />
+            <span>{t("accounts.quota_window_weekly_short", "周配额")}</span>
+          </button>
+        </div>
+
         {/* 视图切换按钮组 */}
         <div className="flex gap-1 bg-gray-100 dark:bg-base-200 p-1 rounded-lg shrink-0">
           <button
@@ -1077,6 +1120,7 @@ function Accounts() {
                 onWarmup={handleWarmup}
                 onUpdateLabel={handleUpdateLabel}
                 onViewError={(id: string) => setErrorAccountId(id)}
+                quotaWindow={quotaWindow}
               />
             </div>
           </div>
@@ -1104,6 +1148,7 @@ function Accounts() {
               onWarmup={handleWarmup}
               onUpdateLabel={handleUpdateLabel}
               onViewError={(id: string) => setErrorAccountId(id)}
+              quotaWindow={quotaWindow}
             />
           </div>
         )}

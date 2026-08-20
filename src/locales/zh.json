@@ -239,6 +239,9 @@
     "warmup_this": "预热该账号",
     "warmup_now": "立即预热",
     "warmup_batch_triggered": "已成功为 {{count}} 个账号触发预热任务",
+    "quota_window_5h": "5小时滑动配额",
+    "quota_window_weekly": "7天周配额",
+    "quota_window_weekly_short": "周配额",
     "quota_protected": "受保护",
     "details": {
       "title": "配额详情",
@@ -378,8 +381,8 @@
       "sync_interval": "同步间隔（分钟）"
     },
     "warmup": {
-      "title": "智能预热",
-      "desc": "自动监控所有模型，当额度恢复到 100% 时立即触发预热，保持模型热状态"
+      "title": "7天周配额智能预热",
+      "desc": "在各账号的 7 天周配额到达重置时间后自动唤醒 1 次，启动当周计时器，零多余消耗。"
     },
     "quota_protection": {
       "title": "配额保护",

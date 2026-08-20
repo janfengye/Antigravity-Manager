@@ -291,13 +291,12 @@ pub fn wrap_request_v2(
                                     obj.insert("thought_signature".to_string(), json!(sig));
                                     tracing::debug!("[Gemini-Wrap] Injected signature (len: {}) for session: {}", sig.len(), s_id);
                                 } else {
-                                    // [FIX #2167] Session 缓存为空时对 flash 模型注入哨兵值
-                                    // Flash 模型如果不提供任何签名，Gemini API 会拒绝 functionCall
-                                    let is_flash =
-                                        final_model_name.to_lowercase().contains("gemini-3-flash")
-                                            || final_model_name
-                                                .to_lowercase()
-                                                .contains("gemini-3.1-flash");
+                                    // Session cache empty: Gemini 3.x Flash (including 3.5/3.6/3.7)
+                                    // rejects functionCall without thought_signature.
+                                    let model_lc = final_model_name.to_lowercase();
+                                    let is_flash = model_lc.contains("gemini")
+                                        && (model_lc.contains("flash")
+                                            || model_lc.contains("-flash-"));
                                     if is_flash {
                                         obj.insert(
                                             "thoughtSignature".to_string(),
@@ -307,8 +306,24 @@ pub fn wrap_request_v2(
                                             "thought_signature".to_string(),
                                             json!("skip_thought_signature_validator"),
                                         );
-                                        tracing::debug!("[Gemini-Wrap] [FIX #2167] Injected sentinel signature for flash model (no session cache)");
+                                        tracing::info!("[Gemini-Wrap] Injected sentinel signature for flash model {} (no session cache)", final_model_name);
                                     }
+                                }
+                            } else {
+                                // No session id either: still inject sentinel for Flash.
+                                let model_lc = final_model_name.to_lowercase();
+                                let is_flash = model_lc.contains("gemini")
+                                    && (model_lc.contains("flash") || model_lc.contains("-flash-"));
+                                if is_flash {
+                                    obj.insert(
+                                        "thoughtSignature".to_string(),
+                                        json!("skip_thought_signature_validator"),
+                                    );
+                                    obj.insert(
+                                        "thought_signature".to_string(),
+                                        json!("skip_thought_signature_validator"),
+                                    );
+                                    tracing::info!("[Gemini-Wrap] Injected sentinel signature for flash model {} (no session id)", final_model_name);
                                 }
                             }
                         }
