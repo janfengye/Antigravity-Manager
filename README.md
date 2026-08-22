@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> 专业级 AI 账号管理与协议代理系统 (v4.5.7)
+> 专业级 AI 账号管理与协议代理系统 (v4.5.8)
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
 
@@ -8,7 +8,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.5.7-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.5.8-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -142,7 +142,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **支持的格式**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **高级用法**: 安装指定版本 `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --version 4.5.7`，预览模式 `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --dry-run`
+> **高级用法**: 安装指定版本 `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --version 4.5.8`，预览模式 `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 如果您已安装 [Homebrew](https://brew.sh/)，也可以通过以下命令安装：
@@ -438,6 +438,11 @@ response = client.chat.completions.create(
 ## 📝 开发者与社区
 
 *   **版本演进 (Changelog)**:
+    *   **v4.5.8 (2026-08-22)**:
+        -   **[核心修复] 归一化 Claude Agent SDK / CC GUI 身份标识 (Claude Agent SDK Identity Normalization)**:
+            -   **身份声明精准归一**: 自动将 Claude Agent SDK 客户端（如 CC GUI 等）注入的独立身份声明 (`"You are a Claude agent, built on Anthropic's Claude Agent SDK."`) 精确归一化为 Claude Code CLI 官方身份 (`"You are Claude Code, Anthropic's official CLI for Claude."`)。
+            -   **修复 503 拒答异常**: 彻底解决因上游服务对 Agent SDK 身份分类差异导致的 `RESOURCE_EXHAUSTED` / 503 异常中断，同时严格保留用户自定义 Prompt 内容不受影响。
+            -   *相关 PR*: 详见 [PR #3316](https://github.com/lbjlaq/Antigravity-Manager/pull/3316)。
     *   **v4.5.7 (2026-08-20)**:
         -   **[核心功能] 账号列表支持 5小时 / 7天周配额全局视图无缝切换 (5H/Weekly Quota Switcher)**:
             -   **双周期视图切换**: 在账号主管理页面顶部提供 `5小时滚动配额` 与 `7天周配额` 分段切换器（并持久化保存至本地存储）。
