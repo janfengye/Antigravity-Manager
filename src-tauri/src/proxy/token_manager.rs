@@ -59,6 +59,9 @@ pub struct TokenManager {
     load_code_assist_inflight:
         Arc<DashMap<String, tokio::sync::watch::Receiver<Option<Result<String, String>>>>>,
 
+    // [NEW] 记录账号连续 invalid_grant 失败次数，防止单次偶发网络抖动误停用账号
+    invalid_grant_failures: Arc<DashMap<String, u32>>,
+
     /// 支持优雅关闭时主动 abort 后台任务
     auto_cleanup_handle: Arc<tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
     cancel_token: CancellationToken,
@@ -82,6 +85,7 @@ impl TokenManager {
             )),
             refresh_locks: Arc::new(DashMap::new()),
             load_code_assist_inflight: Arc::new(DashMap::new()), // 初始化 inflight 表
+            invalid_grant_failures: Arc::new(DashMap::new()),
             auto_cleanup_handle: Arc::new(tokio::sync::Mutex::new(None)),
             cancel_token: CancellationToken::new(),
         }
@@ -1835,9 +1839,10 @@ impl TokenManager {
                 OnDiskAccountState::Enabled => {}
             }
 
-            // 3. [NEW] 检查 token 是否过期（调整刷新时机对齐官方：90s 宽限期）
+            // 3. [ENHANCED] 检查 token 是否过期（提前 300 秒/5分钟平滑刷新，保障高可用与并发重试）
             let now = chrono::Utc::now().timestamp();
-            if now >= token.timestamp - 90 {
+            const TOKEN_REFRESH_BUFFER_SECS: i64 = 300;
+            if now >= token.timestamp - TOKEN_REFRESH_BUFFER_SECS {
                 // [NEW] 双重检查锁定逻辑 (Double-Checked Locking)
                 let refresh_mu = self
                     .refresh_locks
@@ -1850,7 +1855,7 @@ impl TokenManager {
                 // 再次检查最新状态
                 let latest_token_opt = self.tokens.get(&token.account_id).map(|r| r.clone());
                 if let Some(latest) = latest_token_opt {
-                    if now < latest.timestamp - 90 {
+                    if now < latest.timestamp - TOKEN_REFRESH_BUFFER_SECS {
                         token = latest.clone();
                         tracing::debug!("账号 {} 已由并发线程在循环中刷新，跳过", token.email);
                     } else {
@@ -1867,6 +1872,9 @@ impl TokenManager {
                         {
                             Ok(token_response) => {
                                 tracing::debug!("Token 刷新成功！");
+                                // 刷新成功后重置该账号的 invalid_grant 失败计数
+                                self.invalid_grant_failures.remove(&token.account_id);
+
                                 token.access_token = token_response.access_token.clone();
                                 token.expires_in = token_response.expires_in;
                                 token.timestamp = now + token_response.expires_in;
@@ -1886,12 +1894,31 @@ impl TokenManager {
                                     token.email,
                                     e
                                 );
-                                if e.contains("\"invalid_grant\"") || e.contains("invalid_grant") {
-                                    self.disable_account(
-                                        &token.account_id,
-                                        &format!("invalid_grant: {}", e),
-                                    )
-                                    .await;
+                                let is_grant_error = e.contains("\"invalid_grant\"") || e.contains("invalid_grant");
+                                if is_grant_error {
+                                    let mut fail_count = self.invalid_grant_failures.entry(token.account_id.clone()).or_insert(0);
+                                    *fail_count += 1;
+                                    let current_fails = *fail_count;
+                                    if current_fails >= 2 {
+                                        tracing::error!(
+                                            "账号 {} 连续 {} 次确认为 invalid_grant，正式执行停用",
+                                            token.email,
+                                            current_fails
+                                        );
+                                        let _ = self
+                                            .disable_account(
+                                                &token.account_id,
+                                                &format!("invalid_grant: {}", e),
+                                            )
+                                            .await;
+                                        self.invalid_grant_failures.remove(&token.account_id);
+                                    } else {
+                                        tracing::warn!(
+                                            "账号 {} 首次确认为 invalid_grant (计数 {}/2)，暂不停用，跳过本次调度",
+                                            token.email,
+                                            current_fails
+                                        );
+                                    }
                                 }
                                 last_error = Some(format!("Token refresh failed: {}", e));
                                 attempted.insert(token.account_id.clone());

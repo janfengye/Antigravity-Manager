@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> Professional AI Account Management & Protocol Proxy System (v4.5.8)
+> Professional AI Account Management & Protocol Proxy System (v4.5.9)
 
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
@@ -9,7 +9,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.5.8-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.5.9-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -144,7 +144,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **Supported formats**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **Advanced usage**: Install a specific version `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --version 4.5.8`, dry-run mode `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --dry-run`
+> **Advanced usage**: Install a specific version `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --version 4.5.9`, dry-run mode `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 If you have [Homebrew](https://brew.sh/) installed, you can also install via:
@@ -427,11 +427,29 @@ In clients that support OpenAI protocol (e.g., Cherry Studio), you can configure
 ## 📝 Developer & Community
 
 *   **Version History (Changelog)**:
+    *   **v4.5.9 (2026-08-23)**:
+        -   **[Core Feature] Multimodal Audio Input Support on OpenAI-Compatible Endpoint (OpenAI Audio Input Support)**:
+            -   **Standard Audio Input & Multi-Source Mapping**: Fully supports standard OpenAI `input_audio` (Base64 data + format specifier) and `audio_url` fields, seamlessly transforming them into Gemini `inlineData` / `fileData` parts.
+            -   **Multi-Source Audio & Automatic MIME Normalization**: Supports `data:` URLs, remote `http(s)://` URLs, local `file://` / filesystem paths, and raw Base64 inputs with unified MIME normalization for formats including `wav`, `mp3`, `m4a`, `ogg`, `flac`, and `aiff`.
+            -   **End-to-End Pipeline & Context Token Estimation**: Integrated into Responses API mapping and `ContextManager` token estimation for reliable, stateful multimodal interactions.
+            -   *Related PR*: See [PR #3321](https://github.com/lbjlaq/Antigravity-Manager/pull/3321).
+        -   **[Core Fix] OAuth Token Refresh Resilience & invalid_grant Backoff Confirmation (OAuth Token Refresh Resilience & Backoff)**:
+            -   **Proactive Buffer Window (5-Minute Buffer)**: Extended proactive token refresh window from 90s to 300s (5 minutes before expiry), effectively preventing high-latency network drops and critical token expiration.
+            -   **In-Place Backoff Confirmation (Backoff Retry)**: Added 500ms backoff retry on initial `invalid_grant` or transient proxy errors during OAuth refresh to avoid false positives caused by proxy node jitters.
+            -   **Consecutive Failure Threshold**: Introduced consecutive failure tracking that only disables an account after 2+ confirmed `invalid_grant` errors across cycles, resetting on success to eliminate accidental account deactivations.
+        -   **[Core Fix] 403 / VALIDATION_REQUIRED Processing Order & URL Extraction (403 Validation Block & URL Parsing Fix)**:
+            -   **Execution Timing Refactoring**: Fixed an issue where the 403 validation blocking logic was bypassed by early `continue` in retry backoff loops, ensuring `VALIDATION_REQUIRED` detection and account exclusion occur immediately upon receiving 403.
+            -   **Automatic URL Extraction & UI Sync**: Deeply parses `validation_url` / `appeal_url` links from Google RPC responses, persists them to local index, and emits real-time refresh events to display the 403 badge and quick validation button on affected accounts.
+            -   **Accurate Status Code Propagation**: Fixed the fallback status code which previously hardcoded `429` when all accounts were exhausted, correctly propagating `403 FORBIDDEN` and `401 UNAUTHORIZED`.
+    <details>
+    <summary>Show older changelog (v4.5.8 and earlier)</summary>
+
     *   **v4.5.8 (2026-08-22)**:
         -   **[Core Fix] Normalize Claude Agent SDK / CC GUI Identity (Claude Agent SDK Identity Normalization)**:
             -   **Identity Declaration Normalization**: Automatically normalizes standalone identity declarations injected by Claude Agent SDK clients (e.g., CC GUI) (`"You are a Claude agent, built on Anthropic's Claude Agent SDK."`) to the official Claude Code CLI identity (`"You are Claude Code, Anthropic's official CLI for Claude."`).
             -   **Resolve 503 Rejection Errors**: Eliminates `RESOURCE_EXHAUSTED` / 503 errors caused by upstream Antigravity classifying Agent SDK identity differently from Claude Code CLI, while strictly keeping user-authored prompt contents intact.
             -   *Related PR*: See [PR #3316](https://github.com/lbjlaq/Antigravity-Manager/pull/3316).
+
     *   **v4.5.7 (2026-08-20)**:
         -   **[Core Feature] 5H / Weekly Quota View Switcher for Accounts (5H/Weekly Quota Switcher)**:
             -   **Dual-Window Segmented Toggle**: Adds a segmented toggle on the Accounts page to switch between real-time 5-hour rolling quotas and 7-day weekly quota buckets (persisted to `localStorage`).
@@ -1268,8 +1286,6 @@ In clients that support OpenAI protocol (e.g., Cherry Studio), you can configure
         -   **[Core Fix] Web Mode Login Validation Fix & Logout Button (PR #1603)**:
             -   **Login Validation**: Fixed exceptions in the Web mode login validation logic, ensuring stability of user authentication.
             -   **Logout Support**: Added/fixed the logout button in the UI, completing the account management loop for Web mode.
-    <details>
-    <summary>Show older changelog (v4.1.5 and earlier)</summary>
 
     *   **v4.1.5 (2026-02-05)**:
         -   **[Security Fix] Frontend API Key Storage Migration (LocalStorage -> SessionStorage)**:

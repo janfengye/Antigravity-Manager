@@ -609,6 +609,36 @@ pub async fn handle_generate(
             .await;
         }
 
+        // [FIX] 403 时优先检测 VALIDATION_REQUIRED 并设置 is_forbidden / validation_block 状态，确保及时提取 URL 与更新 UI
+        if status_code == 403 {
+            if let Some(acc_id) = token_manager.get_account_id_by_email(&email) {
+                if error_text.contains("VALIDATION_REQUIRED")
+                    || error_text.contains("verify your account")
+                    || error_text.contains("Verify your account")
+                    || error_text.contains("validation_url")
+                {
+                    tracing::warn!(
+                        "[Gemini] VALIDATION_REQUIRED detected on account {}, temporarily blocking",
+                        email
+                    );
+                    let block_minutes = 10i64;
+                    let block_until = chrono::Utc::now().timestamp() + (block_minutes * 60);
+
+                    if let Err(e) = token_manager
+                        .set_validation_block_public(&acc_id, block_until, &error_text)
+                        .await
+                    {
+                        tracing::error!("Failed to set validation block: {}", e);
+                    }
+                }
+
+                // 设置 is_forbidden 状态并持久化
+                if let Err(e) = token_manager.set_forbidden(&acc_id, &error_text).await {
+                    tracing::error!("Failed to set forbidden status: {}", e);
+                }
+            }
+        }
+
         // 确定重试策略
         let strategy = determine_retry_strategy(status_code, &error_text, false);
         let trace_id = format!("gemini_{}", session_id);
@@ -700,16 +730,25 @@ pub async fn handle_generate(
             .into_response());
     }
 
+    // 所有尝试均失败：根据最后的错误类型决定状态码
+    let final_status = if last_error.contains("403") || last_error.contains("PERMISSION_DENIED") || last_error.contains("VALIDATION_REQUIRED") {
+        StatusCode::FORBIDDEN
+    } else if last_error.contains("401") || last_error.contains("UNAUTHENTICATED") {
+        StatusCode::UNAUTHORIZED
+    } else {
+        StatusCode::TOO_MANY_REQUESTS
+    };
+
     if let Some(email) = last_email {
         Ok((
-            StatusCode::TOO_MANY_REQUESTS,
+            final_status,
             [("X-Account-Email", email)],
             format!("All accounts exhausted. Last error: {}", last_error),
         )
             .into_response())
     } else {
         Ok((
-            StatusCode::TOO_MANY_REQUESTS,
+            final_status,
             format!("All accounts exhausted. Last error: {}", last_error),
         )
             .into_response())

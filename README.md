@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> 专业级 AI 账号管理与协议代理系统 (v4.5.8)
+> 专业级 AI 账号管理与协议代理系统 (v4.5.9)
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
 
@@ -8,7 +8,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.5.8-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.5.9-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -142,7 +142,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **支持的格式**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **高级用法**: 安装指定版本 `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --version 4.5.8`，预览模式 `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --dry-run`
+> **高级用法**: 安装指定版本 `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --version 4.5.9`，预览模式 `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 如果您已安装 [Homebrew](https://brew.sh/)，也可以通过以下命令安装：
@@ -438,11 +438,29 @@ response = client.chat.completions.create(
 ## 📝 开发者与社区
 
 *   **版本演进 (Changelog)**:
+    *   **v4.5.9 (2026-08-23)**:
+        -   **[核心功能] OpenAI 兼容端点支持多模态音频输入 (OpenAI Audio Input Support)**:
+            -   **支持标准音频格式与多来源映射**: 支持 OpenAI 官方 `input_audio`（Base64 编码 + 格式标识）及 `audio_url`，无缝转换为 Gemini 的 `inlineData` / `fileData` 格式。
+            -   **多数据源与格式自动归一化**: 完整兼容 `data:` URL、`http(s)://` 远程链接、`file://` 本地文件及裸 Base64 编码，自动将 `wav`, `mp3`, `m4a`, `ogg`, `flac`, `aiff` 等格式归一化为标准 MIME 类型。
+            -   **全链路与上下文 Token 评估**: 在 Responses API 转换及 `ContextManager` Token 估算中完整接入音频内容块，保障音频理解请求稳定交互。
+            -   *相关 PR*: 详见 [PR #3321](https://github.com/lbjlaq/Antigravity-Manager/pull/3321)。
+        -   **[核心修复] 增强 OAuth Token 刷新平滑度与 invalid_grant 退避确认机制 (OAuth Token Refresh Resilience & Backoff)**:
+            -   **提前平滑刷新 (5分钟缓冲)**: 将 Token 主动刷新时机由临界 90 秒扩充至 300 秒（提前 5 分钟），有效防范网络高延迟击穿与临界过期掉登录态。
+            -   **原地退避确认 (Backoff Retry)**: OAuth 刷新层首次收到 `invalid_grant` 或中间层临时错误时自动执行 500ms 短暂退避并进行二次确认，杜绝代理节点抖动导致的误判。
+            -   **连续失败门禁机制**: 引入连续失败计数器，仅在连续 2 次以上独立确认为 `invalid_grant` 时才执行账号停用，成功时自动重置计数，彻底解决偶发网络抖动导致账号误停用的问题。
+        -   **[核心修复] 修复 403 / VALIDATION_REQUIRED 识别时序与死代码，支持动态提取验证链接 (403 Validation Block & URL Parsing Fix)**:
+            -   **执行时序重构**: 修复代理处理链中因重试策略提早 continue 导致 403 阻断处理逻辑被短路的缺陷，在遇到 403 阻断的瞬间即刻触发 `VALIDATION_REQUIRED` 判定与账号池剔除保护。
+            -   **链接自动提取与 UI 状态同步**: 深度解析 Google RPC 响应中的 `validation_url` / `appeal_url` 验证链接并持久化至本地索引，实时触发前端事件刷新，为故障账号打上 403 标签并提供快捷验证跳转入口。
+            -   **状态码精准回退**: 修正代理池账号全部轮换尝试完毕后一律写死 429 的问题，当上游为 403 / 401 权限问题时精准回传真实 HTTP 状态码。
+    <details>
+    <summary>显示历史版本演进 (v4.5.8 及更早)</summary>
+
     *   **v4.5.8 (2026-08-22)**:
         -   **[核心修复] 归一化 Claude Agent SDK / CC GUI 身份标识 (Claude Agent SDK Identity Normalization)**:
             -   **身份声明精准归一**: 自动将 Claude Agent SDK 客户端（如 CC GUI 等）注入的独立身份声明 (`"You are a Claude agent, built on Anthropic's Claude Agent SDK."`) 精确归一化为 Claude Code CLI 官方身份 (`"You are Claude Code, Anthropic's official CLI for Claude."`)。
             -   **修复 503 拒答异常**: 彻底解决因上游服务对 Agent SDK 身份分类差异导致的 `RESOURCE_EXHAUSTED` / 503 异常中断，同时严格保留用户自定义 Prompt 内容不受影响。
             -   *相关 PR*: 详见 [PR #3316](https://github.com/lbjlaq/Antigravity-Manager/pull/3316)。
+
     *   **v4.5.7 (2026-08-20)**:
         -   **[核心功能] 账号列表支持 5小时 / 7天周配额全局视图无缝切换 (5H/Weekly Quota Switcher)**:
             -   **双周期视图切换**: 在账号主管理页面顶部提供 `5小时滚动配额` 与 `7天周配额` 分段切换器（并持久化保存至本地存储）。
@@ -1307,8 +1325,6 @@ response = client.chat.completions.create(
         -   **[核心修复] Web Mode 登录验证修复 & 登出按钮 (PR #1603)**:
             -   **登录验证**: 修复了 Web 模式下登录验证逻辑的异常，确保用户身份验证的稳定性。
             -   **登出功能**: 在界面中新增/修复了登出按钮，完善了 Web 模式下的账户管理闭环。
-    <details>
-    <summary>显示旧版本日志 (v4.1.5 及更早)</summary>
 
     *   **v4.1.5 (2026-02-05)**:
         -   **[安全修复] 前端 API Key 存储迁移 (LocalStorage -> SessionStorage)**:

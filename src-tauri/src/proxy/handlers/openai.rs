@@ -80,6 +80,24 @@ fn responses_message_parts(item: &Value) -> (Vec<String>, Vec<Value>) {
                             "image_url": image_url.clone()
                         }));
                     }
+                } else if matches!(
+                    part.get("type").and_then(Value::as_str),
+                    Some("input_audio") | Some("audio")
+                ) {
+                    // [NEW] Responses API 音频入参透传给 chat/completions 映射层
+                    if let Some(input_audio) = part.get("input_audio") {
+                        image_parts.push(json!({
+                            "type": "input_audio",
+                            "input_audio": input_audio.clone()
+                        }));
+                    }
+                } else if part.get("type").and_then(Value::as_str) == Some("audio_url") {
+                    if let Some(audio_url) = part.get("audio_url") {
+                        image_parts.push(json!({
+                            "type": "audio_url",
+                            "audio_url": audio_url.clone()
+                        }));
+                    }
                 }
             }
         }
@@ -1442,6 +1460,36 @@ pub async fn handle_chat_completions(
                 .await;
         }
 
+        // [FIX] 403 时优先检测 VALIDATION_REQUIRED 并设置 is_forbidden / validation_block 状态，确保及时提取 URL 与更新 UI
+        if status_code == 403 {
+            if let Some(acc_id) = token_manager.get_account_id_by_email(&email) {
+                if error_text.contains("VALIDATION_REQUIRED")
+                    || error_text.contains("verify your account")
+                    || error_text.contains("Verify your account")
+                    || error_text.contains("validation_url")
+                {
+                    tracing::warn!(
+                        "[OpenAI] VALIDATION_REQUIRED detected on account {}, temporarily blocking",
+                        email
+                    );
+                    let block_minutes = 10i64;
+                    let block_until = chrono::Utc::now().timestamp() + (block_minutes * 60);
+
+                    if let Err(e) = token_manager
+                        .set_validation_block_public(&acc_id, block_until, &error_text)
+                        .await
+                    {
+                        tracing::error!("Failed to set validation block: {}", e);
+                    }
+                }
+
+                // 设置 is_forbidden 状态并持久化
+                if let Err(e) = token_manager.set_forbidden(&acc_id, &error_text).await {
+                    tracing::error!("Failed to set forbidden status: {}", e);
+                }
+            }
+        }
+
         // 执行退避
         if apply_retry_strategy(
             strategy.clone(),
@@ -1455,16 +1503,10 @@ pub async fn handle_chat_completions(
             // [NEW] Apply Client Adapter "let_it_crash" strategy
             if let Some(adapter) = &client_adapter {
                 if adapter.let_it_crash() && attempt > 0 {
-                    // For let_it_crash clients (like opencode), allow maybe 1 retry but then fail fast
-                    // to prevent long hangs on UI.
                     tracing::warn!(
                         "[OpenAI] let_it_crash active: Aborting retries after attempt {}",
                         attempt
                     );
-                    // Breaking loop to return error immediately
-                    // Reuse existing error return logic via loop exit behavior?
-                    // Or construct error here?
-                    // Let's just break for now, which will trigger the "All accounts exhausted" or last error logic.
                     break;
                 }
             }
@@ -1480,21 +1522,6 @@ pub async fn handle_chat_completions(
                 force_rotate = true;
             }
 
-            // 2. [REMOVED] 不再特殊处理 QUOTA_EXHAUSTED，允许账号轮换
-            // if error_text.contains("QUOTA_EXHAUSTED") { ... }
-            /*
-            if error_text.contains("QUOTA_EXHAUSTED") {
-                error!(
-                    "OpenAI Quota exhausted (429) on account {} attempt {}/{}, stopping to protect pool.",
-                    email,
-                    attempt + 1,
-                    max_attempts
-                );
-                return Ok((status, [("X-Account-Email", email.as_str()), ("X-Mapped-Model", mapped_model.as_str())], error_text).into_response());
-            }
-            */
-
-            // 3. 其他限流或服务器过载情况，轮换账号
             tracing::warn!(
                 "OpenAI Upstream {} on {} attempt {}/{}, rotating account",
                 status_code,
@@ -1542,67 +1569,6 @@ pub async fn handle_chat_completions(
             continue; // 重试
         }
 
-        // 只有 403 (权限/地区限制) 和 401 (认证失效) 触发账号轮换
-        if status_code == 403 || status_code == 401 {
-            if apply_retry_strategy(
-                RetryStrategy::FixedDelay(Duration::from_millis(200)),
-                attempt,
-                max_attempts,
-                status_code,
-                &trace_id,
-            )
-            .await
-            {
-                continue;
-            }
-        }
-
-        // 只有 403 (权限/地区限制) 和 401 (认证失效) 触发账号轮换
-        if status_code == 403 || status_code == 401 {
-            // [NEW] 403 时设置 is_forbidden 状态，避免 Claude Code 会话退出
-            if status_code == 403 {
-                if let Some(acc_id) = token_manager.get_account_id_by_email(&email) {
-                    // Check for VALIDATION_REQUIRED error - temporarily block account
-                    if error_text.contains("VALIDATION_REQUIRED")
-                        || error_text.contains("verify your account")
-                        || error_text.contains("validation_url")
-                    {
-                        tracing::warn!(
-                            "[OpenAI] VALIDATION_REQUIRED detected on account {}, temporarily blocking",
-                            email
-                        );
-                        // Block for 10 minutes (default, configurable via config file)
-                        let block_minutes = 10i64;
-                        let block_until = chrono::Utc::now().timestamp() + (block_minutes * 60);
-
-                        if let Err(e) = token_manager
-                            .set_validation_block_public(&acc_id, block_until, &error_text)
-                            .await
-                        {
-                            tracing::error!("Failed to set validation block: {}", e);
-                        }
-                    }
-
-                    // 设置 is_forbidden 状态
-                    if let Err(e) = token_manager.set_forbidden(&acc_id, &error_text).await {
-                        tracing::error!("Failed to set forbidden status: {}", e);
-                    }
-                }
-            }
-
-            if apply_retry_strategy(
-                RetryStrategy::FixedDelay(Duration::from_millis(200)),
-                attempt,
-                max_attempts,
-                status_code,
-                &trace_id,
-            )
-            .await
-            {
-                continue;
-            }
-        }
-
         // 404 等由于模型配置或路径错误的 HTTP 异常，直接报错，不进行无效轮换
         error!(
             "OpenAI Upstream non-retryable error {} on account {}: {}",
@@ -1626,17 +1592,25 @@ pub async fn handle_chat_completions(
             .into_response());
     }
 
-    // 所有尝试均失败
+    // 所有尝试均失败：根据最后的错误类型决定状态码
+    let final_status = if last_error.contains("403") || last_error.contains("PERMISSION_DENIED") || last_error.contains("VALIDATION_REQUIRED") {
+        StatusCode::FORBIDDEN
+    } else if last_error.contains("401") || last_error.contains("UNAUTHENTICATED") {
+        StatusCode::UNAUTHORIZED
+    } else {
+        StatusCode::TOO_MANY_REQUESTS
+    };
+
     if let Some(email) = last_email {
         Ok((
-            StatusCode::TOO_MANY_REQUESTS,
+            final_status,
             [("X-Account-Email", email), ("X-Mapped-Model", mapped_model)],
             format!("All accounts exhausted. Last error: {}", last_error),
         )
             .into_response())
     } else {
         Ok((
-            StatusCode::TOO_MANY_REQUESTS,
+            final_status,
             [("X-Mapped-Model", mapped_model)],
             format!("All accounts exhausted. Last error: {}", last_error),
         )
