@@ -41,6 +41,11 @@ const MAX_RECURSION_DEPTH: usize = 10;
 /// 4. [NEW] 处理 anyOf 联合类型: anyOf: [{"type": "string"}, {"type": "null"}] -> "type": "string"
 /// 5. 将 type 字段的值转换为小写 (Gemini v1internal 要求)
 /// 6. 移除数字校验字段: multipleOf, exclusiveMinimum, exclusiveMaximum 等
+/// 清洗用于 responseSchema 的 JSON Schema
+pub fn clean_response_schema(value: &mut Value) {
+    clean_json_schema(value);
+}
+
 pub fn clean_json_schema(value: &mut Value) {
     // 0. 预处理：展开 $ref (Schema Flattening)
     // [FIX #952] 递归收集所有层级的 $defs/definitions，而非仅从根层级提取

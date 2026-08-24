@@ -84,6 +84,13 @@ static CLAUDE_TO_GEMINI: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|
     m.insert("gemini-3-pro", "gemini-3-pro-preview");
     m.insert("gemini-2.5-flash", "gemini-2.5-flash");
     m.insert("gemini-3-flash", "gemini-3-flash");
+    m.insert("gemini-3.5-flash", "gemini-3.5-flash");
+    m.insert("gemini-3.6-flash", "gemini-3.6-flash");
+    m.insert("gemini-3.7-flash", "gemini-3.7-flash");
+    m.insert("gemini-3.7-flash-tiered", "gemini-3.7-flash-tiered");
+    m.insert("gemini-3.7-flash-low", "gemini-3.7-flash-low");
+    m.insert("gemini-3.7-flash-medium", "gemini-3.7-flash-medium");
+    m.insert("gemini-3.7-flash-high", "gemini-3.7-flash-high");
     m.insert("gemini-3-pro-image", "gemini-3-pro-image");
 
     // [New] Unified Virtual ID for Background Tasks (Title, Summary, etc.)

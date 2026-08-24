@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> Professional AI Account Management & Protocol Proxy System (v4.5.9)
+> Professional AI Account Management & Protocol Proxy System (v4.6.0)
 
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
@@ -9,7 +9,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.5.9-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.6.0-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -427,6 +427,20 @@ In clients that support OpenAI protocol (e.g., Cherry Studio), you can configure
 ## 📝 Developer & Community
 
 *   **Version History (Changelog)**:
+    *   **v4.6.0 (2026-08-24)**:
+        -   **[Core Feature] OpenAI-Compatible Endpoint Support for response_format.json_schema Structured Outputs (Structured Outputs Support)**:
+            -   **JSON Schema Specification Support**: Fully supports `response_format: { type: "json_schema", json_schema: { ... } }` payload definitions per OpenAI specifications.
+            -   **Deep Schema Cleaning & Ref Expansion**: Recursively resolves `$ref`/`$defs` references and normalizes schemas into Gemini-compatible `generationConfig.responseSchema`, setting `responseMimeType: "application/json"`.
+            -   **Broad Ecosystem Compatibility**: Fixes schema validation errors in structured output frameworks like LangChain, Zod, and Instructor when invoking Gemini models via OpenAI endpoints.
+            -   *Related PR*: See [PR #3324](https://github.com/lbjlaq/Antigravity-Manager/pull/3324).
+        -   **[Core Fix] Resolve Proxy Pool Health Check 407 Errors & Support URL-Embedded Credentials (Proxy Pool Health Check 407 & Auth Parsing Fix)**:
+            -   **Upgrade Default Endpoint to HTTPS 204**: Changed default health check endpoint from plaintext `http://` to `https://cp.cloudflare.com/generate_204`, enforcing standard HTTPS `CONNECT` tunnels and authenticating properly through proxy servers, fixing false positive `407 Proxy Authentication Required` errors.
+            -   **Automatic URL-Embedded Credential Extraction**: Automatically extracts `username` and `password` from `http(s)://user:password@ip:port` proxy URLs and safely applies them via Basic Auth to prevent credentials from being dropped.
+            -   *Related Issue*: Fixes [#3323](https://github.com/lbjlaq/Antigravity-Manager/issues/3323).
+        -   **[Core Fix] Full Support for Gemini 3.7 / 3.6 Flash Tiered Variants & Thinking Budget Mapping (Gemini 3.7 Flash Variant Mapping & 429 Fix)**:
+            -   **Official 3.7 Flash Spec Alignment**: Registered `gemini-3.7-flash` family and explicit tier aliases including `gemini-3.7-flash-low` (1,000 budget), `gemini-3.7-flash-medium` (4,000 budget), `gemini-3.7-flash-high` (10,000 budget), and `gemini-3.7-flash-tiered`.
+            -   **Eliminate Local 429 Interceptions**: Resolves issues where unregistered 3.7 variant IDs caused local token manager / quota evaluation to falsely trigger "No available accounts: All accounts limited" 429 responses.
+            -   *Related Issue*: Fixes [#3322](https://github.com/lbjlaq/Antigravity-Manager/issues/3322).
     *   **v4.5.9 (2026-08-23)**:
         -   **[Core Feature] Multimodal Audio Input Support on OpenAI-Compatible Endpoint (OpenAI Audio Input Support)**:
             -   **Standard Audio Input & Multi-Source Mapping**: Fully supports standard OpenAI `input_audio` (Base64 data + format specifier) and `audio_url` fields, seamlessly transforming them into Gemini `inlineData` / `fileData` parts.

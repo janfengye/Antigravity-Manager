@@ -106,7 +106,7 @@ fn build_model_catalog() -> Vec<ModelDef> {
         reasoning: family.reasoning,
         variant_type: match family.canonical_id {
             "gemini-3.1-pro" => Some(VariantType::Gemini3Pro),
-            "gemini-3.5-flash" => Some(VariantType::Gemini3Flash),
+            "gemini-3.7-flash" | "gemini-3.5-flash" => Some(VariantType::Gemini3Flash),
             _ => None,
         },
     }));

@@ -919,6 +919,14 @@ pub fn transform_openai_request(
     if let Some(fmt) = &request.response_format {
         if fmt.r#type == "json_object" {
             gen_config["responseMimeType"] = json!("application/json");
+        } else if fmt.r#type == "json_schema" {
+            gen_config["responseMimeType"] = json!("application/json");
+            if let Some(js) = &fmt.json_schema {
+                if let Some(mut schema) = js.schema.clone() {
+                    crate::proxy::common::json_schema::clean_response_schema(&mut schema);
+                    gen_config["responseSchema"] = schema;
+                }
+            }
         }
     }
 
@@ -1845,5 +1853,52 @@ mod tests {
             !has_google_search,
             "v1internal should avoid mixed Google Search when functionDeclarations present"
         );
+    }
+
+    #[test]
+    fn test_response_format_json_schema_mapping() {
+        let raw_json = json!({
+            "model": "gemini-2.5-flash",
+            "messages": [
+                {"role": "user", "content": "test"}
+            ],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "test_schema",
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "summary": {
+                                "type": "object",
+                                "properties": {
+                                    "text": { "type": "string" },
+                                    "sourceId": { "type": "string" },
+                                    "quote": { "type": "string" }
+                                },
+                                "required": ["text", "sourceId", "quote"],
+                                "additionalProperties": false
+                            },
+                            "topics": {
+                                "type": "array",
+                                "items": { "type": "string" }
+                            }
+                        },
+                        "required": ["summary", "topics"],
+                        "additionalProperties": false
+                    },
+                    "strict": true
+                }
+            }
+        });
+
+        let request: OpenAIRequest = serde_json::from_value(raw_json).unwrap();
+        let (res_val, _sid, _msg_count, _) = transform_openai_request(&request, "test-v", "gemini-2.5-flash", None);
+        let gen_config = &res_val["request"]["generationConfig"];
+        assert_eq!(gen_config["responseMimeType"], "application/json");
+        assert!(gen_config.get("responseSchema").is_some());
+        let resp_schema = &gen_config["responseSchema"];
+        assert_eq!(resp_schema["type"], "object");
+        assert_eq!(resp_schema["properties"]["summary"]["type"], "object");
     }
 }

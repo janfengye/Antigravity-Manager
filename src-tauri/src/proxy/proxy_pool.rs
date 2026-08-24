@@ -344,16 +344,45 @@ impl ProxyPoolManager {
         self.select_by_priority(proxies)
     }
 
-    /// 构建 reqwest::Proxy 配置
+    /// 构建 rquest::Proxy 配置
     fn build_proxy_config(&self, entry: &ProxyEntry) -> Result<PoolProxyConfig, String> {
-        let url = crate::proxy::config::normalize_proxy_url(&entry.url);
+        let raw_url = crate::proxy::config::normalize_proxy_url(&entry.url);
 
-        let mut proxy =
-            rquest::Proxy::all(&url).map_err(|e| format!("Invalid proxy URL: {}", e))?;
+        // 尝试解析 URL，提取可能内嵌在 URL 中的 username 和 password
+        let (clean_url, parsed_auth) = match url::Url::parse(&raw_url) {
+            Ok(mut u) => {
+                let user = if !u.username().is_empty() {
+                    Some(u.username().to_string())
+                } else {
+                    None
+                };
+                let pass = u.password().map(|p| p.to_string());
 
-        // 添加认证
+                // 清理 URL 中的凭据以防特定底层库解析异常
+                let _ = u.set_username("");
+                let _ = u.set_password(None);
+
+                let auth = if let (Some(user), Some(pass)) = (user, pass) {
+                    Some((user, pass))
+                } else {
+                    None
+                };
+                (u.to_string(), auth)
+            }
+            Err(_) => (raw_url.clone(), None),
+        };
+
+        let mut proxy = rquest::Proxy::all(&clean_url)
+            .or_else(|_| rquest::Proxy::all(&raw_url))
+            .map_err(|e| format!("Invalid proxy URL: {}", e))?;
+
+        // 优先使用结构化 auth，兜底使用从 URL 内嵌解析出的 auth
         if let Some(auth) = &entry.auth {
-            proxy = proxy.basic_auth(&auth.username, &auth.password);
+            if !auth.username.is_empty() {
+                proxy = proxy.basic_auth(&auth.username, &auth.password);
+            }
+        } else if let Some((user, pass)) = parsed_auth {
+            proxy = proxy.basic_auth(&user, &pass);
         }
 
         Ok(PoolProxyConfig {
@@ -477,11 +506,9 @@ impl ProxyPoolManager {
         }
     }
 
-    /// 健康检查
+    /// 批量检查代理健康状态
     pub async fn health_check(&self) -> Result<(), String> {
-        // 由于需要异步并发检查，且不能锁住 config 太久，
-        // 我们先复制一份需要检查的代理列表
-        let proxies_to_check: Vec<_> = {
+        let proxies_to_check: Vec<ProxyEntry> = {
             let config = self.config.read().await;
             config
                 .proxies
@@ -531,14 +558,16 @@ impl ProxyPoolManager {
 
     /// 检查单个代理健康状态
     async fn check_proxy_health(&self, entry: &ProxyEntry) -> (bool, Option<u64>) {
+        const DEFAULT_HEALTH_CHECK_URL: &str = "https://cp.cloudflare.com/generate_204";
+
         let check_url = if let Some(url) = &entry.health_check_url {
             if url.trim().is_empty() {
-                "http://cp.cloudflare.com/generate_204"
+                DEFAULT_HEALTH_CHECK_URL
             } else {
                 url.as_str()
             }
         } else {
-            "http://cp.cloudflare.com/generate_204"
+            DEFAULT_HEALTH_CHECK_URL
         };
 
         // 尝试构建 Client，如果失败直接视为不健康
@@ -614,3 +643,59 @@ impl ProxyPoolManager {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::proxy::config::ProxyAuth;
+
+    #[test]
+    fn test_build_proxy_config_with_explicit_auth() {
+        let pool = ProxyPoolManager::new(Arc::new(RwLock::new(ProxyPoolConfig::default())));
+        let entry = ProxyEntry {
+            id: "p1".to_string(),
+            name: "test".to_string(),
+            url: "http://127.0.0.1:8080".to_string(),
+            auth: Some(ProxyAuth {
+                username: "user".to_string(),
+                password: "pass".to_string(),
+            }),
+            enabled: true,
+            priority: 1,
+            tags: vec![],
+            max_accounts: None,
+            health_check_url: None,
+            last_check_time: None,
+            is_healthy: true,
+            latency: None,
+        };
+
+        let res = pool.build_proxy_config(&entry);
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap().entry_id, "p1");
+    }
+
+    #[test]
+    fn test_build_proxy_config_with_url_auth() {
+        let pool = ProxyPoolManager::new(Arc::new(RwLock::new(ProxyPoolConfig::default())));
+        let entry = ProxyEntry {
+            id: "p2".to_string(),
+            name: "test_url_auth".to_string(),
+            url: "http://user:pass@127.0.0.1:10080".to_string(),
+            auth: None,
+            enabled: true,
+            priority: 1,
+            tags: vec![],
+            max_accounts: None,
+            health_check_url: None,
+            last_check_time: None,
+            is_healthy: true,
+            latency: None,
+        };
+
+        let res = pool.build_proxy_config(&entry);
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap().entry_id, "p2");
+    }
+}
+

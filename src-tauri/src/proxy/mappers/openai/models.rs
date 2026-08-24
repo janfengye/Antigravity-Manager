@@ -62,8 +62,22 @@ pub struct ThinkingConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResponseFormatJSONSchema {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schema: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strict: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResponseFormat {
     pub r#type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub json_schema: Option<ResponseFormatJSONSchema>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
