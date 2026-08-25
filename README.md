@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> 专业级 AI 账号管理与协议代理系统 (v4.6.0)
+> 专业级 AI 账号管理与协议代理系统 (v4.6.1)
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
 
@@ -8,7 +8,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.6.0-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.6.1-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -438,6 +438,16 @@ response = client.chat.completions.create(
 ## 📝 开发者与社区
 
 *   **版本演进 (Changelog)**:
+    *   **v4.6.1 (2026-08-25)**:
+        -   **[核心修复] 修复多轮对话思考内容与图片堆积引发 1M Token 溢出，并增加报错时输入 Token 本地估算回退 (Token 1M Overflow & Monitor Token Estimation Fallback)**:
+            -   **历史思考内容自动剪枝**: 在转换为 Gemini contents 时，仅保留最近窗口内 assistant 消息的思考文本，历史轮次仅保留工具调用关联的 `thoughtSignature` 占位，防止 Agent 长对话下思考内容滚雪球堆积触发 1M Token 限制。
+            -   **监控日志 Token 本地估算回退 (Fallback Token Estimation)**: 当请求在上游 Google 报错拒绝（如 400 错误响应无 `usageMetadata`）时，中间件自动调用本地 Token 估算引擎计算 `input_tokens`，彻底解决报错时后台监控显示输入 Token 为空/0 的问题。
+            -   *相关 Issue*: 修复 [#3325](https://github.com/lbjlaq/Antigravity-Manager/issues/3325)。
+        -   **[核心修复] 修复 OpenAI/Responses 转 Gemini 时 JSON Schema `const` 兼容性问题，解决 Computer Use MCP 报 400 INVALID_ARGUMENT (JSON Schema Const Normalization Fix)**:
+            -   **规范化 `const` 关键字**: 在公共 Schema 清洗器 `clean_json_schema` 中增加对 `const` 关键字的自动规范化与类型推断，自动将 `{"const": "value"}` 转换为 Gemini / Vertex Schema Proto 支持的标准 `{"type": "...", "enum": ["value"]}` 格式。
+            -   **深度嵌套与联合类型支持**: 完整兼容 `anyOf` / `oneOf` 联合类型及嵌套对象内部的 `const` 字段，杜绝非法字段结构导致 Google 上游判定为非法的错误。
+            -   **MCP 与 Agent 生态兼容提升**: 完美解决 ZCode Computer Use MCP、浏览器自动化等复杂 Agent 工具在通过 OpenAI/Claude 兼容接口调用 Gemini 系列模型时触发 `400 INVALID_ARGUMENT` 的问题。
+            -   *相关 Issue*: 修复 [#3327](https://github.com/lbjlaq/Antigravity-Manager/issues/3327)。
     *   **v4.6.0 (2026-08-24)**:
         -   **[核心功能] OpenAI 兼容端点支持 response_format.json_schema 结构化输出 (Structured Outputs Support)**:
             -   **支持 JSON Schema 规范定义**: 完整支持 OpenAI 规范中的 `response_format: { type: "json_schema", json_schema: { ... } }` 格式定义。

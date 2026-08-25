@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> Professional AI Account Management & Protocol Proxy System (v4.6.0)
+> Professional AI Account Management & Protocol Proxy System (v4.6.1)
 
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
@@ -9,7 +9,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.6.0-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.6.1-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -427,6 +427,16 @@ In clients that support OpenAI protocol (e.g., Cherry Studio), you can configure
 ## 📝 Developer & Community
 
 *   **Version History (Changelog)**:
+    *   **v4.6.1 (2026-08-25)**:
+        -   **[Core Fix] Fix 1M Token Context Overflow Caused by Historical Thinking Accumulation & Add Fallback Input Token Estimation on Errors (Token 1M Overflow & Monitor Token Estimation Fallback)**:
+            -   **Automatic Reasoning Pruning**: Prunes old thought texts in historical turns while preserving `thoughtSignature` on tool invocations, preventing continuous multi-turn reasoning snowballing from exceeding Google's 1M context limit.
+            -   **Fallback Input Token Estimation for Monitor**: Automatically estimates input tokens using the local tokenizer when upstream Google rejects the request (error responses lack `usageMetadata`), resolving issues where error request logs showed empty/0 input tokens.
+            -   *Related Issue*: Fixes [#3325](https://github.com/lbjlaq/Antigravity-Manager/issues/3325).
+        -   **[Core Fix] Fix JSON Schema `const` Compatibility in OpenAI/Responses to Gemini Mapper, Resolving Computer Use MCP 400 INVALID_ARGUMENT (JSON Schema Const Normalization Fix)**:
+            -   **Normalize `const` Keyword**: Added automatic normalization and type inference for the `const` keyword in the shared `clean_json_schema` utility, converting `{"const": "value"}` into standard Gemini/Vertex Schema Proto compatible `{"type": "...", "enum": ["value"]}` format.
+            -   **Deeply Nested & Union Type Support**: Full support for `const` definitions inside `anyOf` / `oneOf` unions and complex nested object properties, eliminating rejected schema errors from Google's upstream validator.
+            -   **Agent & MCP Ecosystem Resilience**: Resolves `400 INVALID_ARGUMENT` errors when agent tools (such as ZCode Computer Use MCP and browser automation tools) are invoked via OpenAI/Claude compatible endpoints.
+            -   *Related Issue*: Fixes [#3327](https://github.com/lbjlaq/Antigravity-Manager/issues/3327).
     *   **v4.6.0 (2026-08-24)**:
         -   **[Core Feature] OpenAI-Compatible Endpoint Support for response_format.json_schema Structured Outputs (Structured Outputs Support)**:
             -   **JSON Schema Specification Support**: Fully supports `response_format: { type: "json_schema", json_schema: { ... } }` payload definitions per OpenAI specifications.

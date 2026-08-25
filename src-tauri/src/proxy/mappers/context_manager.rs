@@ -117,15 +117,32 @@ fn estimate_inline_data_tokens(mime_type: &str, data_len: usize) -> u32 {
         let raw_bytes = (data_len * 3) / 4;
         let estimated_seconds = raw_bytes as f32 / 32_000.0;
         (estimated_seconds * 32.0).ceil().max(64.0) as u32
-    } else if mime_type.starts_with("video/") {
-        // Video: very expensive, rough estimate
-        let raw_bytes = (data_len * 3) / 4;
-        let estimated_seconds = raw_bytes as f32 / 500_000.0; // rough video bitrate
-        (estimated_seconds * 300.0).ceil().max(258.0) as u32 // ~300 tokens/sec for video
     } else {
         // Unknown media: treat as text approximation
         estimate_tokens_from_str(&format!("[binary data: {} bytes]", data_len))
     }
+}
+
+/// [FIX #3325] Estimate raw input tokens directly from an incoming JSON payload string (OpenAI, Claude, or Gemini format)
+/// Used as a fallback when upstream returns an error status (>=400) without token usage metadata.
+pub fn estimate_raw_tokens_from_payload(payload: &str) -> u32 {
+    if payload.is_empty() {
+        return 0;
+    }
+    if let Ok(json) = serde_json::from_str::<Value>(payload) {
+        // Try parsing as OpenAIRequest
+        if let Ok(openai_req) = serde_json::from_value::<OpenAIRequest>(json.clone()) {
+            return ContextManager::estimate_openai_token_usage(&openai_req);
+        }
+        // Try parsing as ClaudeRequest
+        if let Ok(claude_req) = serde_json::from_value::<ClaudeRequest>(json.clone()) {
+            return ContextManager::estimate_token_usage(&claude_req);
+        }
+        // Try estimating directly from Gemini contents/parts
+        return ContextManager::estimate_gemini_token_usage(&json);
+    }
+    // Fallback: estimate from raw string
+    estimate_tokens_from_str(payload)
 }
 
 /// Strategy for context purification

@@ -923,6 +923,16 @@ pub async fn monitor_middleware(
                 log.error = Some("Stream Error or Failed".to_string());
             }
 
+            // [FIX #3325] Fallback input token estimation for stream responses
+            if log.input_tokens.is_none() {
+                if let Some(ref req_body) = log.request_body {
+                    let estimated = crate::proxy::mappers::context_manager::estimate_raw_tokens_from_payload(req_body);
+                    if estimated > 0 {
+                        log.input_tokens = Some(estimated);
+                    }
+                }
+            }
+
             // Record User Token Usage
             record_user_token_usage(&user_token_identity, &log, user_agent.clone());
 
@@ -974,6 +984,16 @@ pub async fn monitor_middleware(
 
                 if log.status >= 400 {
                     log.error = log.response_body.clone();
+                }
+
+                // [FIX #3325] Fallback input token estimation if upstream returned an error (no usage metadata)
+                if log.input_tokens.is_none() {
+                    if let Some(ref req_body) = log.request_body {
+                        let estimated = crate::proxy::mappers::context_manager::estimate_raw_tokens_from_payload(req_body);
+                        if estimated > 0 {
+                            log.input_tokens = Some(estimated);
+                        }
+                    }
                 }
 
                 // Record User Token Usage

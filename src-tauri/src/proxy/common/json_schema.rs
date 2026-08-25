@@ -209,6 +209,39 @@ fn clean_json_schema_recursive(value: &mut Value, is_schema_node: bool, depth: u
             // 0. [NEW] 合并 allOf
             merge_all_of(map);
 
+            // 0.1 [NEW #3327] 规范化 const 关键字 (转换为 enum 与对应 type)
+            // Gemini/Vertex 的 Schema proto 不支持 const，直接传入会导致 400 INVALID_ARGUMENT
+            // 例如 {"const": "element"} -> {"type": "string", "enum": ["element"]}
+            if let Some(const_val) = map.remove("const") {
+                if !map.contains_key("type") {
+                    let inferred_type = match &const_val {
+                        Value::String(_) => Some("string"),
+                        Value::Number(n) => {
+                            if n.is_i64() || n.is_u64() {
+                                Some("integer")
+                            } else {
+                                Some("number")
+                            }
+                        }
+                        Value::Bool(_) => Some("boolean"),
+                        Value::Array(_) => Some("array"),
+                        Value::Object(_) => Some("object"),
+                        Value::Null => None,
+                    };
+                    if let Some(t) = inferred_type {
+                        map.insert("type".to_string(), Value::String(t.to_string()));
+                    }
+                }
+                let enum_entry = map
+                    .entry("enum".to_string())
+                    .or_insert_with(|| Value::Array(Vec::new()));
+                if let Value::Array(enum_arr) = enum_entry {
+                    if !enum_arr.contains(&const_val) {
+                        enum_arr.push(const_val);
+                    }
+                }
+            }
+
             // 0.5 [NEW] 结构归一化 (Normalization)
             // 针对某些 MCP 工具（如 pencil）误用 items 定义对象属性的情况进行修复。
             // 如果 type=object 或包含 properties，但又定义了 items，Gemini 会因为 items 只能出现在 array 中而报错。
@@ -1670,4 +1703,92 @@ mod tests {
             .unwrap()
             .contains("Accepts: string | object"));
     }
+
+    #[test]
+    fn test_issue_3327_const_normalization() {
+        // 场景 1: 基础 const 转换
+        let mut schema1 = json!({
+            "type": "object",
+            "properties": {
+                "action_type": {
+                    "const": "element"
+                },
+                "count": {
+                    "const": 5
+                },
+                "enabled": {
+                    "const": true
+                }
+            }
+        });
+
+        clean_json_schema(&mut schema1);
+
+        assert_eq!(schema1["properties"]["action_type"]["type"], "string");
+        assert_eq!(schema1["properties"]["action_type"]["enum"], json!(["element"]));
+        assert!(schema1["properties"]["action_type"].get("const").is_none());
+
+        assert_eq!(schema1["properties"]["count"]["type"], "integer");
+        assert_eq!(schema1["properties"]["count"]["enum"], json!(["5"]));
+        assert!(schema1["properties"]["count"].get("const").is_none());
+
+        assert_eq!(schema1["properties"]["enabled"]["type"], "boolean");
+        assert_eq!(schema1["properties"]["enabled"]["enum"], json!(["true"]));
+        assert!(schema1["properties"]["enabled"].get("const").is_none());
+
+        // 场景 2: ZCode Computer Use MCP 的 anyOf 联合嵌套包含 const
+        let mut schema2 = json!({
+            "type": "object",
+            "properties": {
+                "target": {
+                    "anyOf": [
+                        {
+                            "type": "object",
+                            "properties": {
+                                "type": {
+                                    "const": "element"
+                                },
+                                "state_id": {
+                                    "type": "string"
+                                },
+                                "index": {
+                                    "type": "integer"
+                                }
+                            },
+                            "required": ["type", "state_id", "index"],
+                            "additionalProperties": false
+                        },
+                        {
+                            "type": "object",
+                            "properties": {
+                                "type": {
+                                    "const": "coordinate"
+                                },
+                                "x": {
+                                    "type": "integer"
+                                },
+                                "y": {
+                                    "type": "integer"
+                                }
+                            },
+                            "required": ["type", "x", "y"],
+                            "additionalProperties": false
+                        }
+                    ]
+                }
+            }
+        });
+
+        clean_json_schema(&mut schema2);
+
+        let target_props = &schema2["properties"]["target"]["properties"];
+        assert!(target_props.get("type").is_some());
+        assert_eq!(target_props["type"]["type"], "string");
+        assert_eq!(target_props["type"]["enum"], json!(["element"]));
+        assert!(target_props["type"].get("const").is_none());
+
+        // 验证没有非合法的 Schema 结构 (如 properties 嵌套了 "element" 标量字符串)
+        assert!(target_props["type"].get("properties").is_none());
+    }
 }
+

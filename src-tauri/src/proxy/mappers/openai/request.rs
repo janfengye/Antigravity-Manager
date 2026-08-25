@@ -436,16 +436,21 @@ pub fn transform_openai_request(
             let mut parts = Vec::new();
 
             // Handle reasoning_content (thinking)
+            // [FIX #3325] Only include full reasoning_content text for the most recent messages (recent window).
+            // For older messages, strip the long thought text while keeping the thoughtSignature on the tool call
+            // to avoid blowing through the 1M token context limit during multi-turn agent loops.
             if let Some(reasoning) = &msg.reasoning_content {
                 // [FIX #1506] 增强对占位符 [undefined] 的识别
                 let is_invalid_placeholder = reasoning == "[undefined]" || reasoning.is_empty();
 
                 if !is_invalid_placeholder {
-                    let thought_part = json!({
-                        "text": reasoning,
-                        "thought": true,
-                    });
-                    parts.push(thought_part);
+                    if is_latest {
+                        let thought_part = json!({
+                            "text": reasoning,
+                            "thought": true,
+                        });
+                        parts.push(thought_part);
+                    }
                 }
             } else if actual_include_thinking && role == "model" {
                 // [FIX] 解决 Claude 4.6 Thinking 模型的强制性校验:
@@ -459,7 +464,7 @@ pub fn transform_openai_request(
 
                 // [FIX #1575] 占位符永远不能使用真实签名（签名与真实思考内容绑定）
                 // 仅 Gemini 支持哨兵值跳过验证
-                if is_gemini_3_thinking {
+                if is_gemini_3_thinking || is_gemini_flash_thinking {
                     thought_part["thoughtSignature"] = json!("skip_thought_signature_validator");
                     thought_part["thought_signature"] = json!("skip_thought_signature_validator");
                 }
@@ -1512,14 +1517,18 @@ mod tests {
             }),
             max_tokens: None,
             temperature: None,
-            top_p: None,
-            stop: None,
-            response_format: None,
             tools: None,
             tool_choice: None,
             parallel_tool_calls: None,
             ..Default::default()
         };
+
+        // Set passthrough mode so user-specified budget is retained
+        crate::proxy::config::update_thinking_budget_config(crate::proxy::config::ThinkingBudgetConfig {
+            mode: crate::proxy::config::ThinkingBudgetMode::Passthrough,
+            custom_value: 16000,
+            effort: None,
+        });
 
         // Pass explicit gemini-3-pro-preview which doesn't have "-thinking" suffix
         let (result, _sid, _msg_count, _) =
@@ -1535,8 +1544,11 @@ mod tests {
         let budget = gen_config["thinkingConfig"]["thinkingBudget"]
             .as_u64()
             .unwrap();
-        // Should use user budget (16000) or capped valid default
+        // Should use user budget (16000)
         assert_eq!(budget, 16000);
+
+        // Restore default Auto mode
+        crate::proxy::config::update_thinking_budget_config(crate::proxy::config::ThinkingBudgetConfig::default());
     }
     #[test]
     fn test_gemini_3_pro_image_not_thinking() {
@@ -1696,8 +1708,8 @@ mod tests {
         let (result, _sid, _msg_count, _) =
             transform_openai_request(&req, "test-v", mapped_model, None);
 
-        // Extract the tool call part from contents
-        let contents = result["contents"].as_array().unwrap();
+        // Extract the tool call part from contents (under request.contents)
+        let contents = result["request"]["contents"].as_array().unwrap();
         // Identify the part with functionCall
         let parts = contents[0]["parts"].as_array().unwrap();
         let tool_part = parts
