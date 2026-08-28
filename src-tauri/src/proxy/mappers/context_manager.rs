@@ -433,16 +433,19 @@ impl ContextManager {
                             ..
                         } = block
                         {
-                            // Key logic: Only compress if signature exists
-                            // This ensures we don't lose unsigned thinking blocks
-                            if signature.is_some() && thinking.len() > 10 {
+                            // [FIX] When compressing thinking, clear signature to avoid Invalid signature errors
+                            // Signature is computed over original thinking content; keeping it with "..." causes
+                            // 400 INVALID_ARGUMENT: Invalid thought signature (Gemini) / Invalid signature (Claude).
+                            if thinking.len() > 10 {
                                 let original_len = thinking.len();
                                 *thinking = "...".to_string();
+                                // Clear signature when content is compressed
+                                *signature = None;
                                 compressed_count += 1;
                                 total_chars_saved += original_len - 3;
 
                                 debug!(
-                                    "[ContextManager] [Layer-2] Compressed thinking: {} → 3 chars (signature preserved)",
+                                    "[ContextManager] [Layer-2] Compressed thinking: {} → 3 chars (signature cleared)",
                                     original_len
                                 );
                             }
@@ -1165,6 +1168,10 @@ impl ContextManager {
                                         {
                                             if text.len() > 10 {
                                                 obj.insert("text".to_string(), json!("..."));
+                                                // [FIX] Remove thoughtSignature when compressing thought text
+                                                // Signature is computed over original thought content; keeping it with "..." causes
+                                                // Google API to return 400 INVALID_ARGUMENT: Invalid thought signature.
+                                                obj.remove("thoughtSignature");
                                                 compressed_count += 1;
                                             }
                                         }

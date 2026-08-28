@@ -20,13 +20,35 @@ export interface ModelDisplayNameInput {
     display_name?: string;
 }
 
+const DEFAULT_MODEL_LABELS: Record<string, string> = {
+    'gemini-pro-agent': 'Gemini 3.1 Pro (High)',
+    'gemini-3.1-pro-high': 'Gemini 3.1 Pro High',
+    'gemini-3-pro-high': 'Gemini 3.1 Pro High',
+    'gemini-3.1-pro': 'Gemini 3.1 Pro',
+    'gemini-3.1-pro-low': 'Gemini 3.1 Pro Low',
+    'gemini-3-pro-low': 'Gemini 3.1 Pro Low',
+    'gemini-2.5-pro': 'Gemini 2.5 Pro',
+    'gemini-3-flash-agent': 'Gemini 3.5 Flash (High)',
+    'gemini-3.5-flash': 'Gemini 3.5 Flash',
+    'gemini-3-flash': 'Gemini 3 Flash',
+    'gemini-2.5-flash': 'Gemini 2.5 Flash',
+    'gemini-3.1-flash-image': 'Gemini 3.1 Flash Image',
+    'gemini-3-pro-image': 'Gemini 3 Image',
+    'claude-sonnet-4-6': 'Claude Sonnet 4.6 (Thinking)',
+    'claude-opus-4-6-thinking': 'Claude Opus 4.6 (Thinking)',
+    'claude-sonnet-4-5': 'Claude Sonnet 4.5 (Thinking)',
+    'claude-haiku-4-5': 'Claude Haiku 4.5',
+};
+
 export function getModelDisplayName(
     model: ModelDisplayNameInput | null | undefined,
     fallback?: string,
 ): string {
     if (model) {
         if (model.display_name) return model.display_name;
-        if (model.name) return model.name;
+        if (model.name) {
+            return DEFAULT_MODEL_LABELS[model.name] || model.name;
+        }
     }
     return fallback ?? '';
 }

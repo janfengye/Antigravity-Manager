@@ -140,9 +140,10 @@ function AccountCard({ account, selected, onSelect, isCurrent: propIsCurrent, is
                     const shortGroupName = group.display_name
                         .replace(/ models?$/i, '')
                         .replace(/Claude and GPT/i, 'Claude/GPT');
+                    const weeklySuffix = t('accounts.quota_window_weekly_short', 'Semanal');
                     return {
                         id: `${group.display_name}-${b.bucket_id}`,
-                        label: b.display_name ? `${shortGroupName} (${b.display_name})` : `${shortGroupName} (周)`,
+                        label: b.display_name ? `${shortGroupName} (${b.display_name})` : `${shortGroupName} (${weeklySuffix})`,
                         percentage: Math.round((b.remaining_fraction || 0) * 100),
                         resetTime: b.reset_time,
                         Icon: shortGroupName.toLowerCase().includes('claude') ? Sparkles : Bot,

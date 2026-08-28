@@ -1,6 +1,7 @@
 {
   "common": {
     "loading": "Carregando...",
+    "empty": "Vazio",
     "load_more": "Carregar mais",
     "add": "Adicionar",
     "copy": "Copiar",
@@ -41,14 +42,36 @@
     "create_success": "Criado com sucesso",
     "update_success": "Atualizado com sucesso",
     "delete_success": "Excluído com sucesso",
-    "copied": "Copiado para a área de transferência"
+    "copied": "Copiado para a área de transferência",
+    "retry": "Tentar novamente",
+    "back": "Voltar",
+    "reason": "Motivo",
+    "show_raw": "Exibir Bruto",
+    "show_parsed": "Exibir Formatado",
+    "claude_series": "Série Claude",
+    "maximize": "Tela Cheia",
+    "app_name": "Antigravity Tools",
+    "deselect_all": "Desmarcar Todos",
+    "select_all": "Selecionar Todos",
+    "optional": "Opcional",
+    "actions": "Ações",
+    "none": "Nenhum",
+    "disable": "Desativar",
+    "enable": "Ativar",
+    "deleted": "Excluído com sucesso",
+    "selected": "Selecionado(s)",
+    "required": "Obrigatório",
+    "copy_failed": "Falha ao copiar para a área de transferência",
+    "create": "Criar"
   },
   "nav": {
     "dashboard": "Painel",
     "accounts": "Contas",
     "proxy": "Proxy da API",
     "call_records": "Registros de Tráfego",
+    "token_stats": "Estatísticas de Tokens",
     "security": "Gestão de IP",
+    "security_logs": "Logs de Segurança",
     "settings": "Configurações",
     "theme_to_dark": "Alternar para Modo Escuro",
     "theme_to_light": "Alternar para Modo Claro",
@@ -64,17 +87,21 @@
     "switch_to_turkish_short": "TR",
     "switch_to_vietnamese": "Alternar para Vietnamita",
     "switch_to_vietnamese_short": "VI",
-    "switch_to_portuguese": "Alternar para Português",
-    "switch_to_portuguese_short": "PT",
     "switch_to_russian": "Alternar para Russo",
     "switch_to_russian_short": "RU",
+    "switch_to_portuguese": "Alternar para Português",
+    "switch_to_portuguese_short": "PT",
     "switch_to_korean": "Alternar para Coreano",
     "switch_to_korean_short": "KO",
     "switch_to_spanish": "Alternar para Espanhol",
     "switch_to_spanish_short": "ES",
     "switch_to_malay": "Alternar para Malaio",
     "switch_to_malay_short": "MY",
-    "user_token": "Tokens de usuário"
+    "user_token": "Tokens de usuário",
+    "apikey_fun": "ApiKey.fun",
+    "logout": "Sair",
+    "more": "Mais",
+    "mini_view": "Visualização Compacta"
   },
   "dashboard": {
     "hello": "Olá, Usuário 👋",
@@ -125,6 +152,11 @@
     "refresh_all": "Atualizar Todas",
     "refresh_selected": "Atualizar ({{count}})",
     "export_selected": "Exportar ({{count}})",
+    "import_json": "Importar JSON",
+    "import_success": "Contas importadas com sucesso: {{count}}",
+    "import_partial": "Importação concluída: {{success}} com sucesso, {{fail}} com falha",
+    "import_fail": "Falha na importação: {{error}}",
+    "import_invalid_format": "Formato de arquivo JSON inválido",
     "delete_selected": "Excluir ({{count}})",
     "current": "Atual",
     "current_badge": "Atual",
@@ -145,13 +177,37 @@
     "status": {
       "forbidden": "403 Proibido",
       "disabled": "Conta desativada",
-      "proxy_disabled": "Proxy desativado"
+      "proxy_disabled": "Proxy desativado",
+      "validation_required": "Validação Necessária",
+      "risk_controlled": "Controle de Risco",
+      "oauth_reauth_required": "Reautenticação Necessária",
+      "violation_blocked": "Bloqueado por Violação"
     },
     "error_details": "Detalhes do erro",
     "error_status": "Status do erro",
     "error_time": "Hora de detecção",
     "view_error": "Ver motivo",
-    "click_to_verify": "Clique para verificar",
+    "go_to_appeal": "Ir para Recurso",
+    "copy_appeal_url": "Copiar Link de Recurso",
+    "click_to_verify": "Clique para Verificar",
+    "copy_validation_url": "Copiar Link de Validação",
+    "validation_url_copied": "Link de validação copiado para a área de transferência",
+    "fix_guide": {
+      "title": "Guia de Resolução",
+      "step1_title": "Passo 1: Desvincular Conta no Painel Oficial",
+      "step1_desc": "Acesse o gerenciamento de contas do Google e desvincule a autorização da aplicação:",
+      "step1_li1": "Acesse a página de Aplicativos de Terceiros da sua Conta Google",
+      "step1_li2": "Localize 'Antigravity' ou a aplicação de autorização correspondente",
+      "step1_li3": "Clique em 'Excluir todas as conexões'",
+      "step2_title": "Passo 2: Reautorizar a Conta",
+      "step2_li1_prefix": "Clique no botão",
+      "step2_li2_prefix": "Ou use a opção",
+      "tips_title": "Dicas para Evitar Controle de Risco",
+      "tip1": "Evite alternar de IP com frequência ou usar nós de proxy instáveis",
+      "tip2": "Mantenha um intervalo razoável de requisições e evite concorrência extrema",
+      "tip3": "Recomenda-se manter pelo menos 2 a 3 contas ativas em rotação",
+      "tip4": "Se o controle de risco persistir, tente trocar o IP do nó do proxy"
+    },
     "no_data": "Nenhum dado",
     "last_used": "Último Uso",
     "reset_time": "Tempo de Reset",
@@ -196,18 +252,23 @@
       "restored": "Restaurado",
       "deleted": "Excluído",
       "directory_opened": "Diretório de armazenamento aberto",
-      "original_fingerprint_not_found": "Impressão digital original não encontrada"
+      "original_fingerprint_not_found": "Impressão digital original não encontrada",
+      "storage_json_not_found": "Arquivo storage.json não encontrado"
     },
     "warmup_all": "Aquecimento com Um Clique",
     "warmup_selected": "Aquecer ({{count}})",
-    "warmup_this": "Aquecer esta conta",
+    "warmup_this": "Pré-aquecer esta conta",
     "warmup_now": "Aquecer Agora",
     "warmup_batch_triggered": "Tarefas de aquecimento acionadas para {{count}} contas",
+    "quota_window_5h": "Janela de 5 Horas",
+    "quota_window_weekly": "Cota Semanal",
+    "quota_window_weekly_short": "Semanal",
     "quota_protected": "Protegido",
     "details": {
       "title": "Detalhes da Cota",
       "model_quota": "Cota do Modelo",
-      "protected_models": "Modelos Protegidos"
+      "protected_models": "Modelos Protegidos",
+      "quota_groups": "Cota Detalhada"
     },
     "toast": {
       "proxy_enabled": "Proxy habilitado para {{count}} contas",
@@ -264,13 +325,15 @@
       "oauth_error": "OAuth falhou: {{error}}",
       "status": {
         "error_token": "Por favor, insira o Refresh Token"
-      }
+      },
+      "oauth_success": "Conta adicionada com sucesso via OAuth"
     },
     "table": {
       "email": "Email",
-      "quota": "Cota do Modelo",
+      "quota": "Cota",
       "last_used": "Último Uso",
-      "actions": "Ações"
+      "actions": "Ações",
+      "weekly_quota": "Cota Semanal"
     },
     "drag_to_reorder": "Arraste para reordenar",
     "empty": {
@@ -300,7 +363,8 @@
       "batch_warmup_title": "Aquecimento Manual em Lote",
       "batch_warmup_msg": "Tem certeza de que deseja acionar o aquecimento para as {{count}} contas selecionadas imediatamente?"
     },
-    "switch_to_agy": "Switch to Antigravity CLI (agy)"
+    "switch_to_agy": "Alternar para Antigravity CLI (agy)",
+    "warmup_all_triggered": "Tarefa de pré-aquecimento disparada para todas as contas"
   },
   "settings": {
     "save": "Salvar Configurações",
@@ -309,8 +373,8 @@
       "account": "Conta",
       "proxy": "Configurações do Proxy",
       "advanced": "Avançado",
-      "about": "Sobre",
-      "debug": "Depuração"
+      "debug": "Depuração",
+      "about": "Sobre"
     },
     "general": {
       "title": "Configurações Gerais",
@@ -339,11 +403,15 @@
       "refresh_interval": "Intervalo de Atualização (minutos)",
       "auto_sync": "Sincronização Automática da Conta Atual",
       "auto_sync_desc": "Sincronizar automaticamente as informações da conta ativa atual periodicamente",
-      "sync_interval": "Intervalo de Sincronização (segundos)"
+      "sync_interval": "Intervalo de Sincronização (segundos)",
+      "email": "E-mail",
+      "no_accounts": "Nenhuma conta encontrada"
     },
     "warmup": {
       "title": "Aquecimento Inteligente",
-      "desc": "Monitora automaticamente todos os modelos e aciona o aquecimento imediatamente quando a cota atinge 100%, mantendo os modelos aquecidos"
+      "desc": "Monitora automaticamente todos os modelos e aciona o aquecimento imediatamente quando a cota atinge 100%, mantendo os modelos aquecidos",
+      "monitored_models_label": "Escopo de Modelos para Pré-aquecimento",
+      "monitored_models_desc": "Selecione os modelos a serem pré-aquecidos. Quando a cota semanal atingir o horário de redefinição, um despertar automático será executado para iniciar o ciclo."
     },
     "quota_protection": {
       "title": "Proteção de Cota",
@@ -358,7 +426,8 @@
     },
     "pinned_quota_models": {
       "title": "Modelos de Cota Fixados",
-      "desc": "Selecione quais cotas de modelo exibir na lista de contas. Modelos não selecionados são mostrados apenas no pop-up de detalhes"
+      "desc": "Selecione quais cotas de modelo exibir na lista de contas. Modelos não selecionados são mostrados apenas no pop-up de detalhes",
+      "dynamic": "Modelo Dinâmico Detectado"
     },
     "proxy": {
       "title": "Configurações do Proxy"
@@ -414,7 +483,10 @@
         "checking": "Checking",
         "healthy": "Healthy",
         "timeout": "Timeout"
-      }
+      },
+      "proxies": "Proxies",
+      "confirm_batch_delete": "Tem certeza de que deseja excluir os proxies selecionados?",
+      "inactive_notice": "Pool de Proxy Inativo"
     },
     "advanced": {
       "title": "Configurações Avançadas",
@@ -428,8 +500,16 @@
       "antigravity_path": "Caminho do Antigravity",
       "antigravity_path_placeholder": "Não definido (Usará detecção automática)",
       "antigravity_path_desc": "Se você instalou o Antigravity em um local não padrão, pode especificar manualmente o caminho do executável aqui (Aponta para .app no MacOS).",
+      "patch_eligibility_title": "Verificação de Elegibilidade de Patch",
+      "patch_eligibility_desc": "Verifica se o ambiente local e as dependências do sistema atendem aos requisitos de patch",
+      "patch_btn": "Verificar Agora",
       "antigravity_path_select": "Selecionar Executável do Antigravity",
       "antigravity_path_detected": "Caminho detectado atualizado",
+      "antigravity_cli_path": "Caminho do CLI Antigravity",
+      "antigravity_cli_path_placeholder": "Caminho absoluto para o executável antigravity-cli",
+      "antigravity_cli_path_desc": "Especifique o caminho personalizado do executável CLI para sincronização",
+      "antigravity_cli_path_select": "Selecionar Arquivo",
+      "antigravity_cli_path_detected": "Detectado automaticamente",
       "antigravity_ide_path": "Caminho do Antigravity IDE",
       "antigravity_ide_path_placeholder": "D:\\Antigravity\\Antigravity.exe",
       "antigravity_ide_path_desc": "Especifique o caminho do executável do Antigravity IDE (editor de código). Após configurado, a troca de contas protegerá rigorosamente os processos neste caminho contra encerramento.",
@@ -475,6 +555,20 @@
       "http_api_settings_saved": "Configurações HTTP API salvas, reinício necessário para aplicar",
       "http_api_restart_required": "⚠️ Reinício necessário para aplicar"
     },
+    "debug": {
+      "title": "Depuração e Logs do Sistema",
+      "desc": "Visualize informações detalhadas de diagnóstico de execução e status do sistema",
+      "enabled": "Ativado",
+      "disabled": "Desativado",
+      "disabled_hint": "O console de depuração está desativado no momento",
+      "disabled_desc": "Ative o modo de depuração nas configurações para inspecionar logs e tráfego detalhado",
+      "console_title": "Console de Depuração",
+      "console_desc": "Abra o console flutuante para depurar eventos do proxy e chamadas de API",
+      "enable_desc": "Ative o console de depuração para visualizar logs de execução em tempo real",
+      "open_btn": "Abrir Console",
+      "debug_logging": "Logs de Depuração Detalhados",
+      "debug_logging_desc": "Gera saídas de log detalhadas com rastreamento completo de chamadas"
+    },
     "menu": {
       "title": "Configurações de exibição do menu",
       "desc": "Selecione os itens de função a exibir na barra de menu. Ocultar menus pouco utilizados pode economizar espaço.",
@@ -482,19 +576,36 @@
       "required": "Obrigatório"
     },
     "about": {
-      "title": "Sobre",
-      "version": "Versão do Aplicativo",
+      "title": "Sobre o Antigravity Manager",
+      "version": "Versão",
       "tech_stack": "Stack Tecnológico",
       "author": "Autor",
       "wechat": "WeChat",
-      "github": "GitHub",
+      "telegram": "Grupo do Telegram",
+      "github": "Repositório GitHub",
       "view_code": "Ver Código",
-      "copyright": "Copyright © 2025-2026 Antigravity. Todos os direitos reservados.",
+      "copyright": "© 2026 Antigravity Manager. Todos os direitos reservados.",
       "check_update": "Verificar Atualizações",
       "checking_update": "Verificando...",
       "latest_version": "Você está atualizado",
       "new_version_available": "Nova versão {{version}} disponível",
       "download_update": "Baixar",
+      "brew_upgrade": "Atualizar via Homebrew",
+      "brew_upgrading": "Atualizando via Homebrew...",
+      "brew_confirm_title": "Confirmar Atualização do Homebrew",
+      "brew_confirm_desc": "O sistema executará o comando brew upgrade para atualizar a versão mais recente. Deseja continuar?",
+      "brew_quarantine_hint": "Dica: Em caso de erro de segurança no macOS, execute o comando xattr correspondente",
+      "brew_confirm_btn": "Confirmar Atualização",
+      "brew_success_title": "Atualização Concluída",
+      "brew_upgrade_success": "Atualização do Homebrew concluída com sucesso. Reinicie o aplicativo.",
+      "brew_restart_btn": "Reiniciar Aplicativo",
+      "brew_restart_failed": "Falha ao reiniciar o aplicativo automaticamente. Por favor, reinicie manualmente.",
+      "brew_upgrade_failed": "Falha na atualização do Homebrew. Tente executar manualmente: brew upgrade --cask antigravity-tools",
+      "brew_error_brew_not_found": "Comando Homebrew (brew) não encontrado no sistema",
+      "brew_error_brew_exec_failed": "Erro durante a execução do comando Homebrew",
+      "brew_error_brew_timeout": "Tempo limite excedido ao executar a atualização do Homebrew",
+      "brew_error_brew_already_latest": "Você já está na versão mais recente disponível no Homebrew",
+      "brew_error_brew_not_supported": "A atualização via Homebrew só é suportada no macOS/Linux",
       "update_check_failed": "Falha na verificação de atualização",
       "support_btn": "Apoiar Autor",
       "support_title": "Doação e Suporte",
@@ -508,15 +619,23 @@
       "description": "Gerencie capacidades de pensamento, modos de imagem e instruções globais centralmente."
     },
     "thinking_budget": {
-      "title": "Orçamento de Pensamento (Thinking Budget)",
+      "title": "Orçamento de Raciocínio (Thinking Budget)",
       "description": "Controla o orçamento de tokens para o pensamento profundo da IA. Alguns modelos (ex: Flash, modelos com sufixo -thinking) são limitados a 24576 pela API upstream.",
       "mode_label": "Modo de Processamento",
       "mode": {
         "auto": "Limite Automático",
         "passthrough": "Passagem Direta",
-        "custom": "Personalizado"
+        "custom": "Personalizado",
+        "adaptive": "Modo Adaptativo"
+      },
+      "effort_label": "Intensidade de Raciocínio (Effort)",
+      "effort": {
+        "low": "Baixa",
+        "medium": "Média",
+        "high": "Alta"
       },
       "auto_hint": "Modo Automático: Limita automaticamente o orçamento em 24576 para modelos Flash, modelos com sufixo -thinking e solicitações de pesquisa na web para evitar erros de API.",
+      "adaptive_hint": "Ajusta dinamicamente a intensidade de pensamento com base na complexidade do prompt",
       "passthrough_warning": "Passagem Direta: Usa diretamente o valor original do chamador. A falta de suporte para valores altos pode causar falhas.",
       "custom_value_hint": "Recomendado: 24576 (Flash) ou 51200 (Estendido)",
       "tokens": "tokens"
@@ -537,7 +656,12 @@
       "placeholder": "Insira as instruções globais do sistema...\nExemplo: Você é um desenvolvedor full-stack sênior especialista em React e Rust. Responda em português.",
       "char_count": "{{count}} caracteres",
       "long_prompt_warning": "As instruções são muito longas (mais de 2000 caracteres) e podem consumir muito espaço do contexto."
-    }
+    },
+    "branding": {
+      "title": "Personalização da Marca",
+      "subtitle": "Ajuste o nome do produto exibido e elementos visuais da interface"
+    },
+    "web_mode_limitation": "(Não suportado no modo Web)"
   },
   "tray": {
     "current": "Atual",
@@ -552,6 +676,9 @@
   },
   "proxy": {
     "title": "Serviço de Proxy da API",
+    "error": {
+      "load_failed": "Falha ao carregar a lista de modelos. Verifique a conexão com o proxy."
+    },
     "status": {
       "running": "Serviço em Execução",
       "stopped": "Serviço Parado",
@@ -563,17 +690,17 @@
       "stop": "Parar Serviço"
     },
     "config": {
-      "title": "Configuração do Serviço",
+      "title": "Configuração do Proxy",
       "request": {
         "user_agent": "User-Agent Override",
         "user_agent_tooltip": "Override the User-Agent header sent to upstream APIs. Leave empty to use default.",
         "user_agent_hint": "Current Default: antigravity/<version> <os>/<arch>",
         "user_agent_placeholder": "Enter custom User-Agent string..."
       },
-      "port": "Porta de Escuta",
+      "port": "Porta do Proxy",
       "port_tooltip": "Porta TCP que o Proxy da API local escuta. Pare o serviço para alterá-la, depois reinicie para aplicar.",
       "port_hint": "Padrão 8045, reinício necessário para aplicar alterações",
-      "auto_start": "Iniciar Automaticamente com o App",
+      "auto_start": "Iniciar Automaticamente",
       "auto_start_tooltip": "Inicia automaticamente o serviço de Proxy da API local quando o aplicativo é iniciado.",
       "allow_lan_access": "Permitir Acesso LAN",
       "allow_lan_access_tooltip": "Quando habilitado, o serviço se vincula a 0.0.0.0 para que outros dispositivos na sua LAN possam acessá-lo. Mantenha a autorização habilitada e proteja sua chave de API; reinício necessário para aplicar.",
@@ -581,7 +708,7 @@
       "allow_lan_access_hint_disabled": "🔒 Escutando apenas em 127.0.0.1, acesso localhost (Privacidade Primeiro)",
       "allow_lan_access_warning": "⚠️ Dispositivos LAN podem acessar quando habilitado. Mantenha sua chave de API segura",
       "allow_lan_access_restart_hint": "ℹ️ Reinício do serviço necessário para aplicar alterações",
-      "api_key": "Chave da API",
+      "api_key": "Chave de Acesso (API Key)",
       "api_key_tooltip": "Segredo compartilhado usado pelos clientes quando a autorização do proxy está habilitada. Regenerar a chave invalida imediatamente a antiga.",
       "btn_regenerate": "Regenerar Chave",
       "btn_edit": "Editar",
@@ -671,7 +798,7 @@
           "local_endpoints_tooltip": "Use estes URLs no seu cliente MCP. Eles compartilham o mesmo host/porta do Proxy da API e seguem a política de autorização do proxy."
         }
       },
-      "request_timeout": "Tempo Limite da Solicitação",
+      "request_timeout": "Tempo Limite de Requisição (s)",
       "request_timeout_tooltip": "Tempo máximo (segundos) que o proxy aguarda por uma resposta upstream, incluindo streaming. Aumente para gerações longas; reinício necessário para aplicar.",
       "request_timeout_hint": "Padrão 120s, intervalo 30-7200s. Reinicie o serviço para aplicar alterações.",
       "enable_logging": "Habilitar Registro de Solicitações",
@@ -708,21 +835,36 @@
         "max_wait_tooltip": "Usado apenas no modo 'Cache Primeiro': aguardar em vez de alternar se o tempo de reset do limite de taxa estiver abaixo deste valor.",
         "clear_bindings": "Limpar Vinculações de Sessão",
         "clear_bindings_tooltip": "Redefinir todas as vinculações sessão-conta, forçando contas a serem reatribuídas na próxima solicitação.",
-        "circuit_breaker": {
-          "title": "Disjuntor Adaptativo",
-          "tooltip": "Aumenta automaticamente a duração do bloqueio para contas que falham repetidamente com esgotamento de cota. Isso evita o desperdício de chamadas de API em contas mortas, permitindo que erros transitórios se recuperem rapidamente.",
-          "backoff_levels": "Níveis de Recuo (Segundos)",
-          "level": "Nível {{level}}",
-          "input_placeholder": "60, 300, 1800, 7200",
-          "invalid_format": "Formato inválido. Use números separados por vírgula (ex: 60, 300)",
-          "clear_records": "Limpar Todos os Registros de Limite de Taxa"
-        }
+        "clear_rate_limits": "Limpar Bloqueios de Taxa (429)",
+        "clear_rate_limits_tooltip": "Redefine imediatamente o estado de penalidade de limitação de taxa de todas as contas",
+        "round_robin_set": "Modo de alternância circular ativado",
+        "account_changed": "Conta alternada com sucesso",
+        "fixed_account_set": "Modo de conta fixa ativado",
+        "fixed_account": "Modo de Conta Fixa",
+        "fixed_account_tooltip": "Quando ativado, todas as requisições utilizarão exclusivamente a conta selecionada em vez de alternar entre as contas disponíveis.",
+        "start_proxy_first": "Inicie o serviço de proxy para configurar o modo de conta fixa."
+      },
+      "circuit_breaker": {
+        "title": "Proteção Circuit Breaker (Disjuntor de Falhas)",
+        "tooltip": "Interrompe temporariamente requisições a contas que apresentam falhas consecutivas para evitar bloqueios",
+        "backoff_levels": "Níveis de Tempo de Espera (Backoff em segundos)",
+        "input_placeholder": "Ex: 10, 30, 60, 300",
+        "level": "Nível {{level}}",
+        "invalid_format": "Formato inválido. Insira números inteiros separados por vírgula.",
+        "clear_records": "Limpar Histórico de Falhas"
       },
       "experimental": {
         "title": "Configurações Experimentais",
         "title_tooltip": "Recursos exploratórios que podem ser ajustados ou removidos em versões futuras.",
         "enable_usage_scaling": "Ativar Escalonamento de Uso",
         "enable_usage_scaling_tooltip": "Para protocolo Claude. Ativa escalonamento agressivo quando a entrada total excede 30k tokens para evitar compressão frequente no lado do cliente em grandes contextos. Nota: O uso relatado não refletirá o faturamento real após ativar.",
+        "compression_level_label": "Nível de Compressão de Contexto",
+        "compression_level_tooltip": "Comprime o histórico de mensagens para economizar tokens e acelerar respostas",
+        "compression_level_desc": "Selecione a agressividade da compressão de contexto para diálogos longos",
+        "level_disabled": "Desativado",
+        "level_low": "Leve",
+        "level_medium": "Moderado",
+        "level_high": "Agressivo",
         "context_compression_threshold_l1": "Limiar de Compressão L1 (Aparagem de Ferramentas)",
         "context_compression_threshold_l1_tooltip": "Apara registros antigos de chamadas de ferramentas para economizar espaço. Recomendado: 0.4 (40%)",
         "context_compression_threshold_l2": "Limiar de Compressão L2 (Compressão de Pensamento)",
@@ -730,51 +872,103 @@
         "context_compression_threshold_l3": "Limiar de Compressão L3 (Pivô de Resumo)",
         "context_compression_threshold_l3_tooltip": "Gera um resumo de estado XML e pivota para uma nova sessão. Recomendado: 0.7 (70%)"
       },
-      "cloudflared": {
-        "title": "Acesso Público (Cloudflared)",
-        "subtitle": "Exponha seu serviço local à internet via Cloudflare Tunnel",
-        "not_installed": "Cloudflared não instalado",
-        "install_hint": "Cloudflared é uma ferramenta de túnel gratuita da Cloudflare. Expõe seu proxy local à internet sem IP público ou encaminhamento de porta. Clique no botão abaixo para instalar.",
-        "install": "Instalar Agora",
-        "installing": "Instalando...",
-        "install_success": "Cloudflared instalado com sucesso",
-        "install_failed": "Instalação falhou: {{error}}",
-        "installed": "Instalado",
-        "version": "Versão",
-        "mode_label": "Modo de Túnel",
-        "mode_quick": "Túnel Rápido",
-        "mode_quick_desc": "URL temporária gerada automaticamente (*.trycloudflare.com), sem necessidade de conta, URL muda ao reiniciar",
-        "mode_auth": "Túnel Nomeado",
-        "mode_auth_desc": "Use token de conta Cloudflare, suporta domínio personalizado, URL persistente",
-        "token": "Token do Túnel",
-        "token_placeholder": "Cole seu Cloudflare Tunnel Token aqui",
-        "token_hint": "Obtenha no painel Cloudflare Zero Trust",
-        "token_required": "Token é necessário para modo de Túnel Nomeado",
-        "use_http2": "Usar HTTP/2",
-        "use_http2_desc": "Mais compatível, recomendado para China continental",
-        "status_label": "Status do Túnel",
-        "status_stopped": "Parado",
-        "status_starting": "Iniciando...",
-        "status_running": "Executando",
-        "status_error": "Erro",
-        "public_url": "URL Pública",
-        "public_url_copied": "URL copiada",
-        "start_tunnel": "Iniciar Túnel",
-        "stop_tunnel": "Parar Túnel",
-        "restart_tunnel": "Reiniciar Túnel",
-        "starting": "Iniciando...",
-        "stopping": "Parando...",
-        "start_success": "Túnel iniciado com sucesso",
-        "stop_success": "Túnel parado",
-        "start_failed": "Falha ao iniciar túnel: {{error}}",
-        "stop_failed": "Falha ao parar túnel: {{error}}",
-        "logs": "Logs",
-        "clear_logs": "Limpar Logs",
-        "auto_start": "Iniciar automaticamente com proxy",
-        "auto_start_desc": "Inicia automaticamente o túnel quando o serviço de proxy API inicia",
-        "warning_quick_mode": "⚠️ Modo Rápido: URL muda a cada reinicialização",
-        "warning_token_storage": "💡 Token é armazenado localmente com segurança"
-      }
+      "opencode_sync": {
+        "card_title": "Sincronização OpenCode",
+        "status": {
+          "detecting": "Detectando...",
+          "installed": "Instalado ({{version}})",
+          "not_installed": "Não Instalado",
+          "synced": "Sincronizado",
+          "not_synced": "Não Sincronizado",
+          "current_base_url": "Base URL Atual"
+        },
+        "sync_accounts": "Sincronizar Contas",
+        "btn_sync": "Sincronizar com OpenCode",
+        "btn_view": "Visualizar Configuração",
+        "btn_restore": "Restaurar Padrão",
+        "btn_restore_backup": "Restaurar Backup",
+        "btn_clear": "Limpar Configuração",
+        "clear_confirm_title": "Confirmar Limpeza de Configuração",
+        "clear_confirm_message": "Tem certeza de que deseja limpar as configurações do provedor Antigravity no OpenCode?",
+        "toast": {
+          "config_missing": "Arquivo de configuração do OpenCode não encontrado",
+          "sync_success": "Configurações sincronizadas com sucesso no OpenCode!",
+          "sync_error": "Erro ao sincronizar com OpenCode: {{error}}",
+          "clear_success": "Configuração do OpenCode limpa com sucesso!",
+          "clear_error": "Erro ao limpar configuração do OpenCode: {{error}}"
+        },
+        "modal": {
+          "view_title": "Configuração Atual do OpenCode",
+          "copy_success": "Configuração copiada para a área de transferência!"
+        },
+        "sync_confirm_title": "Confirmar Sincronização",
+        "sync_confirm_message": "Isso atualizará a configuração do OpenCode para apontar para o proxy Antigravity local. Deseja continuar?",
+        "restore_confirm": "Deseja restaurar a configuração do OpenCode para os valores padrão?",
+        "restore_backup_confirm": "Deseja restaurar a configuração do OpenCode a partir do backup anterior?",
+        "modal_title": "Configurar Sincronização OpenCode",
+        "select_models": "Selecionar Modelos para Sincronizar",
+        "auth_plugin_warning": "Aviso: Se você estiver usando plugins de autenticação no OpenCode, desative-os para evitar conflitos.",
+        "btn_confirm_sync": "Confirmar e Sincronizar",
+        "custom_base_url_label": "Base URL Personalizada (Opcional)",
+        "custom_base_url_desc": "Especifique uma URL personalizada caso esteja executando o proxy em outra máquina ou contêiner",
+        "custom_base_url_reset": "Restaurar URL Local"
+      },
+      "droid_sync": {
+        "modal_title": "Sincronização com Factory Droid",
+        "modal_desc": "Selecione os modelos a serem exportados para o assistente Factory Droid",
+        "selected": "selecionado(s)",
+        "btn_confirm_sync": "Sincronizar com Droid",
+        "toast": {
+          "no_models_selected": "Por favor, selecione pelo menos um modelo para sincronizar",
+          "sync_success_count": "Sucesso! {{count}} modelo(s) sincronizados com o Droid",
+          "sync_error": "Erro ao sincronizar com Droid: {{error}}"
+        }
+      },
+      "thinking_budget": "Orçamento de Raciocínio (Thinking Budget)"
+    },
+    "cloudflared": {
+      "title": "Túnel Cloudflare (Cloudflared)",
+      "subtitle": "Exponha seu proxy local com segurança na internet através do Cloudflare Zero Trust",
+      "not_installed": "Cloudflared não instalado",
+      "install_hint": "O binário do Cloudflared não foi detectado no sistema. Clique abaixo para instalar automaticamente.",
+      "install": "Instalar Cloudflared",
+      "installing": "Instalando Cloudflared...",
+      "install_success": "Cloudflared instalado com sucesso!",
+      "install_failed": "Falha na instalação do Cloudflared: {{error}}",
+      "installed": "Cloudflared instalado e pronto",
+      "version": "Versão",
+      "mode_label": "Modo do Túnel",
+      "mode_quick": "Túnel Rápido (Sem Login)",
+      "mode_quick_desc": "Gera um subdomínio temporário trycloudflare.com sem necessidade de conta",
+      "mode_auth": "Túnel Nomeado (Com Token)",
+      "mode_auth_desc": "Usa um túnel persistente com seu próprio domínio configurado no Cloudflare Zero Trust",
+      "token": "Token do Túnel",
+      "token_placeholder": "Cole o token do seu túnel Cloudflare aqui",
+      "token_hint": "Obtenha seu token no painel Cloudflare Zero Trust > Networks > Tunnels",
+      "token_required": "O token do túnel é obrigatório no modo nomeado",
+      "use_http2": "Forçar Protocolo HTTP/2",
+      "use_http2_desc": "Utiliza transporte HTTP/2 em vez de QUIC caso o provedor bloqueie UDP",
+      "status_label": "Status da Conexão",
+      "status_stopped": "Parado",
+      "status_starting": "Iniciando...",
+      "status_running": "Conectado",
+      "status_stopping": "Parando...",
+      "status_error": "Erro no Túnel",
+      "public_url": "URL Pública do Túnel",
+      "public_url_placeholder": "Aguardando geração do link público do túnel...",
+      "copy_url": "Copiar URL Pública",
+      "url_copied": "URL pública copiada para a área de transferência!",
+      "start_tunnel": "Iniciar Túnel",
+      "stop_tunnel": "Parar Túnel",
+      "running": "Túnel em execução",
+      "started": "Túnel iniciado com sucesso!",
+      "stopped": "Túnel finalizado",
+      "start_failed": "Falha ao iniciar o túnel: {{error}}",
+      "stop_failed": "Falha ao parar o túnel: {{error}}",
+      "require_proxy_running": "O proxy local precisa estar em execução antes de iniciar o túnel Cloudflare",
+      "connection_info": "Informações de Conexão",
+      "local_port": "Porta Local",
+      "tunnel_protocol": "Protocolo do Túnel"
     },
     "example": {
       "title": "Exemplos de Uso",
@@ -796,7 +990,9 @@
       "regenerate_key_title": "Regenerar Chave da API",
       "regenerate_key_msg": "Tem certeza de que deseja regenerar a Chave da API? A chave antiga será invalidada imediatamente.",
       "clear_bindings_title": "Limpar Vinculações de Sessão",
-      "clear_bindings_msg": "Tem certeza de que deseja limpar todas as vinculações sessão-conta?"
+      "clear_bindings_msg": "Tem certeza de que deseja limpar todas as vinculações sessão-conta?",
+      "clear_rate_limits_title": "Confirmar Limpeza de Bloqueios",
+      "clear_rate_limits_confirm": "Deseja redefinir o estado de limitação de taxa (429) de todas as contas?"
     },
     "model": {
       "flash": "Resposta Rápida",
@@ -814,7 +1010,10 @@
       "pro_image_1_1": "Geração de Imagem (1:1)",
       "claude_sonnet": "Raciocínio de Código",
       "claude_sonnet_thinking": "Cadeia de Pensamento",
-      "claude_opus_thinking": "Pensamento Mais Forte"
+      "claude_opus_thinking": "Pensamento Mais Forte",
+      "gemini_2_5_flash": "Gemini 2.5 Flash",
+      "gemini_2_5_pro": "Gemini 2.5 Pro",
+      "claude_4_6": "Claude 4.6 (Sonnet/Opus)"
     },
     "mapping": {
       "title": "Mapeamento de Modelos Claude Code",
@@ -828,18 +1027,58 @@
       "restore_defaults": "Restaurar Configuração Padrão",
       "reset_all": "Redefinir Tudo"
     },
+    "models": {
+      "flash": "Modelos Flash",
+      "flash_thinking": "Flash com Raciocínio (Thinking)",
+      "pro_high": "Pro (Alta Capacidade)",
+      "pro_low": "Pro (Modo Econômico)",
+      "sonnet": "Claude Sonnet",
+      "sonnet_thinking": "Claude Sonnet (Thinking)",
+      "opus_thinking": "Claude Opus (Thinking)"
+    },
     "router": {
-      "title": "Roteador de Modelos",
-      "subtitle": "Rotear modelos por série ou adicionar mapeamentos exatos personalizados.\nNota: Modelos de passagem nativa Claude (ex: claude-opus-4-6-thinking) ignoram grupos de série por padrão. Use \"Roteamento Personalizado Especialista\" para substituir.",
+      "title": "Roteamento e Remapeamento de Modelos",
+      "subtitle": "Mapeie nomes de modelos solicitados pelos clientes para os modelos reais da upstream",
       "subtitle_simple": "Personalizar roteamento de modelos com curingas ou mapeamentos exatos",
+      "only_raw_quota_models": "Apenas Modelos com Cota Bruta",
+      "only_raw_quota_models_tooltip": "Filtra e exibe somente modelos que reportam cotas brutas diretas da API",
       "background_task_title": "Modelo de Tarefa em Segundo Plano",
       "background_task_desc": "Modelo usado para tarefas em segundo plano do Claude CLI, como geração de título, resumo, etc. (Padrão: gemini-2.5-flash)",
       "use_default": "Usar Padrão do Sistema",
       "current_model": "Modelo Atual",
       "apply_presets": "Aplicar Predefinições",
       "presets_applied": "Predefinições aplicadas com sucesso",
+      "preset_default": "Padrão",
+      "preset_default_desc": "Configuração balanceada recomendada para a maioria dos casos de uso",
+      "preset_performance": "Desempenho Máximo",
+      "preset_performance_desc": "Prioriza modelos de mais alta capacidade com respostas completas",
+      "preset_cost": "Econômico",
+      "preset_cost_desc": "Prioriza modelos rápidos e de menor consumo de cota",
+      "preset_balanced": "Equilibrado",
+      "preset_balanced_desc": "Equilíbrio inteligente entre velocidade de resposta e capacidade de raciocínio",
+      "built_in_presets": "Predefinições do Sistema",
+      "custom_presets": "Predefinições Personalizadas",
+      "apply_selected": "Aplicar Predefinição Selecionada",
+      "add_preset": "Salvar Nova Predefinição",
+      "delete_preset": "Excluir Predefinição",
+      "cannot_delete_builtin": "Não é possível excluir predefinições nativas do sistema",
+      "no_mapping_to_save": "Nenhuma regra de mapeamento para salvar como predefinição",
+      "preset_name_required": "Por favor, informe um nome para a predefinição",
+      "preset_saved": "Predefinição salva com sucesso!",
+      "manage_presets_title": "Gerenciar Predefinições de Roteamento",
+      "save_current_as_preset": "Salvar Configuração Atual como Predefinição",
+      "preset_name_placeholder": "Nome da nova predefinição...",
+      "save_hint": "As predefinições salvam todas as regras de mapeamento e pesos configurados atualmente",
+      "your_presets": "Suas Predefinições",
+      "no_custom_presets": "Nenhuma predefinição personalizada criada ainda",
+      "mappings_count": "mapeamentos",
+      "custom_preset_desc": "Criado pelo usuário",
       "custom_mappings": "Mapeamentos Personalizados",
       "group_title": "Grupos de Séries",
+      "gemini3_group_label": "Opções de Roteamento Gemini 3",
+      "gemini3_option_high": "Gemini 3 Pro (Alto Desempenho)",
+      "gemini3_option_low": "Gemini 3 Pro (Econômico)",
+      "gemini3_option_flash": "Gemini 3 Flash",
       "groups": {
         "claude_45": {
           "name": "Série Claude 4.6 TK",
@@ -899,8 +1138,15 @@
       "click_tip": "👆 Clique no modelo para atualizar o código",
       "copy_base": "Copiar Base"
     },
+    "supported_models": {
+      "title": "Modelos Suportados e Integração",
+      "model_name": "Nome do Modelo",
+      "model_id": "ID do Modelo",
+      "description": "Descrição",
+      "action": "Ação"
+    },
     "cli_sync": {
-      "title": "Sincronização de CLI",
+      "title": "Sincronização de Ferramentas CLI",
       "subtitle": "Sincronize a URL e chave da API com suas ferramentas de CLI de IA",
       "card_title": "Config {{name}}",
       "status": {
@@ -911,30 +1157,46 @@
         "detecting": "Detectando...",
         "current_base_url": "URL Base Atual"
       },
+      "model_select": "Seleção de Modelos para Exportação",
       "btn_sync": "Sincronizar Agora",
       "btn_view": "Ver Config",
       "btn_restore": "Restaurar Padrão",
       "btn_restore_backup": "Restaurar Backup",
-      "restore_backup_confirm": "Configuração de backup encontrada. Tem certeza de que deseja restaurá-la?",
-      "sync_confirm_title": "Confirmação de Sincronização",
-      "sync_confirm_message": "Pronto para sincronizar a configuração do {{name}}. ⚠️ Aviso: Isso substituirá seus arquivos de configuração local existentes (como tokens de login, chaves de API). Tem certeza de que deseja continuar?",
       "restore_confirm": "Tem certeza que deseja restaurar a config de {{name}} para o padrão?",
+      "restore_backup_confirm": "Configuração de backup encontrada. Tem certeza de que deseja restaurá-la?",
       "modal": {
         "view_title": "Conteúdo do arquivo {{name}}",
         "copy_success": "Copiado para a área de transferência"
       },
       "toast": {
-        "config_missing": "Gere uma chave de API e inicie o serviço primeiro",
         "sync_success": "Sucesso! {{name}} está pronto.",
-        "sync_error": "Erro ao sincronizar {{name}}: {{error}}"
-      }
+        "sync_error": "Falha na sincronização: {{error}}",
+        "config_missing": "Gere uma Chave de API e inicie o serviço primeiro"
+      },
+      "sync_confirm_title": "Confirmação de Sincronização",
+      "sync_confirm_message": "Pronto para sincronizar a configuração do {{name}}. ⚠️ Aviso: Isso substituirá seus arquivos de configuração local existentes (como tokens de login, chaves de API). Tem certeza de que deseja continuar?"
     },
-    "supported_models": {
-      "title": "Modelos Suportados e Integração",
-      "model_name": "Nome do Modelo",
-      "model_id": "ID do Modelo",
-      "description": "Descrição",
-      "action": "Ação"
+    "opencode_sync": {
+      "toast": {
+        "clear_success": "Configuração do OpenCode limpa com sucesso",
+        "clear_error": "Erro ao limpar configuração do OpenCode: {{error}}",
+        "sync_success": "Sincronizado com OpenCode com sucesso"
+      },
+      "sync_accounts": "Sincronizar contas para antigravity-accounts.json",
+      "btn_clear": "Limpar",
+      "clear_confirm_title": "Limpar Configuração do OpenCode",
+      "clear_confirm_message": "Isso removerá todas as configurações do OpenCode, incluindo definições legadas. Tem certeza?"
+    },
+    "droid_sync": {
+      "toast": {
+        "no_models_selected": "Por favor, selecione pelo menos um modelo",
+        "sync_success_count": "Adicionado(s) {{count}} modelo(s) ao Droid",
+        "sync_error": "Falha na sincronização: {{error}}"
+      },
+      "modal_title": "Adicionar Modelos ao Droid",
+      "select_models": "Selecione os modelos para adicionar",
+      "no_models": "Selecione os modelos na lista acima para adicionar",
+      "btn_confirm_sync": "Gravar Configuração"
     }
   },
   "monitor": {
@@ -985,15 +1247,43 @@
       "tokens": "Tokens (E/S)",
       "time": "Tempo",
       "model": "Modelo",
-      "id": "ID da Solicitação",
-      "protocol": "Protocolo",
       "mapped_model": "Modelo Mapeado",
+      "protocol": "Protocolo",
       "account_used": "Conta Utilizada",
+      "id": "ID da Solicitação",
       "payload_empty": "Sem Carga"
     },
     "dialog": {
       "clear_title": "Limpar Logs do Proxy",
       "clear_msg": "Tem certeza de que deseja limpar todos os logs do proxy? Esta ação não pode ser desfeita."
+    },
+    "network": {
+      "title": "Monitor de Tráfego de Rede",
+      "open": "Abrir Monitor",
+      "requests_count": "{{count}} requisição(ões)",
+      "start_recording": "Iniciar Gravação",
+      "stop_recording": "Pausar Gravação",
+      "clear_requests": "Limpar Histórico",
+      "empty": "Nenhuma requisição interceptada",
+      "waiting": "Aguardando tráfego do proxy...",
+      "badge_error": "Erro",
+      "table": {
+        "status": "Status",
+        "command": "Comando / Endpoint",
+        "time": "Horário",
+        "duration": "Duração"
+      },
+      "sections": {
+        "general": "Informações Gerais",
+        "request_args": "Argumentos da Requisição",
+        "error_details": "Detalhes do Erro",
+        "response": "Resposta do Servidor"
+      },
+      "fields": {
+        "status": "Status HTTP",
+        "start_time": "Início",
+        "duration": "Duração Total"
+      }
     }
   },
   "update_notification": {
@@ -1003,6 +1293,9 @@
     "downloading": "Baixando atualização...",
     "restarting": "Reiniciando o aplicativo...",
     "auto_update": "Atualização automática",
+    "restart_prompt": "Uma nova atualização foi baixada. Deseja reiniciar agora para aplicar?",
+    "btn_restart": "Reiniciar Agora",
+    "btn_later": "Mais Tarde",
     "toast": {
       "not_ready": "O pacote de atualização automática não está pronto, redirecionando para a página de download...",
       "failed": "A atualização automática falhou, redirecionando para a página de download..."
@@ -1013,18 +1306,12 @@
     "desc": "Executando no modo Web. Por favor, insira a senha de administrador ou a Chave de API para acessar.",
     "placeholder": "Insira a senha de administrador ou a Chave de API",
     "btn_login": "Verificar e Entrar",
+    "btn_verifying": "Verificando Autenticação...",
+    "error_invalid_key": "Chave de acesso inválida ou expirada",
+    "error_network": "Erro ao conectar ao serviço de autenticação",
     "note": "Nota: Se uma senha de administração separada estiver definida, insira-a; caso contrário, insira a API_KEY.",
     "lookup_hint": "Se esqueceu, execute docker logs antigravity-manager para encontrar a Chave de API atual ou a senha da Web UI.",
     "config_hint": "Ou execute grep -E '\"api_key\"|\"admin_password\"' ~/.antigravity_tools/gui_config.json para visualizar."
-  },
-  "errors": {
-    "stream": {
-      "timeout_error": "Tempo limite da solicitação, por favor verifique sua conexão de rede",
-      "connection_error": "Falha na conexão, por favor verifique sua rede ou configurações de proxy",
-      "decode_error": "Rede instável, transmissão de dados interrompida. Tente: 1) Verificar rede 2) Alternar proxy 3) Tentar novamente",
-      "stream_error": "Erro na transmissão de stream, por favor tente novamente mais tarde",
-      "unknown_error": "Erro desconhecido ocorreu, por favor tente novamente mais tarde"
-    }
   },
   "token_stats": {
     "title": "Estatísticas de Consumo de Tokens",
@@ -1054,6 +1341,15 @@
     "total": "Total",
     "percentage": "Porcentagem",
     "no_data": "Sem dados"
+  },
+  "errors": {
+    "stream": {
+      "timeout_error": "Tempo limite da solicitação, por favor verifique sua conexão de rede",
+      "connection_error": "Falha na conexão, por favor verifique sua rede ou configurações de proxy",
+      "decode_error": "Rede instável, transmissão de dados interrompida. Tente: 1) Verificar rede 2) Alternar proxy 3) Tentar novamente",
+      "stream_error": "Erro na transmissão de stream, por favor tente novamente mais tarde",
+      "unknown_error": "Erro desconhecido ocorreu, por favor tente novamente mais tarde"
+    }
   },
   "security": {
     "title": "Monitor de Segurança",
@@ -1086,6 +1382,7 @@
     },
     "logs": {
       "search_placeholder": "Buscar IP, Caminho, User Agent...",
+      "username": "Usuário",
       "show_blocked_only": "Exibir Apenas Bloqueados",
       "status": "Status",
       "ip_address": "Endereço IP",
@@ -1117,7 +1414,10 @@
       "expires_placeholder": "Deixe vazio para permanente",
       "cancel": "Cancelar",
       "confirm": "Adicionar",
-      "add_btn": "Adicionar"
+      "add_btn": "Adicionar",
+      "error_duplicate": "Este IP já está na lista negra",
+      "error_invalid_ip": "Formato de IP inválido. Use endereço IP ou notação CIDR (ex: 192.168.1.0/24)",
+      "error_add_failed": "Falha ao adicionar IP: "
     },
     "whitelist": {
       "add_ip": "Adicionar IP Confiável",
@@ -1181,7 +1481,11 @@
     "placeholder_desc": "Notas opcionais",
     "placeholder_max_ips": "0 = Ilimitado",
     "hint_max_ips": "0 significa ilimitado",
-    "hint_curfew": "Deixe em branco para desativar. Baseado na hora do servidor."
+    "hint_curfew": "Deixe em branco para desativar. Baseado na hora do servidor.",
+    "custom_expires_required": "Por favor, especifique uma data e hora de expiração válida",
+    "expires_custom": "Personalizado",
+    "custom_expires_at": "Data e Hora de Expiração",
+    "hint_custom_expires": "Selecione a data e o horário exatos em que este token expirará"
   },
   "apiKeyFun": {
     "title": "APIKEY.FUN Hub",
@@ -1217,12 +1521,24 @@
     },
     "models": {
       "title": "Available Models",
-      "empty": "No models returned for current API Key."
+      "empty": "No models returned for current API Key.",
+      "emptyFromKey": "Nenhum modelo retornado. Consulte para buscar os modelos disponíveis."
     },
     "errors": {
       "parseFormat": "Parse format error: {{err}}",
       "fetchFailed": "Fetch failed: {{err}}",
       "queryFailed": "Failed to get valid quota or models. Please check if the API Key and Base URL are correct."
-    }
+    },
+    "syncSuccess": "Sincronizado com sucesso para {{app}}",
+    "syncError": "Falha ao sincronizar: {{error}}"
+  },
+  "debug_console": {
+    "pause_scroll": "Pausar rolagem",
+    "resume_scroll": "Retomar rolagem",
+    "clear": "Limpar",
+    "no_logs": "Nenhum log para exibir",
+    "no_logs_hint": "Os logs de execução aparecerão aqui em tempo real",
+    "scroll_to_bottom": "Rolar para o final",
+    "toggle": "Alternar Console de Depuração"
   }
 }

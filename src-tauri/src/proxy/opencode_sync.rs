@@ -61,12 +61,32 @@ fn build_model_catalog() -> Vec<ModelDef> {
             output_limit: 64_000,
             input_modalities: &["text", "image", "pdf"],
             output_modalities: &["text"],
-            reasoning: false,
-            variant_type: None,
+            reasoning: true,
+            variant_type: Some(VariantType::ClaudeThinking),
         },
         ModelDef {
             id: "claude-sonnet-4-6-thinking",
             name: "Claude Sonnet 4.6 Thinking",
+            context_limit: 200_000,
+            output_limit: 64_000,
+            input_modalities: &["text", "image", "pdf"],
+            output_modalities: &["text"],
+            reasoning: true,
+            variant_type: Some(VariantType::ClaudeThinking),
+        },
+        ModelDef {
+            id: "claude-sonnet-4-5",
+            name: "Claude Sonnet 4.5",
+            context_limit: 200_000,
+            output_limit: 64_000,
+            input_modalities: &["text", "image", "pdf"],
+            output_modalities: &["text"],
+            reasoning: true,
+            variant_type: Some(VariantType::ClaudeThinking),
+        },
+        ModelDef {
+            id: "claude-sonnet-4-5-thinking",
+            name: "Claude Sonnet 4.5 Thinking",
             context_limit: 200_000,
             output_limit: 64_000,
             input_modalities: &["text", "image", "pdf"],
@@ -1044,6 +1064,8 @@ fn build_variants_object(variant_type: Option<VariantType>) -> Option<Value> {
                 "high".to_string(),
                 build_gemini3_effort_variant(VariantTier::High),
             );
+            variants.insert("medium".to_string(), serde_json::json!({ "disabled": true }));
+            variants.insert("max".to_string(), serde_json::json!({ "disabled": true }));
             Some(Value::Object(variants))
         }
         Some(VariantType::Gemini3Flash) => {
@@ -1060,6 +1082,7 @@ fn build_variants_object(variant_type: Option<VariantType>) -> Option<Value> {
                 "high".to_string(),
                 build_gemini3_effort_variant(VariantTier::High),
             );
+            variants.insert("max".to_string(), serde_json::json!({ "disabled": true }));
             Some(Value::Object(variants))
         }
         Some(VariantType::Gemini25Thinking) => {
@@ -1851,12 +1874,32 @@ mod tests {
                 output_limit: 64_000,
                 input_modalities: &["text", "image", "pdf"],
                 output_modalities: &["text"],
-                reasoning: false,
-                variant_type: None,
+                reasoning: true,
+                variant_type: Some(VariantType::ClaudeThinking),
             },
             ModelDef {
                 id: "claude-sonnet-4-6-thinking",
                 name: "Claude Sonnet 4.6 Thinking",
+                context_limit: 200_000,
+                output_limit: 64_000,
+                input_modalities: &["text", "image", "pdf"],
+                output_modalities: &["text"],
+                reasoning: true,
+                variant_type: Some(VariantType::ClaudeThinking),
+            },
+            ModelDef {
+                id: "claude-sonnet-4-5",
+                name: "Claude Sonnet 4.5",
+                context_limit: 200_000,
+                output_limit: 64_000,
+                input_modalities: &["text", "image", "pdf"],
+                output_modalities: &["text"],
+                reasoning: true,
+                variant_type: Some(VariantType::ClaudeThinking),
+            },
+            ModelDef {
+                id: "claude-sonnet-4-5-thinking",
+                name: "Claude Sonnet 4.5 Thinking",
                 context_limit: 200_000,
                 output_limit: 64_000,
                 input_modalities: &["text", "image", "pdf"],
@@ -1978,7 +2021,7 @@ mod tests {
                 "gemini-3.1-pro" => {
                     assert!(matches!(model.variant_type, Some(VariantType::Gemini3Pro)));
                 }
-                "gemini-3.5-flash" => {
+                "gemini-3.7-flash" | "gemini-3.5-flash" => {
                     assert!(matches!(
                         model.variant_type,
                         Some(VariantType::Gemini3Flash)
@@ -2035,8 +2078,10 @@ mod tests {
                 .as_object()
                 .expect("variants must be an object")
                 .len(),
-            2
+            4
         );
+        assert_eq!(variants["medium"]["disabled"], true);
+        assert_eq!(variants["max"]["disabled"], true);
 
         // Verify the JSON shape contains only `effort` — no budget fields
         let low = &variants["low"];
@@ -2074,8 +2119,9 @@ mod tests {
                 .as_object()
                 .expect("variants must be an object")
                 .len(),
-            3
+            4
         );
+        assert_eq!(variants["max"]["disabled"], true);
 
         // Verify the JSON shape contains only `effort` — no budget fields
         let low = &variants["low"];
@@ -2795,8 +2841,8 @@ mod tests {
     fn test_sync_uses_frontend_display_name_for_unknown_model() {
         let config = serde_json::json!({});
         let models_to_sync = [
-            minput_named("gemini-3.5-flash-low", "Gemini 3.5 Flash (High)"),
-            minput_named("gemini-3-flash-agent", "Gemini 3 Flash Agent"),
+            minput_named("custom-unknown-flash", "Custom Unknown Flash (High)"),
+            minput_named("custom-unknown-agent", "Custom Unknown Agent"),
         ];
 
         let result = apply_sync_to_config(
@@ -2819,29 +2865,19 @@ mod tests {
         // The display name must be used as-is, preserving parentheses/variant info.
         assert_eq!(
             models
-                .get("gemini-3.5-flash-low")
+                .get("custom-unknown-flash")
                 .unwrap()
                 .get("name")
                 .unwrap(),
-            "Gemini 3.5 Flash (High)"
+            "Custom Unknown Flash (High)"
         );
         assert_eq!(
             models
-                .get("gemini-3-flash-agent")
+                .get("custom-unknown-agent")
                 .unwrap()
                 .get("name")
                 .unwrap(),
-            "Gemini 3 Flash Agent"
-        );
-
-        // And because these are gemini-3.x ids, they should also get series defaults.
-        assert!(
-            models
-                .get("gemini-3.5-flash-low")
-                .unwrap()
-                .get("limit")
-                .is_some(),
-            "gemini-3.x fallback should include limit/modalities"
+            "Custom Unknown Agent"
         );
     }
 }

@@ -13,8 +13,6 @@ use std::os::windows::process::CommandExt;
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 #[cfg(target_os = "windows")]
-const DETACHED_PROCESS: u32 = 0x00000008;
-#[cfg(target_os = "windows")]
 const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
 
 /// Cloudflared隧道模式
@@ -181,14 +179,18 @@ impl CloudflaredManager {
             std::fs::write(&archive_path, &bytes)
                 .map_err(|e| format!("Failed to write archive: {}", e))?;
 
-            let status = Command::new("tar")
-                .arg("-xzf")
-                .arg(&archive_path)
-                .arg("-C")
-                .arg(bin_dir)
-                .status()
-                .await
-                .map_err(|e| format!("Failed to extract archive: {}", e))?;
+            let status = {
+                let mut tar_cmd = Command::new("tar");
+                tar_cmd
+                    .arg("-xzf")
+                    .arg(&archive_path)
+                    .arg("-C")
+                    .arg(bin_dir);
+                #[cfg(target_os = "windows")]
+                tar_cmd.creation_flags(CREATE_NO_WINDOW);
+                tar_cmd.status().await
+            }
+            .map_err(|e| format!("Failed to extract archive: {}", e))?;
 
             if !status.success() {
                 return Err("Failed to extract cloudflared archive".to_string());
@@ -293,9 +295,9 @@ impl CloudflaredManager {
         // 恢复管道
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
-        // 使用 DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP 隐藏窗口
+        // CREATE_NO_WINDOW supresses console window on Windows
         #[cfg(target_os = "windows")]
-        cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+        cmd.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
 
         let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn: {}", e))?;
 

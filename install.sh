@@ -109,6 +109,9 @@ detect_linux_distro() {
 
 # Get latest or specific version
 get_version() {
+    # Validate that a version string looks like a semver (X.Y.Z or X.Y.Z.W)
+    _is_valid_version() { [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; }
+
     if [[ -n "${VERSION:-}" ]]; then
         RELEASE_VERSION="$VERSION"
         info "Using specified version: v$RELEASE_VERSION"
@@ -117,27 +120,29 @@ get_version() {
 
     info "Fetching latest version..."
 
-    # Method 1: Try GitHub API
+    # Method 1: Try GitHub API (returns JSON with tag_name)
     local response
-    if response=$(curl -fsSL -H "User-Agent: Antigravity-Installer" "${GITHUB_API}/latest" 2>/dev/null); then
-        RELEASE_VERSION=$(echo "$response" | grep '"tag_name"' | sed -E 's/.*"v([^"]+)".*/\1/')
-        if [[ -n "$RELEASE_VERSION" ]]; then
+    if response=$(curl -fsSL --max-time 10 -H "User-Agent: Antigravity-Installer" "${GITHUB_API}/latest" 2>/dev/null); then
+        RELEASE_VERSION=$(echo "$response" | grep '"tag_name"' | head -n1 | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v?([^"]+)".*/\1/' | tr -d '[:space:]\r\n')
+        if _is_valid_version "${RELEASE_VERSION:-}"; then
             info "Latest version: v$RELEASE_VERSION"
             return
         fi
+        warn "API returned unexpected version format ('${RELEASE_VERSION:-empty}'), trying fallback..."
+        RELEASE_VERSION=""
     fi
 
-    # Method 2: Fallback - parse from redirect URL (no rate limit)
-    info "API rate limited, using fallback method..."
-    local redirect_url
-    redirect_url=$(curl -fsSI "https://github.com/${REPO}/releases/latest" 2>/dev/null | grep -i "^location:" | tr -d '\r' | awk '{print $2}')
+    # Method 2: Fallback - follow redirect and extract version from final URL
+    info "Using fallback method (redirect URL)..."
+    local final_url
+    final_url=$(curl -fsSL --max-time 10 -o /dev/null -w '%{url_effective}' "https://github.com/${REPO}/releases/latest" 2>/dev/null | tr -d '[:space:]\r\n')
 
-    if [[ -n "$redirect_url" ]]; then
-        RELEASE_VERSION=$(echo "$redirect_url" | sed -E 's|.*/tag/v||')
+    if [[ -n "$final_url" ]]; then
+        RELEASE_VERSION=$(echo "$final_url" | sed -E 's|.*/tag/v?([0-9][^/]*).*|\1|' | tr -d '[:space:]\r\n')
     fi
 
-    if [[ -z "${RELEASE_VERSION:-}" ]]; then
-        error "Failed to fetch latest version. Try specifying VERSION=x.x.x"
+    if ! _is_valid_version "${RELEASE_VERSION:-}"; then
+        error "Failed to fetch a valid version (got: '${RELEASE_VERSION:-empty}'). Try specifying: VERSION=x.x.x bash install.sh"
     fi
 
     info "Latest version: v$RELEASE_VERSION"

@@ -484,6 +484,12 @@ pub fn run() {
                             info!("Proxy service auto-started successfully");
                         }
                     }
+                } else {
+                    // 配置加载失败不能再被静默吞掉：否则重启后“服务没起来”时无任何痕迹可查。
+                    error!(
+                        "Failed to load app config at startup; admin server and proxy service were NOT started. \
+                         Fix or reset the config file and restart the app."
+                    );
                 }
             });
 

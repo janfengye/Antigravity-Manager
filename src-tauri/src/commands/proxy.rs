@@ -36,8 +36,6 @@ pub struct ProxyServiceInstance {
     pub config: ProxyConfig,
     pub token_manager: Arc<TokenManager>,
     pub axum_server: crate::proxy::AxumServer,
-    #[allow(dead_code)] // 保留句柄以便未来支持显式停服/诊断
-    pub server_handle: tokio::task::JoinHandle<()>,
 }
 
 impl ProxyServiceState {
@@ -182,14 +180,18 @@ pub async fn internal_start_proxy_service(
 
     let mut instance_lock = state.instance.write().await;
     let admin_lock = state.admin_server.read().await;
-    let axum_server = admin_lock.as_ref().unwrap().axum_server.clone();
+    let axum_server = admin_lock
+        .as_ref()
+        .expect("admin server must exist after ensure_admin_server")
+        .axum_server
+        .clone();
 
-    // 创建服务实例（逻辑启动）
+    // 创建服务实例（逻辑启动）。不再保存假的 server_handle：
+    // 监听任务的真实句柄已由 AdminServerInstance 持有（见 ensure_admin_server）。
     let instance = ProxyServiceInstance {
         config: config.clone(),
         token_manager: token_manager.clone(),
         axum_server: axum_server.clone(),
-        server_handle: tokio::spawn(async {}), // 逻辑上的 handle
     };
 
     // [FIX] Ensure the server is logically running

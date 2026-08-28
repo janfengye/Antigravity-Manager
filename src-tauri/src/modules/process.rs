@@ -830,6 +830,9 @@ pub fn start_antigravity(target_ide: Option<&str>) -> Result<(), String> {
                     }
                 }
 
+                #[cfg(target_os = "windows")]
+                cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+
                 cmd.spawn().map_err(|e| format!("Startup failed: {}", e))?;
             }
 

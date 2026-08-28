@@ -1,4 +1,4 @@
-import { Gemini, Claude } from '@lobehub/icons';
+import { Gemini, Claude, OpenAI } from '@lobehub/icons';
 
 /**
  * 模型配置接口
@@ -11,7 +11,7 @@ export interface ModelConfig {
     /** 保护模型的键名 */
     protectedKey: string;
     /** 模型图标组件 */
-    Icon: React.ComponentType<{ size?: number; className?: string }>;
+    Icon: React.ComponentType<any>;
     /** 国际化键名 (用于动态名称) */
     i18nKey: string;
     /** 描述信息键名 (用于详细说明) */
@@ -89,6 +89,26 @@ export const MODEL_CONFIG: Record<string, ModelConfig> = {
         i18nDescKey: 'proxy.model.flash_preview',
         group: 'Gemini 3',
         tags: ['flash'],
+    },
+    'gemini-3.7-flash': {
+        label: 'Gemini 3.7 Flash',
+        shortLabel: 'G3.7 Flash',
+        protectedKey: 'gemini-flash',
+        Icon: Gemini.Color,
+        i18nKey: 'proxy.model.flash_preview',
+        i18nDescKey: 'proxy.model.flash_preview',
+        group: 'Gemini 3',
+        tags: ['flash'],
+    },
+    'gemini-3.1-flash-lite': {
+        label: 'Gemini 3.1 Flash Lite',
+        shortLabel: 'G3.1 Lite',
+        protectedKey: 'gemini-flash',
+        Icon: Gemini.Color,
+        i18nKey: 'proxy.model.flash_lite',
+        i18nDescKey: 'proxy.model.flash_lite',
+        group: 'Gemini 3',
+        tags: ['flash', 'lite'],
     },
     'gemini-3.1-pro': {
         label: 'Gemini 3.1 Pro',
@@ -205,6 +225,16 @@ export const MODEL_CONFIG: Record<string, ModelConfig> = {
         group: 'Claude',
         tags: ['sonnet', 'thinking'],
     },
+    'claude-opus-4-6': {
+        label: 'Claude Opus 4.6',
+        shortLabel: 'Claude Opus 4.6',
+        protectedKey: 'claude',
+        Icon: Claude.Color,
+        i18nKey: 'proxy.model.claude_opus',
+        i18nDescKey: 'proxy.model.claude_opus',
+        group: 'Claude',
+        tags: ['opus'],
+    },
     'claude-opus-4-6-thinking': {
         label: 'Claude Opus 4.6 TK',
         shortLabel: 'Claude Opus 4.6 TK',
@@ -214,6 +244,18 @@ export const MODEL_CONFIG: Record<string, ModelConfig> = {
         i18nDescKey: 'proxy.model.claude_opus_thinking',
         group: 'Claude',
         tags: ['opus', 'thinking'],
+    },
+
+    // OpenAI / Outros modelos
+    'gpt-oss-120b-medium': {
+        label: 'GPT-OSS 120B (Medium)',
+        shortLabel: 'GPT-OSS',
+        protectedKey: 'gpt-oss',
+        Icon: OpenAI.Avatar,
+        i18nKey: 'proxy.model.gpt_oss',
+        i18nDescKey: 'proxy.model.gpt_oss',
+        group: 'Other',
+        tags: ['openai'],
     },
 };
 
