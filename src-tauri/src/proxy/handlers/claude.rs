@@ -1623,21 +1623,27 @@ pub async fn handle_messages(
         }
 
         // 4. 处理 400 错误 (Thinking 签名失效 或 块顺序错误)
+        // [FIX 2026-08-28] Use case-insensitive matching and cover Google's exact phrasing:
+        // "Invalid thought signature." / "thoughtSignature" / "thought_signature"
+        let lower_err = error_text.to_lowercase();
         if status_code == 400
             && !retried_without_thinking
-            && (error_text.contains("Invalid `signature`")
-                || error_text.contains("thinking.signature: Field required")
-                || error_text.contains("thinking.thinking: Field required")
-                || error_text.contains("thinking.signature")
-                || error_text.contains("thinking.thinking")
-                || error_text.contains("Corrupted thought signature")
-                || error_text.contains("failed to deserialise")
-                || error_text.contains("Invalid signature")
-                || error_text.contains("thinking block")
-                || error_text.contains("Found `text`")
-                || error_text.contains("Found 'text'")
-                || error_text.contains("must be `thinking`")
-                || error_text.contains("must be 'thinking'"))
+            && (lower_err.contains("invalid thought signature")
+                || lower_err.contains("invalid `signature`")
+                || lower_err.contains("invalid signature")
+                || lower_err.contains("thought_signature")
+                || lower_err.contains("thoughtsignature")
+                || lower_err.contains("thinking.signature: field required")
+                || lower_err.contains("thinking.thinking: field required")
+                || lower_err.contains("thinking.signature")
+                || lower_err.contains("thinking.thinking")
+                || lower_err.contains("corrupted thought signature")
+                || lower_err.contains("failed to deserialise")
+                || lower_err.contains("thinking block")
+                || lower_err.contains("found `text`")
+                || lower_err.contains("found 'text'")
+                || lower_err.contains("must be `thinking`")
+                || lower_err.contains("must be 'thinking'"))
         {
             // Existing logic for thinking signature...\n            retried_without_thinking = true;
 

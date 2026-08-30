@@ -133,6 +133,20 @@ export function resolveQuotaModels<T extends { name: string }>(
         const category = categorizeModel(normalizedId);
 
         const isImage = category === 'gemini-pro-image' || category === 'gemini-flash-image';
+
+        // Exact-match first: a pinned id that names a real quota model must render
+        // that model, not collapse into its category slot.
+        const exact = !isImage
+            ? models?.find(m => m.name.trim().toLowerCase() === normalizedId)
+            : undefined;
+        if (exact) {
+            const selectionKey = `model:${normalizedId}`;
+            if (seen.has(selectionKey)) continue;
+            seen.add(selectionKey);
+            results.push({ selectorId, selectionKey, model: exact });
+            continue;
+        }
+
         const selectionKey = isImage
             ? 'category:gemini-image'
             : category === 'other'

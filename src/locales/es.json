@@ -1,6 +1,7 @@
 {
   "common": {
     "loading": "Cargando...",
+    "empty": "Vacío",
     "load_more": "Cargar más",
     "add": "Agregar",
     "copy": "Copiar",
@@ -22,6 +23,7 @@
     "warning": "Advertencia",
     "info": "Información",
     "details": "Detalles",
+    "example": "Ejemplo",
     "clear": "Limpiar",
     "clearing": "Limpiando...",
     "prev_page": "Anterior",
@@ -40,7 +42,12 @@
     "create_success": "Creado exitosamente",
     "update_success": "Actualizado exitosamente",
     "delete_success": "Eliminado exitosamente",
-    "copied": "Copiado al portapapeles"
+    "copied": "Copiado al portapapeles",
+    "retry": "Reintentar",
+    "back": "Atrás",
+    "reason": "Motivo",
+    "show_raw": "Mostrar sin procesar",
+    "show_parsed": "Mostrar procesado"
   },
   "nav": {
     "dashboard": "Panel",
@@ -48,6 +55,8 @@
     "proxy": "Proxy API",
     "call_records": "Registros de Tráfico",
     "token_stats": "Estadísticas de Tokens",
+    "security": "Gestión de IP",
+    "security_logs": "Registros de IP",
     "settings": "Configuración",
     "theme_to_dark": "Cambiar a Modo Oscuro",
     "theme_to_light": "Cambiar a Modo Claro",
@@ -73,7 +82,9 @@
     "switch_to_spanish_short": "ES",
     "switch_to_malay": "Cambiar a Malayo",
     "switch_to_malay_short": "MY",
-    "user_token": "Tokens de usuario"
+    "user_token": "Tokens de usuario",
+    "apikey_fun": "Estación de tránsito",
+    "logout": "Cerrar sesión"
   },
   "dashboard": {
     "hello": "Hola, Usuario 👋",
@@ -149,13 +160,35 @@
     "status": {
       "forbidden": "403 Prohibido",
       "disabled": "Cuenta deshabilitada",
-      "proxy_disabled": "Proxy deshabilitado"
+      "proxy_disabled": "Proxy deshabilitado",
+      "validation_required": "Verificación requerida",
+      "risk_controlled": "Riesgo / Límite de tasa",
+      "oauth_reauth_required": "Reautenticación OAuth requerida",
+      "violation_blocked": "Bloqueado por infracción"
     },
     "error_details": "Detalles del error",
     "error_status": "Estado del error",
     "error_time": "Hora de detección",
     "view_error": "Ver motivo",
     "click_to_verify": "Haga clic para verificar",
+    "copy_validation_url": "Copiar enlace de verificación",
+    "validation_url_copied": "Enlace de verificación copiado al portapapeles",
+    "fix_guide": {
+      "title": "Solución rápida en terminal (Resuelve errores 403 internos)",
+      "step1_title": "🚀 Solución más rápida",
+      "step1_desc": "Abra su terminal y ejecute el siguiente comando para indicar a Google \"soy yo\", lo que resuelve la mayoría de los bloqueos 403:",
+      "step1_li1": "Presione Enter e introduzca <1>Y</1> cuando se le solicite para continuar.",
+      "step1_li2": "Su navegador se abrirá automáticamente; seleccione su cuenta y haga clic en \"Permitir\".",
+      "step1_li3": "Una vez que vea <1>You are now authenticated</1>, ¡todo estará listo!",
+      "step2_title": "🧹 Si eso falla (Limpiar caché)",
+      "step2_li1_prefix": "Ejecute esto para borrar sus credenciales antiguas:",
+      "step2_li2_prefix": "Luego inicie sesión nuevamente:",
+      "tips_title": "💡 Consejos comunes",
+      "tip1": "Si continúa recibiendo el error 403, intente ejecutar primero <1>unset GOOGLE_APPLICATION_CREDENTIALS</1> en la terminal.",
+      "tip2": "Para entornos de producción, se recomienda encarecidamente usar una clave JSON de <1>Service Account</1> para mayor estabilidad y operación headless.",
+      "tip3": "Si sigue fallando, verifique la Generative Language API en <1>Google Cloud Console</1> para ver si los permisos están congelados. De ser así, su cuenta está bajo control de riesgos. Deje reposar la cuenta durante 72 horas antes de volver a intentarlo.",
+      "tip4": "También puede probar con <1>npm install -g @google/gemini-cli</1>. Si no arroja errores, simplemente eliminar y volver a autorizar la cuenta en la aplicación suele solucionarlo."
+    },
     "no_data": "Sin Datos",
     "last_used": "Último Uso",
     "reset_time": "Tiempo de Reinicio",
@@ -207,6 +240,9 @@
     "warmup_this": "Calentar esta cuenta",
     "warmup_now": "Calentar Ahora",
     "warmup_batch_triggered": "Tareas de calentamiento activadas para {{count}} cuentas",
+    "quota_window_5h": "Cuota móvil de 5 horas",
+    "quota_window_weekly": "Cuota semanal de 7 días",
+    "quota_window_weekly_short": "Semanal",
     "quota_protected": "Protegida",
     "details": {
       "title": "Detalles de Cuota",
@@ -304,7 +340,7 @@
       "batch_warmup_title": "Calentamiento Manual en Lote",
       "batch_warmup_msg": "¿Está seguro de que desea activar el calentamiento para las {{count}} cuentas seleccionadas inmediatamente?"
     },
-    "switch_to_agy": "Switch to Antigravity CLI (agy)"
+    "switch_to_agy": "Cambiar a CLI de Antigravity (agy)"
   },
   "settings": {
     "save": "Guardar Configuración",
@@ -313,8 +349,8 @@
       "account": "Cuenta",
       "proxy": "Configuración de Proxy",
       "advanced": "Avanzado",
-      "about": "Acerca de",
-      "debug": "Depuración"
+      "debug": "Depuración",
+      "about": "Acerca de"
     },
     "general": {
       "title": "Configuración General",
@@ -368,56 +404,56 @@
       "title": "Configuración de Proxy"
     },
     "proxy_pool": {
-      "title": "Proxy Pool",
-      "strategy_priority": "Priority",
+      "title": "Grupo de proxies",
+      "strategy_priority": "Prioridad",
       "strategy_round_robin": "Round Robin",
-      "strategy_random": "Random",
-      "strategy_least_connections": "Least Connections",
-      "test_all": "Test All",
-      "batch_import": "Import",
-      "binding_manager": "Bindings",
-      "add_proxy": "Add Proxy",
-      "edit_proxy": "Edit Proxy",
-      "name": "Name",
-      "url": "Proxy URL",
-      "username": "Username",
-      "password": "Password",
-      "max_accounts": "Max Accounts",
-      "max_accounts_hint": "0 = Unlimited",
-      "priority": "Priority",
-      "priority_hint": "Lower is better",
-      "health_check_url": "Health Check URL",
-      "tags": "Tags",
-      "add_tag_placeholder": "Add tag...",
-      "seconds": "Sec",
-      "test_completed": "Health check completed",
-      "test_failed": "Health check failed",
-      "confirm_delete": "Are you sure you want to delete this proxy?",
-      "empty": "No proxies available",
-      "column_priority": "Priority",
-      "column_status": "Status",
-      "column_details": "Proxy Details",
-      "column_bindings": "Bindings",
-      "import_title": "Batch Import Proxies",
-      "import_label": "Paste Proxy List (One per line)",
-      "import_hint": "Supported formats: protocol://user:pass@host:port, host:port:user:pass",
-      "import_preview": "Preview",
-      "import_confirm": "Import {{count}} Proxies",
-      "no_valid_proxies": "No valid proxies found",
+      "strategy_random": "Aleatorio",
+      "strategy_least_connections": "Menos conexiones",
+      "test_all": "Probar todos",
+      "batch_import": "Importar",
+      "binding_manager": "Vinculaciones",
+      "add_proxy": "Agregar proxy",
+      "edit_proxy": "Editar proxy",
+      "name": "Nombre",
+      "url": "URL del proxy",
+      "username": "Usuario",
+      "password": "Contraseña",
+      "max_accounts": "Cuentas máximas",
+      "max_accounts_hint": "0 = Ilimitado",
+      "priority": "Prioridad",
+      "priority_hint": "Menor es mejor",
+      "health_check_url": "URL de comprobación de estado",
+      "tags": "Etiquetas",
+      "add_tag_placeholder": "Agregar etiqueta...",
+      "seconds": "s",
+      "test_completed": "Comprobación de estado completada",
+      "test_failed": "Comprobación de estado fallida",
+      "confirm_delete": "¿Está seguro de que desea eliminar este proxy?",
+      "empty": "No hay proxies disponibles",
+      "column_priority": "Prioridad",
+      "column_status": "Estado",
+      "column_details": "Detalles del proxy",
+      "column_bindings": "Vinculaciones",
+      "import_title": "Importación masiva de proxies",
+      "import_label": "Pegar lista de proxies (uno por línea)",
+      "import_hint": "Formatos admitidos: protocolo://usuario:contraseña@host:puerto, host:puerto:usuario:contraseña",
+      "import_preview": "Vista previa",
+      "import_confirm": "Importar {{count}} proxies",
+      "no_valid_proxies": "No se encontraron proxies válidos",
       "binding": {
-        "title": "Account Proxy Bindings",
-        "load_failed": "Failed to load bindings",
-        "unbind_success": "Unbound successfully",
-        "bind_success": "Bound successfully",
-        "update_failed": "Failed to update binding",
-        "assigned_proxy": "Assigned Proxy",
-        "default_strategy": "Default (Follow Strategy)"
+        "title": "Vinculaciones de proxy de cuenta",
+        "load_failed": "Error al cargar las vinculaciones",
+        "unbind_success": "Desvinculado con éxito",
+        "bind_success": "Vinculado con éxito",
+        "update_failed": "Error al actualizar la vinculación",
+        "assigned_proxy": "Proxy asignado",
+        "default_strategy": "Predeterminado (seguir estrategia)"
       },
       "status": {
-        "inactive": "Inactive",
-        "checking": "Checking",
-        "healthy": "Healthy",
-        "timeout": "Timeout"
+        "inactive": "Inactivo",
+        "checking": "Comprobando",
+        "healthy": "Saludable",
+        "timeout": "Tiempo de espera agotado"
       }
     },
     "advanced": {
@@ -432,8 +468,16 @@
       "antigravity_path": "Ruta de Antigravity",
       "antigravity_path_placeholder": "No establecido (Usará detección automática)",
       "antigravity_path_desc": "Si instaló Antigravity en una ubicación no estándar, puede especificar manualmente la ruta del ejecutable aquí (Apunta a .app en MacOS).",
+      "patch_eligibility_title": "Omitir comprobación de elegibilidad de cuenta",
+      "patch_eligibility_desc": "Las versiones más recientes del cliente agy aplican comprobaciones de cuenta. Esta operación aplica un parche dinámico para omitir las comprobaciones.",
+      "patch_btn": "Omitir comprobación",
       "antigravity_path_select": "Seleccionar Ejecutable de Antigravity",
       "antigravity_path_detected": "Ruta detectada actualizada",
+      "antigravity_cli_path": "Ruta de CLI de Antigravity (agy)",
+      "antigravity_cli_path_placeholder": "No establecido (usará autodetección)",
+      "antigravity_cli_path_desc": "Establezca la ruta del ejecutable para el cliente de línea de comandos (agy) para omitir las restricciones de cuenta.",
+      "antigravity_cli_path_select": "Seleccionar ejecutable de CLI de Antigravity (agy)",
+      "antigravity_cli_path_detected": "Ruta de CLI detectada actualizada",
       "antigravity_ide_path": "Ruta de Antigravity IDE",
       "antigravity_ide_path_placeholder": "D:\\Antigravity\\Antigravity.exe",
       "antigravity_ide_path_desc": "Especifique la ruta del ejecutable de Antigravity IDE (editor de código). Una vez configurado, el cambio de cuenta protegerá estrictamente los procesos en esta ruta de ser terminados.",
@@ -479,6 +523,20 @@
       "http_api_settings_saved": "Configuración de API HTTP guardada, se requiere reinicio para aplicar",
       "http_api_restart_required": "⚠️ Se requiere reinicio para aplicar"
     },
+    "debug": {
+      "title": "Consola de depuración",
+      "desc": "Ver registros de la aplicación en tiempo real para depuración",
+      "enabled": "Habilitado",
+      "disabled": "Deshabilitado",
+      "disabled_hint": "La consola de depuración está desactivada",
+      "disabled_desc": "Habilitar para comenzar a registrar registros de la aplicación",
+      "console_title": "Consola de depuración",
+      "console_desc": "Ver registros de la aplicación en tiempo real para solucionar problemas.",
+      "enable_desc": "Habilitar para capturar y mostrar registros del backend.",
+      "open_btn": "Abrir consola",
+      "debug_logging": "Registro de depuración",
+      "debug_logging_desc": "Cuando está habilitado, registra la cadena completa de solicitudes y respuestas. Se recomienda habilitar solo al diagnosticar problemas."
+    },
     "menu": {
       "title": "Configuración de visualización del menú",
       "desc": "Seleccione los elementos de función a mostrar en la barra de menú. Ocultar los menús poco utilizados puede ahorrar espacio.",
@@ -491,6 +549,7 @@
       "tech_stack": "Stack Tecnológico",
       "author": "Autor",
       "wechat": "WeChat",
+      "telegram": "Canal de Telegram",
       "github": "GitHub",
       "view_code": "Ver Código",
       "copyright": "Copyright © 2025-2026 Antigravity. Todos los derechos reservados.",
@@ -499,6 +558,22 @@
       "latest_version": "Estás actualizado",
       "new_version_available": "Nueva versión {{version}} disponible",
       "download_update": "Descargar",
+      "brew_upgrade": "Actualizar mediante Homebrew",
+      "brew_upgrading": "Actualizando...",
+      "brew_confirm_title": "Actualizar mediante Homebrew",
+      "brew_confirm_desc": "Se ejecutará el siguiente comando para actualizar la aplicación. Se requiere reiniciar después de la actualización.",
+      "brew_quarantine_hint": "Si ve el error \"La aplicación está dañada\" después de actualizar, ejecute en la terminal:",
+      "brew_confirm_btn": "Iniciar actualización",
+      "brew_success_title": "Actualización completada",
+      "brew_upgrade_success": "La actualización mediante Homebrew se completó con éxito. Reinicie la aplicación para cargar la nueva versión.",
+      "brew_restart_btn": "Reiniciar ahora",
+      "brew_restart_failed": "El reinicio automático falló. Cierre y vuelva a abrir la aplicación manualmente",
+      "brew_upgrade_failed": "La actualización de Homebrew falló. Intente ejecutar manualmente: brew upgrade --cask antigravity-tools",
+      "brew_error_brew_not_found": "Homebrew no encontrado. Asegúrese de que brew esté instalado",
+      "brew_error_brew_exec_failed": "Error al ejecutar el comando brew. Intente ejecutarlo manualmente en la terminal",
+      "brew_error_brew_timeout": "Se agotó el tiempo de espera de la actualización de Homebrew (3 min). Intente ejecutar manualmente: brew upgrade --cask antigravity-tools",
+      "brew_error_brew_already_latest": "Ya está actualizado, no se requiere actualización",
+      "brew_error_brew_not_supported": "La actualización mediante Homebrew no es compatible con esta plataforma",
       "update_check_failed": "Error al verificar actualizaciones",
       "support_btn": "Apoyar al Autor",
       "support_title": "Donación y Apoyo",
@@ -518,9 +593,17 @@
       "mode": {
         "auto": "Límite Automático",
         "passthrough": "Paso Directo",
-        "custom": "Personalizado"
+        "custom": "Personalizado",
+        "adaptive": "Adaptativo"
+      },
+      "effort_label": "Esfuerzo de razonamiento",
+      "effort": {
+        "low": "Bajo",
+        "medium": "Medio",
+        "high": "Alto"
       },
       "auto_hint": "Modo Automático: Limita automáticamente el presupuesto a 24576 para modelos Flash, modelos con sufijo -thinking y solicitudes de búsqueda web para evitar errores de API.",
+      "adaptive_hint": "Modo adaptativo: El modelo ajusta automáticamente el presupuesto de razonamiento según la complejidad de la tarea. Recomendado para Claude 4.6+.",
       "passthrough_warning": "Paso Directo: Utiliza directamente el valor original de la solicitud; el no soporte de valores altos puede causar fallos.",
       "custom_value_hint": "Recomendado: 24576 (límite Flash) o 51200 (Extendido)",
       "tokens": "tokens"
@@ -541,6 +624,10 @@
       "placeholder": "Ingrese las instrucciones globales del sistema...\nEjemplo: Eres un desarrollador full-stack senior experto en React y Rust. Responde en español.",
       "char_count": "{{count}} caracteres",
       "long_prompt_warning": "Las instrucciones son muy largas (más de 2000 caracteres) y pueden consumir mucho espacio del contexto."
+    },
+    "branding": {
+      "title": "Antigravity Tools",
+      "subtitle": "Gestión profesional de cuentas"
     }
   },
   "tray": {
@@ -556,6 +643,9 @@
   },
   "proxy": {
     "title": "Servicio de Proxy API",
+    "error": {
+      "load_failed": "Error al cargar la configuración"
+    },
     "status": {
       "running": "Servicio Activo",
       "stopped": "Servicio Detenido",
@@ -568,6 +658,12 @@
     },
     "config": {
       "title": "Configuración del Servicio",
+      "request": {
+        "user_agent": "Reemplazo de User-Agent",
+        "user_agent_tooltip": "Reemplazar el encabezado User-Agent enviado a las API ascendentes. Deje vacío para usar el predeterminado.",
+        "user_agent_hint": "Predeterminado actual: antigravity/<version> <os>/<arch>",
+        "user_agent_placeholder": "Introduzca una cadena de User-Agent personalizada..."
+      },
       "port": "Puerto de Escucha",
       "port_tooltip": "Puerto TCP en el que escucha el Proxy API local. Detenga el servicio para cambiarlo, luego reinicie para aplicar.",
       "port_hint": "Predeterminado 8045, se requiere reinicio para aplicar cambios",
@@ -649,7 +745,7 @@
           "to_placeholder": "A (ej. glm-4)"
         },
         "modes": {
-          "off": "Off",
+          "off": "Desactivado",
           "exclusive": "Todas las solicitudes Anthropic",
           "pooled": "Pooled (un slot)",
           "fallback": "Solo Fallback"
@@ -694,7 +790,7 @@
         "mode_tooltip": "Cache-First: Vincular sesión a cuenta, esperar en límite de tasa (maximizar utilidad de caché); Balance: Vincular sesión, cambiar cuenta en límite de tasa; Performance: Round-robin estándar.",
         "modes": {
           "CacheFirst": "Caché Primero",
-          "Balance": "Balance",
+          "Balance": "Equilibrado",
           "PerformanceFirst": "Rendimiento"
         },
         "modes_desc": {
@@ -723,12 +819,71 @@
         "title_tooltip": "Funciones exploratorias que pueden ajustarse o eliminarse en versiones futuras.",
         "enable_usage_scaling": "Habilitar Escalado de Uso",
         "enable_usage_scaling_tooltip": "Para el protocolo Claude. Habilita escalado agresivo cuando el input total excede 30k tokens para prevenir compresión frecuente del lado del cliente. Nota: El uso reportado no reflejará la facturación real después de habilitar.",
+        "compression_level_label": "Nivel de compresión de contexto",
+        "compression_level_tooltip": "Elija el nivel de compresión de contexto que desea habilitar. La limpieza de registros y la purificación de lenguaje están siempre activas sin ningún límite de 30k tokens.",
+        "compression_level_desc": "Bajo: solo recorta/desduplica registros de salida de terminal; Medio: añade purificación de lenguaje natural estilo Caveman; Alto: activa además restablecimientos de umbral progresivos L1-L3 para contextos muy grandes.",
+        "level_disabled": "Deshabilitado",
+        "level_low": "Bajo (Desduplicación de registros)",
+        "level_medium": "Medio (Registros + Lenguaje)",
+        "level_high": "Alto (Restablecimientos dinámicos)",
         "context_compression_threshold_l1": "Umbral de Compresión L1 (Recorte de Herramientas)",
         "context_compression_threshold_l1_tooltip": "Recorta registros antiguos de llamadas a herramientas para ahorrar espacio. Recomendado: 0.4 (40%)",
         "context_compression_threshold_l2": "Umbral de Compresión L2 (Compresión de Pensamiento)",
         "context_compression_threshold_l2_tooltip": "Comprime bloques de pensamiento tempranos mientras preserva firmas. Recomendado: 0.55 (55%)",
         "context_compression_threshold_l3": "Umbral de Compresión L3 (Pivote de Resumen)",
         "context_compression_threshold_l3_tooltip": "Reinicio definitivo: genera un resumen de estado XML y pivotea a una nueva sesión. Más eficiente en tokens. Recomendado: 0.7 (70%)"
+      },
+      "opencode_sync": {
+        "card_title": "OpenCode",
+        "status": {
+          "detecting": "Detectando...",
+          "installed": "Instalado ({{version}})",
+          "not_installed": "No instalado",
+          "synced": "Sincronizado",
+          "not_synced": "No sincronizado",
+          "current_base_url": "Base URL actual"
+        },
+        "sync_accounts": "Sincronizar cuentas con antigravity-accounts.json",
+        "btn_sync": "Sincronizar configuración",
+        "btn_view": "Ver configuración",
+        "btn_restore": "Restaurar",
+        "btn_restore_backup": "Restaurar copia de seguridad",
+        "btn_clear": "Limpiar configuración",
+        "clear_confirm_title": "Confirmar limpieza de configuración",
+        "clear_confirm_message": "¿Está seguro de que desea limpiar la configuración de OpenCode? Esto eliminará el archivo de configuración.",
+        "toast": {
+          "config_missing": "Primero genere una API Key e inicie el servicio",
+          "sync_success": "Configuración de OpenCode sincronizada con éxito",
+          "sync_error": "Error al sincronizar OpenCode: {{error}}",
+          "clear_success": "Configuración de OpenCode limpiada con éxito",
+          "clear_error": "Error al limpiar la configuración de OpenCode: {{error}}"
+        },
+        "modal": {
+          "view_title": "Visor de configuración de OpenCode",
+          "copy_success": "Configuración copiada"
+        },
+        "sync_confirm_title": "Confirmar sincronización",
+        "sync_confirm_message": "La configuración de OpenCode se sobrescribirá según los ajustes de proxy actuales. ¿Continuar?",
+        "restore_confirm": "¿Está seguro de que desea restaurar OpenCode a la configuración predeterminada?",
+        "restore_backup_confirm": "¿Está seguro de que desea restaurar la configuración de OpenCode desde la copia de seguridad?",
+        "modal_title": "Seleccionar modelos de OpenCode",
+        "select_models": "Seleccionar modelos a sincronizar",
+        "auth_plugin_warning": "Se detectó el complemento opencode-antigravity-auth. La sincronización solo crea el proveedor antigravity-manager y no sobrescribirá el proveedor/complemento de Google.",
+        "btn_confirm_sync": "Confirmar sincronización",
+        "custom_base_url_label": "BaseURL personalizada de Manager",
+        "custom_base_url_desc": "Para redes Docker Compose",
+        "custom_base_url_reset": "Restablecer"
+      },
+      "droid_sync": {
+        "modal_title": "Agregar modelos a Droid",
+        "modal_desc": "Los modelos seleccionados se agregarán como customModels a settings.json",
+        "selected": "seleccionado(s)",
+        "btn_confirm_sync": "Agregar modelos seleccionados",
+        "toast": {
+          "no_models_selected": "Seleccione al menos un modelo",
+          "sync_success_count": "Se agregaron {{count}} modelo(s) a Droid",
+          "sync_error": "Error de sincronización: {{error}}"
+        }
       }
     },
     "cloudflared": {
@@ -815,7 +970,10 @@
       "pro_image_1_1": "Generación de Imagen (1:1)",
       "claude_sonnet": "Razonamiento de Código",
       "claude_sonnet_thinking": "Cadena de Pensamiento",
-      "claude_opus_thinking": "Pensamiento Más Fuerte"
+      "claude_opus_thinking": "Pensamiento Más Fuerte",
+      "gemini_2_5_flash": "Modelo Flash (2.5 Flash)",
+      "gemini_2_5_pro": "Alto rendimiento (2.5 Pro)",
+      "claude_4_6": "Razonamiento más reciente (4.6)"
     },
     "mapping": {
       "title": "Mapeo de Modelos Claude Code",
@@ -829,18 +987,58 @@
       "restore_defaults": "Restaurar Configuración Predeterminada",
       "reset_all": "Restablecer Todo"
     },
+    "models": {
+      "flash": "Ultrarrápido",
+      "flash_thinking": "Capacidad de razonamiento",
+      "pro_high": "Mejor razonamiento",
+      "pro_low": "Cuota baja",
+      "sonnet": "Razonamiento de código",
+      "sonnet_thinking": "Cadena de pensamiento",
+      "opus_thinking": "Razonamiento más potente"
+    },
     "router": {
       "title": "Enrutador de Modelos",
       "subtitle": "Enrute modelos por serie o agregue mapeos exactos personalizados.\nNota: Los modelos nativos de paso Claude (ej. claude-opus-4-6-thinking) omiten los grupos de series por defecto. Use \"Enrutamiento Personalizado Experto\" para sobreescribir.",
       "subtitle_simple": "Personalice el enrutamiento de modelos con comodines o mapeos exactos",
+      "only_raw_quota_models": "Exponer solo modelos con cuota",
+      "only_raw_quota_models_tooltip": "Cuando está habilitado, /v1/models solo muestra los modelos de cuota activos obtenidos de las cuentas conectadas, ocultando los modelos de alias integrados (como gpt-4o) y las variantes de proporción de imagen.",
       "background_task_title": "Modelo de Tarea en Segundo Plano",
       "background_task_desc": "Modelo usado para tareas en segundo plano de Claude CLI como generación de título, resumen, etc. (Predeterminado: gemini-2.5-flash)",
       "use_default": "Usar Predeterminado del Sistema",
       "current_model": "Modelo Actual",
       "apply_presets": "Aplicar Preajustes",
       "presets_applied": "Preajustes aplicados exitosamente",
+      "preset_default": "Ajuste predeterminado",
+      "preset_default_desc": "GPT-4 → Gemini Pro, Claude → Opus",
+      "preset_performance": "Rendimiento primero",
+      "preset_performance_desc": "Usar modelos de alto rendimiento para todo",
+      "preset_cost": "Optimizado para costos",
+      "preset_cost_desc": "Priorizar modelos rentables",
+      "preset_balanced": "Modo equilibrado",
+      "preset_balanced_desc": "Equilibrar rendimiento y costo",
+      "built_in_presets": "Ajustes preestablecidos integrados",
+      "custom_presets": "Ajustes preestablecidos personalizados",
+      "apply_selected": "Aplicar seleccionado",
+      "add_preset": "Guardar mapeo actual",
+      "delete_preset": "Eliminar ajuste preestablecido actual",
+      "cannot_delete_builtin": "No se pueden eliminar los ajustes preestablecidos integrados",
+      "no_mapping_to_save": "No hay configuración de mapeo para guardar",
+      "preset_name_required": "El nombre del ajuste preestablecido es obligatorio",
+      "preset_saved": "Ajuste preestablecido guardado con éxito",
+      "manage_presets_title": "Gestionar ajustes personalizados",
+      "save_current_as_preset": "Guardar configuración actual",
+      "preset_name_placeholder": "Introduzca el nombre del ajuste...",
+      "save_hint": "Guarda los mapeos de modelos actualmente activos como un ajuste preestablecido reutilizable.",
+      "your_presets": "Sus ajustes preestablecidos",
+      "no_custom_presets": "Aún no hay ajustes preestablecidos personalizados",
+      "mappings_count": "mapeos",
+      "custom_preset_desc": "Ajuste definido por el usuario",
       "custom_mappings": "Mapeos Personalizados",
       "group_title": "Grupos de Series",
+      "gemini3_group_label": "Gemini 3 (Recomendado)",
+      "gemini3_option_high": "gemini-3.1-pro-high (Alta calidad)",
+      "gemini3_option_low": "gemini-3.1-pro-low (Equilibrado)",
+      "gemini3_option_flash": "gemini-3-flash (Rápido)",
       "groups": {
         "claude_45": {
           "name": "Serie Claude 4.6 TK",
@@ -919,6 +1117,7 @@
         "detecting": "Detectando...",
         "current_base_url": "URL Base Actual"
       },
+      "model_select": "Seleccionar modelo",
       "btn_sync": "Sincronizar Config Ahora",
       "btn_view": "Ver Config",
       "btn_restore": "Restaurar Predeterminados",
@@ -949,8 +1148,8 @@
     },
     "stats": {
       "total": "Total",
-      "ok": "OK",
-      "err": "ERR"
+      "ok": "Correcto",
+      "err": "Error"
     },
     "filters": {
       "placeholder": "Filtrar por modelo, ruta o estado...",
@@ -994,6 +1193,34 @@
     "dialog": {
       "clear_title": "Limpiar Registros de Proxy",
       "clear_msg": "¿Está seguro de que desea limpiar todos los registros del proxy? Esta acción no se puede deshacer."
+    },
+    "network": {
+      "title": "Monitor de red",
+      "open": "Abrir monitor de red",
+      "requests_count": "{{count}} solicitudes",
+      "start_recording": "Iniciar grabación",
+      "stop_recording": "Detener grabación",
+      "clear_requests": "Limpiar solicitudes",
+      "empty": "No hay solicitudes registradas",
+      "waiting": "Esperando respuesta...",
+      "badge_error": "Error",
+      "table": {
+        "status": "Estado",
+        "command": "Comando",
+        "time": "Hora",
+        "duration": "Duración"
+      },
+      "sections": {
+        "general": "General",
+        "request_args": "Argumentos de la solicitud",
+        "error_details": "Detalles del error",
+        "response": "Respuesta"
+      },
+      "fields": {
+        "status": "Estado",
+        "start_time": "Hora de inicio",
+        "duration": "Duración"
+      }
     }
   },
   "update_notification": {
@@ -1003,6 +1230,9 @@
     "downloading": "Descargando actualización...",
     "restarting": "Reiniciando la aplicación...",
     "auto_update": "Actualización automática",
+    "restart_prompt": "Actualización descargada y lista para instalar. ¿Reiniciar ahora?",
+    "btn_restart": "Reiniciar",
+    "btn_later": "Más tarde",
     "toast": {
       "not_ready": "El paquete de actualización automática no está listo, redirigiendo a la página de descarga...",
       "failed": "Falló la actualización automática, redirigiendo a la página de descarga..."
@@ -1013,6 +1243,9 @@
     "desc": "Ejecutando en modo Web. Por favor ingrese la contraseña de administración o Clave API para acceder.",
     "placeholder": "Ingrese contraseña de administración o Clave API",
     "btn_login": "Verificar y Entrar",
+    "btn_verifying": "Verificando...",
+    "error_invalid_key": "Contraseña o clave API no válida, intente de nuevo",
+    "error_network": "Error de conexión de red, verifique si el servicio se está ejecutando",
     "note": "Nota: Si se estableció una contraseña de administración separada, ingrésela; de lo contrario, ingrese la API_KEY.",
     "lookup_hint": "Si olvidó, ejecute docker logs antigravity-manager para encontrar la Current API Key o Web UI Password",
     "config_hint": "O ejecute grep -E '\"api_key\"|\"admin_password\"' ~/.antigravity_tools/gui_config.json para ver."
@@ -1055,6 +1288,101 @@
       "unknown_error": "Error desconocido ocurrido, por favor reintente más tarde"
     }
   },
+  "security": {
+    "title": "Monitor de seguridad",
+    "refresh_data": "Actualizar datos",
+    "refresh": "Actualizar",
+    "tab_logs": "Registros de acceso",
+    "tab_stats": "Estadísticas",
+    "tab_blacklist": "Lista negra",
+    "tab_whitelist": "Lista blanca",
+    "tab_config": "Configuración de seguridad",
+    "stats": {
+      "total_requests": "Total de solicitudes",
+      "total_requests_desc": "Todas las solicitudes registradas",
+      "unique_ips": "IP únicas",
+      "unique_ips_desc": "Direcciones IP de clientes distintas",
+      "blocked_requests": "Solicitudes bloqueadas",
+      "blocked_requests_desc": "Solicitudes rechazadas por reglas",
+      "ip_activity_token_usage": "Actividad de IP y uso de tokens",
+      "hour": "h",
+      "day": "Día",
+      "week": "Sem",
+      "month": "Mes",
+      "rank": "Puesto",
+      "ip_address": "Dirección IP",
+      "activity_reqs": "Actividad (solicitudes)",
+      "total_token": "Total de tokens",
+      "prompt": "Prompt",
+      "completion": "Finalización",
+      "no_data": "Sin datos"
+    },
+    "logs": {
+      "search_placeholder": "Buscar IP, ruta, agente de usuario...",
+      "username": "Usuario",
+      "show_blocked_only": "Mostrar solo bloqueados",
+      "status": "Estado",
+      "ip_address": "Dirección IP",
+      "method": "Método",
+      "path": "Ruta",
+      "duration": "Duración",
+      "time": "Hora",
+      "reason": "Motivo",
+      "blocked": "Bloqueado",
+      "no_logs": "No hay registros disponibles",
+      "total_records": "Total de {{total}} registros",
+      "prev_page": "Anterior",
+      "next_page": "Siguiente",
+      "page_num": "Página {{page}}",
+      "per_page_suffix": "/página"
+    },
+    "blacklist": {
+      "add_ip": "Agregar IP",
+      "search_placeholder": "Buscar...",
+      "added_at": "Agregado el",
+      "expires_at": "Expira el",
+      "no_data": "No hay datos en la lista negra",
+      "add_title": "Agregar a la lista negra",
+      "ip_cidr_label": "Dirección IP o CIDR",
+      "ip_cidr_placeholder": "ej. 192.168.1.1 o 10.0.0.0/24",
+      "reason_label": "Motivo (Opcional)",
+      "reason_placeholder": "ej. Escaneo malicioso",
+      "expires_label": "Tiempo de expiración (Horas, Opcional)",
+      "expires_placeholder": "Dejar vacío para permanente",
+      "cancel": "Cancelar",
+      "confirm": "Agregar",
+      "add_btn": "Agregar"
+    },
+    "whitelist": {
+      "add_ip": "Agregar IP de confianza",
+      "no_data": "No hay datos en la lista blanca",
+      "add_title": "Agregar a la lista blanca",
+      "description_label": "Descripción (Opcional)",
+      "description_placeholder": "ej. Servidor interno",
+      "cancel": "Cancelar",
+      "confirm": "Agregar",
+      "add_btn": "Agregar"
+    },
+    "config": {
+      "title": "Configuración de seguridad",
+      "save": "Guardar cambios",
+      "saving": "Guardando...",
+      "blacklist_title": "Lista negra de IP",
+      "blacklist_desc": "Administrar reglas y direcciones IP bloqueadas.",
+      "enable_blacklist": "Habilitar protección de lista negra",
+      "block_msg_label": "Mensaje de bloqueo personalizado",
+      "block_msg_desc": "Contenido de respuesta devuelto a los clientes bloqueados.",
+      "whitelist_title": "Lista blanca de IP",
+      "whitelist_desc": "Administrar direcciones IP de confianza.",
+      "enable_whitelist": "Habilitar modo de lista blanca",
+      "whitelist_warning": "Advertencia: Habilitar el modo de lista blanca bloqueará TODAS las solicitudes de IP no incluidas en la lista blanca. Si accede a través de un proxy, tenga cuidado de no bloquear su propio acceso.",
+      "whitelist_priority": "Prioridad de lista blanca (Sobrescribe lista negra)",
+      "whitelist_priority_desc": "Si está habilitado, se permitirán las IP en la lista blanca incluso si coinciden con reglas de la lista negra.",
+      "load_error": "Error al cargar la configuración",
+      "save_success": "Configuración guardada",
+      "save_error": "Error al guardar la configuración"
+    }
+  },
   "user_token": {
     "title": "Gestión de Tokens de Usuario",
     "total_users": "Total de Usuarios",
@@ -1092,43 +1420,43 @@
   "apiKeyFun": {
     "title": "APIKEY.FUN Hub",
     "eyebrow": "Hub",
-    "description": "The official Antigravity Tools API Hub, providing stable, open, and cost-effective large model API services. Supports mainstream models like Claude, OpenAI, and Gemini. Ideal for unified configuration in Codex, Gemini CLI, Claude Code, and other development tools.",
-    "viewNow": "View Now",
+    "description": "El API Hub oficial de Antigravity Tools, que proporciona servicios de API de modelos grandes estables, abiertos y rentables. Admite modelos populares como Claude, OpenAI y Gemini. Ideal para configuración unificada en Codex, Gemini CLI, Claude Code y otras herramientas de desarrollo.",
+    "viewNow": "Ver ahora",
     "usage": {
-      "remainingAmount": "Remaining",
-      "usedAmount": "Used",
-      "todayRequests": "Today's Requests",
-      "todayTokens": "Today's Tokens",
-      "totalRequests": "Total Requests",
-      "totalTokens": "Total Tokens"
+      "remainingAmount": "Restante",
+      "usedAmount": "Usado",
+      "todayRequests": "Solicitudes de hoy",
+      "todayTokens": "Tokens de hoy",
+      "totalRequests": "Total de solicitudes",
+      "totalTokens": "Total de tokens"
     },
     "keyManager": {
-      "title": "Key Management",
-      "desc": "Save frequently used API Keys. Click to switch and query balance automatically.",
-      "lastRemainingLabel": "Last Balance",
+      "title": "Gestión de claves",
+      "desc": "Guarde las API Keys de uso frecuente. Haga clic para cambiar y consultar el saldo automáticamente.",
+      "lastRemainingLabel": "Último saldo",
       "lastRemaining": "${{value}}",
-      "notQueried": "Not queried",
-      "addedAt": "Added at",
-      "empty": "No saved keys."
+      "notQueried": "No consultado",
+      "addedAt": "Agregado el",
+      "empty": "No hay claves guardadas."
     },
-    "queryTitle": "Key Quota Query",
+    "queryTitle": "Consulta de cuota de clave",
     "apiKeyLabel": "API Key",
-    "apiKeyPlaceholder": "Paste your API Key...",
-    "queryButton": "Refresh",
+    "apiKeyPlaceholder": "Pegue su API Key...",
+    "queryButton": "Actualizar",
     "cli": {
-      "quickConfig": "One-Click Local Dev Setup",
-      "syncDesc": "Sync to official standard configuration",
+      "quickConfig": "Configuración local en un clic",
+      "syncDesc": "Sincronizar con la configuración estándar oficial",
       "codexTooltip": "Sync API Key & BaseURL to Antigravity Codex",
-      "claudeTooltip": "Sync API Key & BaseURL to Claude Code"
+      "claudeTooltip": "Sincronizar API Key y BaseURL con Claude Code"
     },
     "models": {
-      "title": "Available Models",
-      "empty": "No models returned for current API Key."
+      "title": "Modelos disponibles",
+      "empty": "No se devolvieron modelos para la API Key actual."
     },
     "errors": {
-      "parseFormat": "Parse format error: {{err}}",
-      "fetchFailed": "Fetch failed: {{err}}",
-      "queryFailed": "Failed to get valid quota or models. Please check if the API Key and Base URL are correct."
+      "parseFormat": "Error de formato de análisis: {{err}}",
+      "fetchFailed": "Error al obtener datos: {{err}}",
+      "queryFailed": "Error al obtener cuotas o modelos válidos. Compruebe si la API Key y la Base URL son correctas."
     }
   }
 }

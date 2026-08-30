@@ -32,13 +32,20 @@ pub fn determine_retry_strategy(
     error_text: &str,
     retried_without_thinking: bool,
 ) -> RetryStrategy {
+    // [FIX] 400 signature errors must be case-insensitive and cover all Google variants:
+    // "Invalid thought signature", "thoughtSignature", "thought_signature", "Invalid signature"
+    let lower = error_text.to_lowercase();
     match status_code {
         // 400 错误：仅在特定 Thinking 签名失败时重试一次
         400 if !retried_without_thinking
-            && (error_text.contains("Invalid `signature`")
-                || error_text.contains("thinking.signature")
-                || error_text.contains("thinking.thinking")
-                || error_text.contains("Corrupted thought signature")) =>
+            && (lower.contains("invalid thought signature")
+                || lower.contains("invalid `signature`")
+                || lower.contains("invalid signature")
+                || lower.contains("thought_signature")
+                || lower.contains("thoughtsignature")
+                || lower.contains("thinking.signature")
+                || lower.contains("thinking.thinking")
+                || lower.contains("corrupted thought signature")) =>
         {
             RetryStrategy::FixedDelay(Duration::from_millis(200))
         }

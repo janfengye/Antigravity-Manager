@@ -2218,6 +2218,30 @@ fn is_model_compatible(cached: &str, target: &str) -> bool {
     if c.contains("gemini-2.0-pro") && t.contains("gemini-2.0-pro") {
         return true;
     }
+    // [FIX 2026-08-28] gemini-3.x / 3.5 / 3.6 / 3.7 families (flash vs pro vs agent)
+    // Flash signatures are interchangeable within flash sub-family, pro within pro.
+    // This covers your failing case: gemini-3.7-flash-high (mapped internally to flash family)
+    if c.contains("gemini-3") && t.contains("gemini-3") {
+        let c_flash = c.contains("flash");
+        let t_flash = t.contains("flash");
+        let c_pro = c.contains("pro");
+        let t_pro = t.contains("pro");
+        // Same sub-family (both flash or both pro/agent)
+        if c_flash == t_flash && c_pro == t_pro {
+            return true;
+        }
+        // Allow cross patch versions: 3.5-flash <-> 3.7-flash are compatible (same thinking crypto)
+        if c_flash && t_flash {
+            return true;
+        }
+        if c_pro && t_pro {
+            return true;
+        }
+    }
+    // gemini-3.7 explicit (fallback for any remaining 3.7 mismatch)
+    if c.contains("gemini-3.7") && t.contains("gemini-3.7") {
+        return true;
+    }
 
     // Fallback: strict match required
     false

@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> Professional AI Account Management & Protocol Proxy System (v4.6.2)
+> Professional AI Account Management & Protocol Proxy System (v4.6.3)
 
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
@@ -9,7 +9,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.6.2-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.6.3-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -144,7 +144,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **Supported formats**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **Advanced usage**: Install a specific version `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --version 4.6.2`, dry-run mode `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --dry-run`
+> **Advanced usage**: Install a specific version `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --version 4.6.3`, dry-run mode `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 If you have [Homebrew](https://brew.sh/) installed, you can also install via:
@@ -419,16 +419,16 @@ In clients that support OpenAI protocol (e.g., Cherry Studio), you can configure
    - **Number**: Set the number of images (1-10)
 3. **Send Request**: Simply type your image description in the chat dialog
 
-**Parameter mapping rules**：
+**Parameter mapping rules**:
 - `size: "1920x1080"` → Auto-calculated as `16:9` aspect ratio
 - `quality: "hd"` → Mapped to `4K` resolution
 - `quality: "medium"` → Mapped to `2K` resolution
 
 ## 📝 Changelog
 
-> Latest version **v4.6.2** (2026-08-28): proxy startup diagnostics, model catalog update (gemini-3.7-flash / claude-opus-4-6), Windows console flashing fix, Gemini thought-signature fix on compression, pt-BR localization complete, and install script version-parse fix.
+> Latest version **v4.6.3** (2026-08-30): Account JSON storage self-healing and write lock protection (#3345), pinned quota model discrete chip rendering fix (#3344), dashboard best accounts recommendation algorithm optimization (#3343), Gemini 3.7 / 3.x thought-signature invalidation and multi-turn variant compatibility fixes (#3342), and 100% full localization across multiple languages (#3338, #3339, #3340, #3341).
 
-👉 **[View Full Changelog → CHANGELOG.md](CHANGELOG.md)**
+👉 **[View Full Changelog → CHANGELOG_EN.md](CHANGELOG_EN.md)**
 
 ## 👥 Contributors
 
@@ -459,6 +459,7 @@ In clients that support OpenAI protocol (e.g., Cherry Studio), you can configure
 <a href="https://github.com/Koshikai"><img src="https://github.com/Koshikai.png" width="50px" style="border-radius: 50%;" alt="Koshikai"/></a>
 <a href="https://github.com/hakanyalitekin"><img src="https://github.com/hakanyalitekin.png" width="50px" style="border-radius: 50%;" alt="hakanyalitekin"/></a>
 <a href="https://github.com/Gok-tug"><img src="https://github.com/Gok-tug.png" width="50px" style="border-radius: 50%;" alt="Gok-tug"/></a>
+<a href="https://github.com/johngbl"><img src="https://github.com/johngbl.png" width="50px" style="border-radius: 50%;" alt="johngbl"/></a>
 
 Special thanks to all developers who have contributed to this project.
 

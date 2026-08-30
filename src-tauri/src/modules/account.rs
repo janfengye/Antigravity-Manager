@@ -3,6 +3,7 @@ use serde_json;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::models::{
@@ -12,6 +13,18 @@ use crate::models::{
 use crate::modules;
 use once_cell::sync::Lazy;
 use std::sync::Mutex;
+
+/// Global per-account lock to prevent concurrent write collisions on the same account JSON file
+static ACCOUNT_FILE_LOCKS: Lazy<Mutex<HashMap<String, Arc<Mutex<()>>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+fn get_account_lock(account_id: &str) -> Arc<Mutex<()>> {
+    let mut locks = ACCOUNT_FILE_LOCKS.lock().unwrap();
+    locks
+        .entry(account_id.to_string())
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone()
+}
 
 #[cfg(test)]
 mod tests {
@@ -412,6 +425,30 @@ mod tests {
 
         println!("Backup creation on parse failure: successfully created backup");
     }
+
+    #[test]
+    fn test_load_account_with_trailing_characters() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        let dir = TestDataDir::new();
+
+        create_account_file(dir.path(), "corrupt-tail-acc", "tail@example.com");
+        let account_path = dir.path().join("accounts").join("corrupt-tail-acc.json");
+
+        // Append trailing '}' to simulate Issue #3345
+        let mut raw = fs::read_to_string(&account_path).unwrap();
+        raw.push('}');
+        fs::write(&account_path, &raw).unwrap();
+
+        // Load account should successfully self-heal and return valid Account
+        let loaded = load_account_at_path(&account_path).expect("Should self-heal trailing characters");
+        assert_eq!(loaded.id, "corrupt-tail-acc");
+        assert_eq!(loaded.email, "tail@example.com");
+
+        // Verify the file was cleaned and re-written as valid JSON
+        let healed_raw = fs::read_to_string(&account_path).unwrap();
+        let regular_parse: Result<Account, _> = serde_json::from_str(&healed_raw);
+        assert!(regular_parse.is_ok(), "Healed file should be standard valid JSON");
+    }
 }
 
 /// Global account write lock to prevent corruption during concurrent operations
@@ -606,11 +643,30 @@ fn rebuild_index_from_accounts_in_dir(data_dir: &PathBuf) -> Result<AccountIndex
     })
 }
 
-/// Load account from a specific path (internal helper)
+/// Load account from a specific path with self-healing support for trailing characters/corrupted suffixes
 fn load_account_at_path(account_path: &PathBuf) -> Result<Account, String> {
     let content = fs::read_to_string(account_path)
         .map_err(|e| format!("failed_to_read_account_data: {}", e))?;
-    serde_json::from_str(&content).map_err(|e| format!("failed_to_parse_account_data: {}", e))
+
+    match serde_json::from_str::<Account>(&content) {
+        Ok(account) => Ok(account),
+        Err(e) => {
+            let err_msg = e.to_string();
+            // Self-healing attempt: handle trailing characters / extra closing brackets
+            if err_msg.contains("trailing characters") || err_msg.contains("trailing comma") || err_msg.contains("trailing") {
+                let mut de = serde_json::Deserializer::from_str(&content);
+                if let Ok(account) = serde::Deserialize::deserialize(&mut de) {
+                    crate::modules::logger::log_warn(&format!(
+                        "Self-healing account JSON at {:?}: recovered valid account data from trailing characters, saving clean file",
+                        account_path
+                    ));
+                    let _ = save_account_at_path(account_path, &account);
+                    return Ok(account);
+                }
+            }
+            Err(format!("failed_to_parse_account_data: {}", err_msg))
+        }
+    }
 }
 
 /// Load account index with recovery support
@@ -750,13 +806,18 @@ pub fn load_account(account_id: &str) -> Result<Account, String> {
     load_account_at_path(&account_path)
 }
 
-/// Save account data
-pub fn save_account(account: &Account) -> Result<(), String> {
-    let accounts_dir = get_accounts_dir()?;
-    let account_path = accounts_dir.join(format!("{}.json", account.id));
+/// Save account data at specific file path (thread-safe and atomic)
+fn save_account_at_path(account_path: &PathBuf, account: &Account) -> Result<(), String> {
+    let _lock = get_account_lock(&account.id);
+    let _guard = _lock.lock().unwrap();
+
+    let parent_dir = account_path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .ok_or_else(|| "invalid_account_path".to_string())?;
 
     let temp_filename = format!("{}.tmp.{}", account.id, Uuid::new_v4());
-    let temp_path = accounts_dir.join(&temp_filename);
+    let temp_path = parent_dir.join(&temp_filename);
 
     let content = serde_json::to_string_pretty(account)
         .map_err(|e| format!("failed_to_serialize_account_data: {}", e))?;
@@ -766,12 +827,19 @@ pub fn save_account(account: &Account) -> Result<(), String> {
         return Err(format!("failed_to_write_temp_account_file: {}", e));
     }
 
-    if let Err(e) = atomic_replace_file(&temp_path, &account_path) {
+    if let Err(e) = atomic_replace_file(&temp_path, account_path) {
         let _ = std::fs::remove_file(&temp_path);
         return Err(format!("failed_to_replace_account_file: {}", e));
     }
 
     Ok(())
+}
+
+/// Save account data (thread-safe and atomic)
+pub fn save_account(account: &Account) -> Result<(), String> {
+    let accounts_dir = get_accounts_dir()?;
+    let account_path = accounts_dir.join(format!("{}.json", account.id));
+    save_account_at_path(&account_path, account)
 }
 
 /// List all accounts

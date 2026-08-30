@@ -1,5 +1,5 @@
 import { TrendingUp } from 'lucide-react';
-import { Account } from '../../types/account';
+import { Account, QuotaGroup } from '../../types/account';
 import { findQuotaModel } from '../../config/modelConfig';
 
 interface BestAccountsProps {
@@ -10,29 +10,118 @@ interface BestAccountsProps {
 
 import { useTranslation } from 'react-i18next';
 
+/** 从 quota_groups 中提取 5h 或 Weekly 桶百分比 (0-100) */
+function getBucketPercentage(
+    quotaGroups: QuotaGroup[] | undefined,
+    category: 'gemini' | 'claude',
+    targetWindow: '5h' | 'weekly'
+): number | null {
+    if (!quotaGroups || quotaGroups.length === 0) return null;
+
+    for (const group of quotaGroups) {
+        const name = (group.display_name || '').toLowerCase();
+        const isTarget = category === 'claude'
+            ? (name.includes('claude') || name.includes('gpt'))
+            : (name.includes('gemini') || !name.includes('claude'));
+
+        if (isTarget) {
+            const bucket = group.buckets?.find(b => {
+                const win = (b.window || '').toLowerCase();
+                const id = (b.bucket_id || '').toLowerCase();
+                if (targetWindow === 'weekly') {
+                    return win.includes('week') || id.includes('week');
+                } else {
+                    return win.includes('5h') || id.includes('5h') || win.includes('hour') || id.includes('hour');
+                }
+            });
+
+            if (bucket && typeof bucket.remaining_fraction === 'number') {
+                return Math.round(bucket.remaining_fraction * 100);
+            }
+        }
+    }
+    return null;
+}
+
+/** 
+ * 计算模型综合有效配额
+ * 自动识别：双桶 (取 min 短板) / 免费账号仅周桶 (取周) / 仅 5h 桶 (取 5h)
+ */
+function calculateEffectiveQuota(
+    fiveHourFromModel: number | null,
+    weeklyFromGroup: number | null,
+    fiveHourFromGroup: number | null
+): number {
+    const fiveHour = fiveHourFromGroup !== null ? fiveHourFromGroup : fiveHourFromModel;
+    const weekly = weeklyFromGroup;
+
+    // 情况 1: 双桶都存在 (Pro/Ultra 账号) -> 木桶短板 min(5h, weekly)
+    if (fiveHour !== null && weekly !== null) {
+        return Math.min(fiveHour, weekly);
+    }
+
+    // 情况 2: 仅有周额度 (免费账号 / Free Tier) -> 直接以周额度为准
+    if (weekly !== null) {
+        return weekly;
+    }
+
+    // 情况 3: 仅有 5h 额度 (单桶回退) -> 以 5h 额度为准
+    if (fiveHour !== null) {
+        return fiveHour;
+    }
+
+    return 0;
+}
+
 function BestAccounts({ accounts, currentAccountId, onSwitch }: BestAccountsProps) {
     const { t } = useTranslation();
-    // 1. 获取按配额排序的列表 (排除当前账号)
+    // 1. 获取按综合有效配额排序的列表 (排除当前账号及已禁用账号)
     const geminiSorted = accounts
-        .filter(a => a.id !== currentAccountId)
+        .filter(a => a.id !== currentAccountId && !a.disabled && !a.proxy_disabled)
         .map(a => {
-            const proQuota = findQuotaModel(a.quota?.models, 'gemini-pro')?.percentage || 0;
-            const flashQuota = findQuotaModel(a.quota?.models, 'gemini-flash')?.percentage || 0;
+            const pro5hModel = findQuotaModel(a.quota?.models, 'gemini-pro')?.percentage ?? null;
+            const flash5hModel = findQuotaModel(a.quota?.models, 'gemini-flash')?.percentage ?? null;
+            const weeklyGroup = getBucketPercentage(a.quota?.quota_groups, 'gemini', 'weekly');
+            const fiveHourGroup = getBucketPercentage(a.quota?.quota_groups, 'gemini', '5h');
+
+            const effectivePro = calculateEffectiveQuota(pro5hModel, weeklyGroup, fiveHourGroup);
+            const effectiveFlash = calculateEffectiveQuota(flash5hModel, weeklyGroup, fiveHourGroup);
+
             // 综合评分：Pro 权重更高 (70%)，Flash 权重 30%
+            let score = Math.round(effectivePro * 0.7 + effectiveFlash * 0.3);
+
+            // 若周额度见底 (<= 5%)，直接淘汰
+            if (weeklyGroup !== null && weeklyGroup <= 5) {
+                score = 0;
+            }
+
             return {
                 ...a,
-                quotaVal: Math.round(proQuota * 0.7 + flashQuota * 0.3),
+                quotaVal: score,
             };
         })
         .filter(a => a.quotaVal > 0)
         .sort((a, b) => b.quotaVal - a.quotaVal);
 
     const claudeSorted = accounts
-        .filter(a => a.id !== currentAccountId)
-        .map(a => ({
-            ...a,
-            quotaVal: findQuotaModel(a.quota?.models, 'claude')?.percentage || 0,
-        }))
+        .filter(a => a.id !== currentAccountId && !a.disabled && !a.proxy_disabled)
+        .map(a => {
+            const claude5hModel = findQuotaModel(a.quota?.models, 'claude')?.percentage ?? null;
+            const weeklyGroup = getBucketPercentage(a.quota?.quota_groups, 'claude', 'weekly');
+            const fiveHourGroup = getBucketPercentage(a.quota?.quota_groups, 'claude', '5h');
+
+            let score = calculateEffectiveQuota(claude5hModel, weeklyGroup, fiveHourGroup);
+
+            // 若周额度见底 (<= 5%)，直接淘汰
+            if (weeklyGroup !== null && weeklyGroup <= 5) {
+                score = 0;
+            }
+
+            return {
+                ...a,
+                quotaVal: score,
+            };
+        })
         .filter(a => a.quotaVal > 0)
         .sort((a, b) => b.quotaVal - a.quotaVal);
 

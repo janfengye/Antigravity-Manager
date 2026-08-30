@@ -171,6 +171,20 @@ test('resolveQuotaModels: legacy image selector with no image API model returns 
     assertEqual(results[0].model, undefined);
 });
 
+test('resolveQuotaModels: exact match keeps discrete pinned models instead of collapsing into category', () => {
+    const models = [
+        { name: 'gemini-3.7-flash-low', percentage: 90 },
+        { name: 'gemini-3.7-flash-high', percentage: 95 },
+        { name: 'gemini-3-flash-agent', percentage: 80 },
+    ];
+    const results = resolveQuotaModels(models, ['gemini-3.7-flash-low', 'gemini-3.7-flash-high']);
+    assertEqual(results.length, 2);
+    assertEqual(results[0].selectionKey, 'model:gemini-3.7-flash-low');
+    assertEqual(results[0].model?.name, 'gemini-3.7-flash-low');
+    assertEqual(results[1].selectionKey, 'model:gemini-3.7-flash-high');
+    assertEqual(results[1].model?.name, 'gemini-3.7-flash-high');
+});
+
 // ── findImageQuotaModel ───────────────────────────────────────────────────
 
 const imageNameCases: Array<[Array<{ name: string }>, string | null]> = [
