@@ -5,7 +5,7 @@
 use crate::proxy::handlers::openai::get_cached_tool_call;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
@@ -23,8 +23,25 @@ pub struct HttpSessionEntry {
     pub last_accessed: Instant,
 }
 
+#[derive(Debug)]
+struct SessionNode {
+    parent: Option<Arc<SessionNode>>,
+    input_delta: Vec<Value>,
+    response_output: Vec<Value>,
+    instructions: String,
+    model: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionParent(Arc<SessionNode>);
+
+struct StoredSession {
+    node: Arc<SessionNode>,
+    last_accessed: Instant,
+}
+
 struct HttpSessionStore {
-    sessions: HashMap<String, HttpSessionEntry>,
+    sessions: HashMap<String, StoredSession>,
 }
 
 impl HttpSessionStore {
@@ -34,22 +51,83 @@ impl HttpSessionStore {
         }
     }
 
-    fn get(&mut self, response_id: &str) -> Option<HttpSessionEntry> {
-        let entry = self.sessions.get_mut(response_id)?;
-        entry.last_accessed = Instant::now();
-        Some(entry.clone())
+    fn get(&mut self, response_id: &str) -> Option<(HttpSessionEntry, SessionParent)> {
+        let stored = self.sessions.get_mut(response_id)?;
+        stored.last_accessed = Instant::now();
+        let node = stored.node.clone();
+        Some((
+            HttpSessionEntry {
+                input_items: materialize_history(&node),
+                instructions: node.instructions.clone(),
+                model: node.model.clone(),
+                last_accessed: stored.last_accessed,
+            },
+            SessionParent(node),
+        ))
     }
 
     fn insert(&mut self, response_id: String, entry: HttpSessionEntry) {
-        self.sessions.insert(response_id, entry);
+        self.insert_delta(
+            response_id,
+            None,
+            entry.input_items,
+            Vec::new(),
+            entry.instructions,
+            entry.model,
+        );
+    }
+
+    fn insert_delta(
+        &mut self,
+        response_id: String,
+        parent: Option<SessionParent>,
+        input_delta: Vec<Value>,
+        response_output: Vec<Value>,
+        instructions: String,
+        model: String,
+    ) {
+        self.sessions.insert(
+            response_id,
+            StoredSession {
+                node: Arc::new(SessionNode {
+                    parent: parent.map(|parent| parent.0),
+                    input_delta,
+                    response_output,
+                    instructions,
+                    model,
+                }),
+                last_accessed: Instant::now(),
+            },
+        );
         // 顺便淘汰过期 session（惰性清理）
         self.evict_expired();
     }
 
     fn evict_expired(&mut self) {
         let ttl = Duration::from_secs(SESSION_TTL_SECS);
-        self.sessions.retain(|_, v| v.last_accessed.elapsed() < ttl);
+        self.sessions
+            .retain(|_, stored| stored.last_accessed.elapsed() < ttl);
     }
+}
+
+fn materialize_history(node: &Arc<SessionNode>) -> Vec<Value> {
+    let mut chain = Vec::new();
+    let mut current = Some(node.clone());
+    while let Some(node) = current {
+        chain.push(node.clone());
+        current = node.parent.clone();
+    }
+
+    let capacity = chain
+        .iter()
+        .map(|node| node.input_delta.len() + node.response_output.len())
+        .sum();
+    let mut history = Vec::with_capacity(capacity);
+    for node in chain.into_iter().rev() {
+        history.extend(node.input_delta.iter().cloned());
+        history.extend(node.response_output.iter().cloned());
+    }
+    history
 }
 
 static STORE: OnceLock<Mutex<HttpSessionStore>> = OnceLock::new();
@@ -60,6 +138,16 @@ fn store() -> &'static Mutex<HttpSessionStore> {
 
 /// 根据 previous_response_id 查找历史会话
 pub async fn get_session(previous_response_id: &str) -> Option<HttpSessionEntry> {
+    store()
+        .lock()
+        .await
+        .get(previous_response_id)
+        .map(|(entry, _)| entry)
+}
+
+pub async fn get_session_with_parent(
+    previous_response_id: &str,
+) -> Option<(HttpSessionEntry, SessionParent)> {
     store().lock().await.get(previous_response_id)
 }
 
@@ -68,10 +156,78 @@ pub async fn save_session(response_id: String, entry: HttpSessionEntry) {
     store().lock().await.insert(response_id, entry);
 }
 
-/// 追加本轮模型输出项到会话历史中
-pub async fn append_outputs(response_id: &str, new_outputs: Vec<Value>) {
-    if let Some(entry) = store().lock().await.sessions.get_mut(response_id) {
-        entry.input_items.extend(new_outputs);
+/// 保存 Responses 本轮增量；父节点的 Arc 强引用保证分支共享祖先。
+pub async fn save_session_delta(
+    response_id: String,
+    parent: Option<SessionParent>,
+    input_delta: Vec<Value>,
+    response_output: Vec<Value>,
+    instructions: String,
+    model: String,
+) {
+    store().lock().await.insert_delta(
+        response_id,
+        parent,
+        input_delta,
+        response_output,
+        instructions,
+        model,
+    );
+}
+
+pub struct PreparedSessionInput {
+    pub merged: Vec<Value>,
+    pub delta: Vec<Value>,
+    pub reset_parent: bool,
+}
+
+/// 合并请求历史，并在客户端回放完整历史时仅提取新增项。
+pub fn prepare_session_input(
+    history: Vec<Value>,
+    new_input: Vec<Value>,
+    tool_call_cache: &HashMap<String, Value>,
+) -> PreparedSessionInput {
+    let reset_parent = new_input.iter().any(|item| {
+        matches!(
+            item.get("type").and_then(Value::as_str),
+            Some("compaction") | Some("compaction_summary")
+        )
+    });
+    let exact_replay = !history.is_empty() && new_input.starts_with(&history);
+    let replayed_through = if reset_parent || exact_replay {
+        None
+    } else {
+        let history_ids: std::collections::HashSet<&str> = history
+            .iter()
+            .filter_map(|item| item.get("id").and_then(Value::as_str))
+            .filter(|id| !id.is_empty())
+            .collect();
+        new_input.iter().rposition(|item| {
+            item.get("id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| history_ids.contains(id))
+        })
+    };
+    let delta_source = if reset_parent || history.is_empty() {
+        new_input.clone()
+    } else if exact_replay {
+        new_input[history.len()..].to_vec()
+    } else if let Some(index) = replayed_through {
+        new_input[index + 1..].to_vec()
+    } else {
+        new_input.clone()
+    };
+    let delta = merge_history_with_new_input(Vec::new(), &[], delta_source, tool_call_cache);
+    let merged = if reset_parent || history.is_empty() {
+        delta.clone()
+    } else {
+        merge_history_with_new_input(history, &[], delta.clone(), tool_call_cache)
+    };
+
+    PreparedSessionInput {
+        merged,
+        delta,
+        reset_parent,
     }
 }
 
@@ -81,7 +237,7 @@ pub async fn append_outputs(response_id: &str, new_outputs: Vec<Value>) {
 pub fn merge_history_with_new_input(
     mut history: Vec<Value>,
     response_output: &[Value],
-    new_input: &[Value],
+    new_input: Vec<Value>,
     tool_call_cache: &HashMap<String, Value>,
 ) -> Vec<Value> {
     // 检测新输入中是否包含 compaction / compaction_summary，如果包含，说明客户端正在发送压缩后的全新完整历史
@@ -102,7 +258,7 @@ pub fn merge_history_with_new_input(
             if t == "compaction" || t == "compaction_summary" {
                 continue;
             }
-            filtered.push(item.clone());
+            filtered.push(item);
         }
         repair_tool_calls(&mut filtered, tool_call_cache);
         return dedupe_input_items(filtered);
@@ -119,7 +275,7 @@ pub fn merge_history_with_new_input(
         if t == "compaction" || t == "compaction_summary" {
             continue;
         }
-        history.push(item.clone());
+        history.push(item);
     }
 
     // 修复工具调用（确保function_call_output前有对应的function_call）
@@ -217,4 +373,80 @@ fn dedupe_input_items(items: Vec<Value>) -> Vec<Value> {
         filtered.push(item);
     }
     filtered
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn entry(text: &str) -> HttpSessionEntry {
+        HttpSessionEntry {
+            input_items: vec![json!({
+                "id": format!("msg-{text}"),
+                "type": "message",
+                "role": "user",
+                "content": text
+            })],
+            instructions: "be concise".to_string(),
+            model: "gemini-3.7-flash-high".to_string(),
+            last_accessed: Instant::now(),
+        }
+    }
+
+    #[test]
+    fn session_chain_stores_delta_and_materializes_history() {
+        let mut store = HttpSessionStore::new();
+        store.insert("resp-1".to_string(), entry("first"));
+        let (root, parent) = store.get("resp-1").expect("root");
+        let mut replay = root.input_items.clone();
+        replay.push(json!({"id": "msg-second", "content": "second"}));
+        let prepared = prepare_session_input(root.input_items, replay, &HashMap::new());
+        assert_eq!(prepared.delta.len(), 1);
+        assert_eq!(prepared.merged.len(), 2);
+        store.insert_delta(
+            "resp-2".to_string(),
+            Some(parent),
+            prepared.delta,
+            vec![json!({"id": "out-second", "content": "answer"})],
+            "be concise".to_string(),
+            "gemini-3.7-flash-high".to_string(),
+        );
+
+        let (previous, _) = store.get("resp-2").expect("child");
+        assert_eq!(previous.input_items[0]["content"], "first");
+        assert_eq!(previous.input_items.len(), 3);
+        assert_eq!(store.sessions["resp-2"].node.input_delta.len(), 1);
+        assert_eq!(store.sessions["resp-2"].node.response_output.len(), 1);
+    }
+
+    #[test]
+    fn old_response_id_branches_share_parent() {
+        let mut store = HttpSessionStore::new();
+        store.insert("resp-root".to_string(), entry("root"));
+        let (_, parent_a) = store.get("resp-root").expect("parent a");
+        let (_, parent_b) = store.get("resp-root").expect("parent b");
+        assert!(Arc::ptr_eq(&parent_a.0, &parent_b.0));
+
+        store.insert_delta(
+            "resp-a".to_string(),
+            Some(parent_a),
+            vec![json!({"content": "branch a"})],
+            Vec::new(),
+            String::new(),
+            String::new(),
+        );
+        store.insert_delta(
+            "resp-b".to_string(),
+            Some(parent_b),
+            vec![json!({"content": "branch b"})],
+            Vec::new(),
+            String::new(),
+            String::new(),
+        );
+
+        let parent_a = store.sessions["resp-a"].node.parent.as_ref().unwrap();
+        let parent_b = store.sessions["resp-b"].node.parent.as_ref().unwrap();
+        assert!(Arc::ptr_eq(parent_a, parent_b));
+    }
 }

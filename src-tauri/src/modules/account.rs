@@ -449,10 +449,86 @@ mod tests {
         let regular_parse: Result<Account, _> = serde_json::from_str(&healed_raw);
         assert!(regular_parse.is_ok(), "Healed file should be standard valid JSON");
     }
+
+    #[test]
+    fn task_quota_refresh_keeps_unexpired_live_limit() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        let dir = TestDataDir::new();
+        let account_id = "live-limit-account";
+        create_account_file(dir.path(), account_id, "live-limit@example.com");
+        std::env::set_var("ABV_DATA_DIR", dir.path());
+
+        let now = chrono::Utc::now().timestamp();
+        let mut account = load_account(account_id).unwrap();
+        account.live_limited_models.insert(
+            "gemini-3-pro-image".to_string(),
+            crate::models::account::LiveLimitStatus {
+                model: "gemini-3-pro-image".to_string(),
+                status: 429,
+                reason: "QuotaExhausted".to_string(),
+                until: now + 7200,
+                detected_at: now,
+                message: Some(
+                    r#"{"error":{"details":[{"reason":"QUOTA_EXHAUSTED","metadata":{"quotaResetDelay":"2h"}}]}}"#
+                        .to_string(),
+                ),
+            },
+        );
+        account.live_limited_models.insert(
+            "gemini-3.1-flash-image".to_string(),
+            crate::models::account::LiveLimitStatus {
+                model: "gemini-3.1-flash-image".to_string(),
+                status: 429,
+                reason: "QuotaExhausted".to_string(),
+                until: now + 7200,
+                detected_at: now,
+                message: Some("QUOTA_EXHAUSTED".to_string()),
+            },
+        );
+        account.live_limited_models.insert(
+            "gemini-2.5-pro".to_string(),
+            crate::models::account::LiveLimitStatus {
+                model: "gemini-2.5-pro".to_string(),
+                status: 429,
+                reason: "QuotaExhausted".to_string(),
+                until: now + 7200,
+                detected_at: now,
+                message: Some("QUOTA_EXHAUSTED; reset after 2h".to_string()),
+            },
+        );
+        save_account(&account).unwrap();
+
+        let quota: QuotaData = serde_json::from_value(serde_json::json!({
+            "models": [
+                {"name": "gemini-3-pro-image", "percentage": 99, "reset_time": ""},
+                {"name": "gemini-3.1-flash-image", "percentage": 99, "reset_time": ""},
+                {"name": "gemini-2.5-pro", "percentage": 99, "reset_time": ""}
+            ],
+            "last_updated": now
+        }))
+        .unwrap();
+        update_account_quota(account_id, quota).unwrap();
+
+        let updated = load_account(account_id).unwrap();
+        assert!(updated
+            .live_limited_models
+            .contains_key("gemini-3-pro-image"));
+        assert!(!updated
+            .live_limited_models
+            .contains_key("gemini-3.1-flash-image"));
+        assert!(!updated.live_limited_models.contains_key("gemini-2.5-pro"));
+        std::env::remove_var("ABV_DATA_DIR");
+    }
 }
 
 /// Global account write lock to prevent corruption during concurrent operations
 static ACCOUNT_INDEX_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+
+pub(crate) fn lock_account_file_updates() -> Result<std::sync::MutexGuard<'static, ()>, String> {
+    ACCOUNT_INDEX_LOCK
+        .lock()
+        .map_err(|e| format!("failed_to_acquire_lock: {}", e))
+}
 
 // ... existing constants ...
 const DATA_DIR: &str = ".antigravity_tools";
@@ -1557,6 +1633,7 @@ pub fn set_current_account_id_with_target(
 
 /// Update account quota
 pub fn update_account_quota(account_id: &str, quota: QuotaData) -> Result<(), String> {
+    let _account_write = lock_account_file_updates()?;
     let mut account = load_account(account_id)?;
     account.update_quota(quota);
 
@@ -1621,14 +1698,21 @@ pub fn update_account_quota(account_id: &str, quota: QuotaData) -> Result<(), St
     }
     // --- Quota protection logic end ---
 
-    // Clean up stale live_limited_models entries for models that have recovered quota (> 0%)
+    // Quota snapshots may recover before an explicit long image lock expires. Other live
+    // records retain the baseline percentage-based cleanup behavior.
     if let Some(ref q) = account.quota {
-        account.live_limited_models.retain(|model_key, _| {
-            let recovered = q.models.iter().any(|m| {
-                let is_matching = m.name == *model_key || 
-                    crate::proxy::common::model_mapping::normalize_to_standard_id(&m.name)
-                        .map_or(false, |std| std == *model_key);
-                is_matching && m.percentage > 0
+        let now = chrono::Utc::now().timestamp();
+        account.live_limited_models.retain(|model_key, status| {
+            if crate::proxy::rate_limit::is_active_persisted_long_image_limit(
+                model_key, status, now,
+            ) {
+                return true;
+            }
+            let recovered = q.models.iter().any(|model| {
+                let is_matching = model.name == *model_key
+                    || crate::proxy::common::model_mapping::normalize_to_standard_id(&model.name)
+                        .is_some_and(|standard| standard == *model_key);
+                is_matching && model.percentage > 0
             });
             !recovered
         });
@@ -1639,9 +1723,6 @@ pub fn update_account_quota(account_id: &str, quota: QuotaData) -> Result<(), St
 
     // [FIX] 同时更新索引文件中的摘要信息，确保列表页图标即时刷新
     {
-        let _lock = ACCOUNT_INDEX_LOCK
-            .lock()
-            .map_err(|e| format!("failed_to_acquire_lock: {}", e))?;
         if let Ok(mut index) = load_account_index() {
             if let Some(summary) = index.accounts.iter_mut().find(|a| a.id == account_id) {
                 summary.protected_models = account.protected_models.clone();

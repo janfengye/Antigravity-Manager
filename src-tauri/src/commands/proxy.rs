@@ -259,6 +259,7 @@ pub async fn ensure_admin_server(
         cloudflared_state,
         config.proxy_pool.clone(),
         config.only_raw_quota_models,
+        config.image_scheduler.clone(),
     )
     .await
     {

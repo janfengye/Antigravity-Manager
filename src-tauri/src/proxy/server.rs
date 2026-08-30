@@ -11,10 +11,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::AtomicUsize;
-use std::sync::Arc;
-use std::sync::OnceLock;
-use tokio::sync::oneshot;
-use tokio::sync::RwLock;
+use std::sync::{Arc, Mutex, OnceLock};
+use tokio::sync::{oneshot, watch, RwLock};
 use tracing::{debug, error};
 
 // [FIX] 全局待重新加载账号队列
@@ -90,7 +88,6 @@ pub fn take_pending_delete_accounts() -> Vec<String> {
 pub struct AppState {
     pub token_manager: Arc<TokenManager>,
     pub custom_mapping: Arc<tokio::sync::RwLock<std::collections::HashMap<String, String>>>,
-    #[allow(dead_code)]
     pub request_timeout: u64, // API 请求超时(秒)
     #[allow(dead_code)]
     pub thought_signature_map: Arc<tokio::sync::Mutex<std::collections::HashMap<String, String>>>, // 思维链签名映射 (ID -> Signature)
@@ -113,6 +110,157 @@ pub struct AppState {
     pub proxy_pool_state: Arc<tokio::sync::RwLock<crate::proxy::config::ProxyPoolConfig>>, // [FIX Web Mode]
     pub proxy_pool_manager: Arc<crate::proxy::proxy_pool::ProxyPoolManager>, // [FIX Web Mode]
     pub only_raw_quota_models: Arc<tokio::sync::RwLock<bool>>, // [NEW] 是否只暴露真实配额模型
+    pub image_scheduler: Arc<ImageScheduler>,
+}
+
+#[derive(Default)]
+struct ImageAccountState {
+    enabled: bool,
+    in_use: usize,
+}
+
+#[derive(Default)]
+struct ImageSchedulerState {
+    accounts: HashMap<String, ImageAccountState>,
+}
+
+pub struct ImageScheduler {
+    per_account_concurrency: usize,
+    state: Mutex<ImageSchedulerState>,
+    change_tx: watch::Sender<u64>,
+}
+
+pub struct ImagePermit {
+    account_id: String,
+    scheduler: Arc<ImageScheduler>,
+}
+
+impl Drop for ImagePermit {
+    fn drop(&mut self) {
+        let mut state = self
+            .scheduler
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let remove_account = if let Some(account) = state.accounts.get_mut(&self.account_id) {
+            account.in_use = account.in_use.saturating_sub(1);
+            !account.enabled && account.in_use == 0
+        } else {
+            false
+        };
+        if remove_account {
+            state.accounts.remove(&self.account_id);
+        }
+        drop(state);
+        self.scheduler.notify_change();
+    }
+}
+
+impl ImageScheduler {
+    fn new(account_ids: Vec<String>, per_account_concurrency: usize) -> Arc<Self> {
+        let (change_tx, _change_rx) = watch::channel(0);
+        let scheduler = Arc::new(Self {
+            per_account_concurrency,
+            state: Mutex::new(ImageSchedulerState::default()),
+            change_tx,
+        });
+        scheduler.sync_accounts(account_ids);
+        scheduler
+    }
+
+    fn notify_change(&self) {
+        self.change_tx.send_modify(|generation| {
+            *generation = generation.wrapping_add(1);
+        });
+    }
+
+    pub(crate) fn subscribe_changes(&self) -> watch::Receiver<u64> {
+        self.change_tx.subscribe()
+    }
+
+    pub(crate) fn try_acquire(self: &Arc<Self>, account_id: &str) -> Option<ImagePermit> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let account = state.accounts.get_mut(account_id)?;
+        if !account.enabled || account.in_use >= self.per_account_concurrency {
+            return None;
+        }
+
+        account.in_use += 1;
+        Some(ImagePermit {
+            account_id: account_id.to_string(),
+            scheduler: self.clone(),
+        })
+    }
+
+    pub(crate) fn sync_accounts(&self, account_ids: Vec<String>) {
+        let enabled_accounts: HashSet<String> = account_ids.into_iter().collect();
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let old_enabled_count = state
+            .accounts
+            .values()
+            .filter(|account| account.enabled)
+            .count();
+
+        for (account_id, account) in &mut state.accounts {
+            account.enabled = enabled_accounts.contains(account_id);
+        }
+        for account_id in &enabled_accounts {
+            state
+                .accounts
+                .entry(account_id.clone())
+                .or_default()
+                .enabled = true;
+        }
+        state
+            .accounts
+            .retain(|_, account| account.enabled || account.in_use > 0);
+
+        let new_enabled_count = enabled_accounts.len();
+        drop(state);
+        self.notify_change();
+
+        if old_enabled_count != new_enabled_count {
+            tracing::info!(
+                account_count = new_enabled_count,
+                per_account_concurrency = self.per_account_concurrency,
+                "Image scheduler capacity updated"
+            );
+        }
+    }
+
+    fn available_slots(&self) -> usize {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .accounts
+            .values()
+            .filter(|account| account.enabled)
+            .map(|account| self.per_account_concurrency.saturating_sub(account.in_use))
+            .sum()
+    }
+
+    #[cfg(test)]
+    fn in_use_for(&self, account_id: &str) -> usize {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .accounts
+            .get(account_id)
+            .map_or(0, |account| account.in_use)
+    }
+}
+
+fn build_image_scheduler(
+    account_ids: Vec<String>,
+    per_account_concurrency: usize,
+) -> Arc<ImageScheduler> {
+    ImageScheduler::new(account_ids, per_account_concurrency)
 }
 
 // 为 AppState 实现 FromRef，以便中间件提取 security 状态
@@ -360,7 +508,7 @@ impl AxumServer {
         port: u16,
         token_manager: Arc<TokenManager>,
         custom_mapping: std::collections::HashMap<String, String>,
-        _request_timeout: u64,
+        request_timeout: u64,
         upstream_proxy: crate::proxy::config::UpstreamProxyConfig,
         user_agent_override: Option<String>,
         security_config: crate::proxy::ProxySecurityConfig,
@@ -373,6 +521,7 @@ impl AxumServer {
         cloudflared_state: Arc<crate::commands::cloudflared::CloudflaredState>,
         proxy_pool_config: crate::proxy::config::ProxyPoolConfig, // [NEW]
         only_raw_quota_models: bool,
+        image_scheduler_config: crate::proxy::config::ImageSchedulerConfig,
     ) -> Result<(Self, tokio::task::JoinHandle<()>), String> {
         let custom_mapping_state = Arc::new(tokio::sync::RwLock::new(custom_mapping));
         let proxy_state = Arc::new(tokio::sync::RwLock::new(upstream_proxy.clone()));
@@ -391,11 +540,24 @@ impl AxumServer {
         let is_running_state = Arc::new(RwLock::new(false));
 
         let only_raw_quota_models_state = Arc::new(tokio::sync::RwLock::new(only_raw_quota_models));
+        let image_account_ids = token_manager.enabled_account_ids();
+        let image_account_count = image_account_ids.len();
+        let image_scheduler = build_image_scheduler(
+            image_account_ids,
+            image_scheduler_config.per_account_concurrency,
+        );
+        token_manager.register_image_scheduler(&image_scheduler);
+        tracing::info!(
+            account_count = image_account_count,
+            per_account_concurrency = image_scheduler_config.per_account_concurrency,
+            capacity = image_scheduler.available_slots(),
+            "Image scheduler initialized"
+        );
 
         let state = AppState {
             token_manager: token_manager.clone(),
             custom_mapping: custom_mapping_state.clone(),
-            request_timeout: 300, // 5分钟超时
+            request_timeout,
             thought_signature_map: Arc::new(tokio::sync::Mutex::new(
                 std::collections::HashMap::new(),
             )),
@@ -429,6 +591,7 @@ impl AxumServer {
             proxy_pool_state: proxy_pool_state.clone(),
             proxy_pool_manager: proxy_pool_manager.clone(),
             only_raw_quota_models: only_raw_quota_models_state.clone(),
+            image_scheduler,
         };
 
         // 构建路由 - 使用新架构的 handlers！
@@ -3866,4 +4029,127 @@ async fn admin_get_droid_config_content(
                 Json(ErrorResponse { error: e }),
             )
         })
+}
+
+#[cfg(test)]
+mod image_scheduler_tests {
+    use super::{build_image_scheduler, ImagePermit, ImageScheduler};
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::sync::{mpsc, oneshot, Semaphore};
+    use tokio::task::JoinSet;
+
+    async fn acquire(scheduler: &Arc<ImageScheduler>, account_ids: &[String]) -> ImagePermit {
+        let mut changes = scheduler.subscribe_changes();
+        loop {
+            changes.borrow_and_update();
+            for account_id in account_ids {
+                if let Some(permit) = scheduler.try_acquire(account_id) {
+                    return permit;
+                }
+            }
+            changes.changed().await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn task_image_scheduler_enforces_each_account_capacity_and_queues_excess() {
+        let account_ids: Vec<String> = (0..3).map(|index| format!("account-{index}")).collect();
+        let scheduler = build_image_scheduler(account_ids.clone(), 2);
+        let release_gate = std::sync::Arc::new(Semaphore::new(0));
+        let (started_tx, mut started_rx) = mpsc::channel(8);
+        let mut tasks = JoinSet::new();
+
+        for task_index in 0..8 {
+            let scheduler = scheduler.clone();
+            let account_ids = account_ids.clone();
+            let release_gate = release_gate.clone();
+            let started_tx = started_tx.clone();
+            tasks.spawn(async move {
+                let permit = acquire(&scheduler, &account_ids).await;
+                started_tx
+                    .send((task_index, permit.account_id.clone()))
+                    .await
+                    .unwrap();
+                let release = release_gate.acquire().await.unwrap();
+                release.forget();
+            });
+        }
+        drop(started_tx);
+
+        let mut per_account = HashMap::new();
+        for _ in 0..6 {
+            let (_, account_id) = tokio::time::timeout(Duration::from_secs(1), started_rx.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            *per_account.entry(account_id).or_insert(0) += 1;
+        }
+        assert_eq!(per_account.len(), 3);
+        assert!(per_account.values().all(|count| *count == 2));
+        assert_eq!(scheduler.available_slots(), 0);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), started_rx.recv())
+                .await
+                .is_err()
+        );
+
+        release_gate.add_permits(1);
+        tasks.join_next().await.unwrap().unwrap();
+        tokio::time::timeout(Duration::from_secs(1), started_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        release_gate.add_permits(8);
+        while let Some(task) = tasks.join_next().await {
+            task.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn task_image_permits_release_and_account_sync_preserves_inflight_usage() {
+        let account_ids = vec!["account-1".to_string()];
+        let scheduler = build_image_scheduler(account_ids.clone(), 1);
+        let mut tasks = JoinSet::new();
+
+        let success_scheduler = scheduler.clone();
+        let success_accounts = account_ids.clone();
+        tasks.spawn(async move {
+            let _permit = acquire(&success_scheduler, &success_accounts).await;
+            Ok::<(), ()>(())
+        });
+        assert!(tasks.join_next().await.unwrap().unwrap().is_ok());
+        assert_eq!(scheduler.available_slots(), 1);
+
+        let failure_scheduler = scheduler.clone();
+        let failure_accounts = account_ids.clone();
+        tasks.spawn(async move {
+            let _permit = acquire(&failure_scheduler, &failure_accounts).await;
+            Err::<(), ()>(())
+        });
+        assert!(tasks.join_next().await.unwrap().unwrap().is_err());
+        assert_eq!(scheduler.available_slots(), 1);
+
+        let (acquired_tx, acquired_rx) = oneshot::channel();
+        let cancelled_scheduler = scheduler.clone();
+        let cancelled_accounts = account_ids.clone();
+        let cancelled = tokio::spawn(async move {
+            let _permit = acquire(&cancelled_scheduler, &cancelled_accounts).await;
+            let _ = acquired_tx.send(());
+            std::future::pending::<()>().await;
+        });
+        acquired_rx.await.unwrap();
+        assert_eq!(scheduler.in_use_for("account-1"), 1);
+        cancelled.abort();
+        assert!(cancelled.await.unwrap_err().is_cancelled());
+        assert_eq!(scheduler.available_slots(), 1);
+
+        let permit = acquire(&scheduler, &account_ids).await;
+        scheduler.sync_accounts(Vec::new());
+        scheduler.sync_accounts(account_ids.clone());
+        assert!(scheduler.try_acquire("account-1").is_none());
+        drop(permit);
+        assert_eq!(scheduler.available_slots(), 1);
+    }
 }

@@ -242,6 +242,14 @@ pub fn remember_cwd_from_request(request: Option<&Value>) {
     }
 }
 
+pub fn remember_cwd_from_text(text: &str) -> bool {
+    let Some(cwd) = extract_cwd_from_str(text) else {
+        return false;
+    };
+    remember_cwd(&cwd);
+    true
+}
+
 /// apply_patch **中间层总入口**:按白名单规则**逐条恢复已知格式错误**,使模型不遵循 prompt 时
 /// 产出的畸形 patch 仍能被 Codex 正确 apply。**只动确定的已知坑;未知一律原样放行(不猜不丢)。**
 ///

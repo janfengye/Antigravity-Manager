@@ -168,6 +168,44 @@ where
             });
 
             yield Ok(state.emit("message_delta", delta));
+        } else if !state.has_content && !state.has_thinking {
+            // [FIX #3359] Empty response recovery (e.g. single dot prompt health check)
+            // If the upstream ended immediately without generating thinking or text content,
+            // we must ensure message_start and at least one text block are sent before termination.
+            if !state.message_start_sent {
+                let dummy_start = serde_json::json!({
+                    "responseId": format!("msg_recovered_{}", chrono::Utc::now().timestamp_millis()),
+                    "modelVersion": "gemini-auto",
+                });
+                yield Ok(state.emit_message_start(&dummy_start));
+            }
+
+            let start_chunks = state.start_block(
+                crate::proxy::mappers::claude::streaming::BlockType::Text,
+                serde_json::json!({ "type": "text", "text": "." }),
+            );
+            for chunk in start_chunks {
+                yield Ok(chunk);
+            }
+            let stop_chunks = state.end_block();
+            for chunk in stop_chunks {
+                yield Ok(chunk);
+            }
+            state.has_content = true;
+
+            let recovery_usage = crate::proxy::mappers::claude::models::Usage {
+                input_tokens: 1,
+                output_tokens: 1,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
+                server_tool_use: None,
+            };
+            let delta = serde_json::json!({
+                "type": "message_delta",
+                "delta": { "stop_reason": "end_turn", "stop_sequence": null },
+                "usage": recovery_usage
+            });
+            yield Ok(state.emit("message_delta", delta));
         }
 
         // Ensure termination events are sent

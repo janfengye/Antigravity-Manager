@@ -1,12 +1,14 @@
 // 移除冗余的顶层导入，因为这些在代码中已由 full path 或局部导入处理
+use axum::http::StatusCode;
 use dashmap::DashMap;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use tokio_util::sync::CancellationToken;
 
 use crate::proxy::rate_limit::RateLimitTracker;
+use crate::proxy::server::{ImagePermit, ImageScheduler};
 use crate::proxy::sticky_config::StickySessionConfig;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -14,6 +16,100 @@ enum OnDiskAccountState {
     Enabled,
     Disabled,
     Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TrackerParserMode {
+    Current,
+    Baseline,
+}
+
+fn classify_rate_limit_reason(error_body: &str) -> crate::proxy::rate_limit::RateLimitReason {
+    use crate::proxy::rate_limit::RateLimitReason;
+
+    let body = error_body.to_lowercase();
+    let generic_resource_exhausted =
+        body.contains("resource has been exhausted") || body.contains("resource_exhausted");
+    let explicit_quota_exhausted = body.contains("quota_exhausted")
+        || body.contains("quotaresetdelay")
+        || body.contains("quota reset")
+        || body.contains("quota limit")
+        || body.contains("per day")
+        || body.contains("daily quota");
+
+    if body.contains("model_capacity") {
+        RateLimitReason::ModelCapacityExhausted
+    } else if body.contains("per minute")
+        || body.contains("rate limit")
+        || body.contains("too many requests")
+        || (generic_resource_exhausted && !explicit_quota_exhausted)
+    {
+        RateLimitReason::RateLimitExceeded
+    } else if explicit_quota_exhausted || body.contains("exhausted") || body.contains("quota") {
+        RateLimitReason::QuotaExhausted
+    } else {
+        RateLimitReason::Unknown
+    }
+}
+
+const IMAGE_ACCOUNT_RESELECT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
+
+async fn wait_for_image_account_change(
+    changes: &mut tokio::sync::watch::Receiver<u64>,
+    remaining: std::time::Duration,
+) -> bool {
+    if remaining.is_zero() {
+        return false;
+    }
+    tokio::select! {
+        result = changes.changed() => result.is_ok(),
+        _ = tokio::time::sleep(remaining.min(IMAGE_ACCOUNT_RESELECT_INTERVAL)) => true,
+    }
+}
+
+async fn wait_for_image_token_selection<T>(
+    deadline: tokio::time::Instant,
+    selection: impl std::future::Future<Output = T>,
+) -> Option<T> {
+    let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+    if remaining.is_zero() {
+        return None;
+    }
+    tokio::time::timeout(remaining, selection).await.ok()
+}
+
+/// 异步安全的账号 JSON 更新函数
+///
+/// 使用 `tokio::task::spawn_blocking` 将阻塞的文件 I/O 与 `std::sync::Mutex`
+/// 的获取操作转移到 Tokio 的阻塞线程池中，避免占用 Tokio Worker Thread，
+/// 防止高并发场景下因同步锁争抢导致 Tokio 运行时饥饿（runtime starvation）。
+async fn update_account_json(
+    path: &std::path::Path,
+    update: impl FnOnce(&mut serde_json::Value) + Send + 'static,
+) -> Result<(), String> {
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let _account_write = crate::modules::account::lock_account_file_updates()?;
+        let raw = std::fs::read_to_string(&path).map_err(|e| format!("读取文件失败: {}", e))?;
+        let mut content: serde_json::Value =
+            serde_json::from_str(&raw).map_err(|e| format!("解析 JSON 失败: {}", e))?;
+        update(&mut content);
+        let serialized = serde_json::to_string_pretty(&content)
+            .map_err(|e| format!("序列化 JSON 失败: {}", e))?;
+        std::fs::write(&path, serialized).map_err(|e| format!("写入文件失败: {}", e))
+    })
+    .await
+    .map_err(|e| format!("spawn_blocking panicked: {}", e))?
+}
+
+fn unix_timestamp_ceil(time: std::time::SystemTime) -> Option<i64> {
+    let since_epoch = time
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .ok()?;
+    let seconds = since_epoch
+        .as_secs()
+        .saturating_add(u64::from(since_epoch.subsec_nanos() > 0));
+    i64::try_from(seconds).ok()
 }
 
 #[derive(Debug, Clone)]
@@ -65,6 +161,7 @@ pub struct TokenManager {
     /// 支持优雅关闭时主动 abort 后台任务
     auto_cleanup_handle: Arc<tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
     cancel_token: CancellationToken,
+    image_scheduler: std::sync::RwLock<Option<Weak<ImageScheduler>>>,
 }
 
 impl TokenManager {
@@ -88,6 +185,32 @@ impl TokenManager {
             invalid_grant_failures: Arc::new(DashMap::new()),
             auto_cleanup_handle: Arc::new(tokio::sync::Mutex::new(None)),
             cancel_token: CancellationToken::new(),
+            image_scheduler: std::sync::RwLock::new(None),
+        }
+    }
+
+    pub(crate) fn register_image_scheduler(&self, scheduler: &Arc<ImageScheduler>) {
+        if let Ok(mut slot) = self.image_scheduler.write() {
+            *slot = Some(Arc::downgrade(scheduler));
+        }
+        scheduler.sync_accounts(self.enabled_account_ids());
+    }
+
+    pub(crate) fn enabled_account_ids(&self) -> Vec<String> {
+        self.tokens
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect()
+    }
+
+    fn sync_image_scheduler_accounts(&self) {
+        let scheduler = self
+            .image_scheduler
+            .read()
+            .ok()
+            .and_then(|slot| slot.as_ref().and_then(Weak::upgrade));
+        if let Some(scheduler) = scheduler {
+            scheduler.sync_accounts(self.enabled_account_ids());
         }
     }
 
@@ -138,6 +261,8 @@ impl TokenManager {
 
         // Reload should reflect current on-disk state (accounts can be added/removed/disabled).
         self.tokens.clear();
+        self.rate_limit_tracker.clear_all();
+        self.sync_image_scheduler_accounts();
         self.current_index.store(0, Ordering::SeqCst);
         {
             let mut last_used = self.last_used_account.lock().await;
@@ -150,7 +275,10 @@ impl TokenManager {
         let mut count = 0;
 
         for entry in entries {
-            let entry = entry.map_err(|e| format!("读取目录项失败: {}", e))?;
+            let entry = entry.map_err(|e| {
+                self.sync_image_scheduler_accounts();
+                format!("读取目录项失败: {}", e)
+            })?;
             let path = entry.path();
 
             if path.extension().and_then(|s| s.to_str()) != Some("json") {
@@ -173,6 +301,7 @@ impl TokenManager {
             }
         }
 
+        self.sync_image_scheduler_accounts();
         Ok(count)
     }
 
@@ -189,8 +318,7 @@ impl TokenManager {
         match self.load_single_account(&path).await {
             Ok(Some(token)) => {
                 self.tokens.insert(account_id.to_string(), token);
-                // [NEW] 重新加载账号时自动清除该账号的限流记录
-                self.clear_rate_limit(account_id);
+                self.sync_image_scheduler_accounts();
                 Ok(())
             }
             Ok(None) => {
@@ -206,10 +334,7 @@ impl TokenManager {
 
     /// 重新加载所有账号
     pub async fn reload_all_accounts(&self) -> Result<usize, String> {
-        let count = self.load_accounts().await?;
-        // [NEW] 重新加载所有账号时自动清除所有限流记录
-        self.clear_all_rate_limits();
-        Ok(count)
+        self.load_accounts().await
     }
 
     /// 从内存中彻底移除指定账号及其关联数据 (Issue #1477)
@@ -219,7 +344,7 @@ impl TokenManager {
             tracing::info!("[Proxy] Removed account {} from memory cache", account_id);
         }
         self.health_scores.remove(account_id);
-        self.clear_rate_limit(account_id);
+        self.rate_limit_tracker.clear(account_id);
         self.session_accounts.retain(|_, v| v != account_id);
         if let Ok(mut preferred) = self.preferred_account_id.try_write() {
             if preferred.as_deref() == Some(account_id) {
@@ -230,6 +355,7 @@ impl TokenManager {
                 );
             }
         }
+        self.sync_image_scheduler_accounts();
     }
 
     /// 根据账号 ID 获取完整的 ProxyToken 对象 (v4.1.29)
@@ -375,9 +501,12 @@ impl TokenManager {
                 account["validation_blocked_until"] = serde_json::json!(0);
                 account["validation_blocked_reason"] = serde_json::Value::Null;
 
-                let updated_json =
-                    serde_json::to_string_pretty(&account).map_err(|e| e.to_string())?;
-                std::fs::write(path, updated_json).map_err(|e| e.to_string())?;
+                update_account_json(path, |latest| {
+                    latest["validation_blocked"] = serde_json::json!(false);
+                    latest["validation_blocked_until"] = serde_json::json!(0);
+                    latest["validation_blocked_reason"] = serde_json::Value::Null;
+                })
+                .await?;
                 tracing::info!(
                     "Validation block expired and cleared for account: {}",
                     account
@@ -535,6 +664,39 @@ impl TokenManager {
                 ) {
                     model_limits.insert(name.to_string(), limit);
                 }
+            }
+        }
+
+        if let Some(live_limits) = account
+            .get("live_limited_models")
+            .and_then(|value| value.as_object())
+        {
+            let now = chrono::Utc::now().timestamp();
+            for (model_key, status) in live_limits {
+                let Ok(status) = serde_json::from_value::<crate::models::account::LiveLimitStatus>(
+                    status.clone(),
+                ) else {
+                    continue;
+                };
+                if !crate::proxy::rate_limit::is_active_persisted_long_image_limit(
+                    model_key, &status, now,
+                ) {
+                    continue;
+                }
+                let (Ok(until_seconds), Ok(detected_at_seconds)) = (
+                    u64::try_from(status.until),
+                    u64::try_from(status.detected_at),
+                ) else {
+                    continue;
+                };
+                self.rate_limit_tracker.restore_persisted_long_image_limit(
+                    &account_id,
+                    std::time::SystemTime::UNIX_EPOCH
+                        + std::time::Duration::from_secs(until_seconds),
+                    std::time::SystemTime::UNIX_EPOCH
+                        + std::time::Duration::from_secs(detected_at_seconds),
+                    model_key,
+                );
             }
         }
 
@@ -939,11 +1101,24 @@ impl TokenManager {
             );
 
             // 3. 写入磁盘
-            std::fs::write(
-                account_path,
-                serde_json::to_string_pretty(account_json).unwrap(),
-            )
-            .map_err(|e| format!("写入文件失败: {}", e))?;
+            let model_name_owned = model_name.to_string();
+            update_account_json(account_path, move |latest| {
+                if latest
+                    .get("protected_models")
+                    .and_then(|value| value.as_array())
+                    .is_none()
+                {
+                    latest["protected_models"] = serde_json::Value::Array(Vec::new());
+                }
+                let protected_models = latest["protected_models"].as_array_mut().unwrap();
+                if !protected_models
+                    .iter()
+                    .any(|model| model.as_str() == Some(&model_name_owned))
+                {
+                    protected_models.push(serde_json::Value::String(model_name_owned));
+                }
+            })
+            .await?;
 
             // [FIX] 触发 TokenManager 的账号重新加载信号，确保内存中的 protected_models 同步
             crate::proxy::server::trigger_account_reload(account_id);
@@ -1007,12 +1182,15 @@ impl TokenManager {
             }
         }
 
-        account_json["protected_models"] = serde_json::Value::Array(protected_list);
+        account_json["protected_models"] = serde_json::Value::Array(protected_list.clone());
 
-        let _ = std::fs::write(
-            account_path,
-            serde_json::to_string_pretty(account_json).unwrap(),
-        );
+        let _ = update_account_json(account_path, |latest| {
+            latest["proxy_disabled"] = serde_json::Value::Bool(false);
+            latest["proxy_disabled_reason"] = serde_json::Value::Null;
+            latest["proxy_disabled_at"] = serde_json::Value::Null;
+            latest["protected_models"] = serde_json::Value::Array(protected_list);
+        })
+        .await;
 
         false // 返回 false 表示现在已可以尝试加载该账号（模型级过滤会在 get_token 时发生）
     }
@@ -1039,11 +1217,16 @@ impl TokenManager {
                     account_id,
                     model_name
                 );
-                std::fs::write(
-                    account_path,
-                    serde_json::to_string_pretty(account_json).unwrap(),
-                )
-                .map_err(|e| format!("写入文件失败: {}", e))?;
+                let model_name_owned = model_name.to_string();
+                update_account_json(account_path, move |latest| {
+                    if let Some(protected_models) = latest
+                        .get_mut("protected_models")
+                        .and_then(|value| value.as_array_mut())
+                    {
+                        protected_models.retain(|model| model.as_str() != Some(&model_name_owned));
+                    }
+                })
+                .await?;
                 return Ok(true);
             }
         }
@@ -1183,6 +1366,95 @@ impl TokenManager {
         session_id: Option<&str>,
         target_model: &str,
     ) -> Result<(String, String, String, String, u64), String> {
+        let excluded_accounts = HashSet::new();
+        self.get_token_filtered(
+            quota_group,
+            force_rotate,
+            session_id,
+            target_model,
+            &excluded_accounts,
+        )
+        .await
+    }
+
+    pub async fn get_image_token(
+        &self,
+        force_rotate: bool,
+        session_id: Option<&str>,
+        target_model: &str,
+        scheduler: &Arc<ImageScheduler>,
+        request_timeout: u64,
+    ) -> Result<(String, String, String, String, u64, ImagePermit), (StatusCode, String)> {
+        let deadline =
+            tokio::time::Instant::now() + std::time::Duration::from_secs(request_timeout);
+        let mut scheduler_changes = scheduler.subscribe_changes();
+
+        loop {
+            scheduler_changes.borrow_and_update();
+            let mut busy_accounts = HashSet::new();
+
+            loop {
+                let selection = wait_for_image_token_selection(
+                    deadline,
+                    self.get_token_filtered(
+                        "image_gen",
+                        force_rotate,
+                        session_id,
+                        target_model,
+                        &busy_accounts,
+                    ),
+                )
+                .await;
+                match selection {
+                    None => {
+                        return Err((
+                            StatusCode::TOO_MANY_REQUESTS,
+                            "图片队列等待超时".to_string(),
+                        ));
+                    }
+                    Some(Ok((access_token, project_id, email, account_id, wait_ms))) => {
+                        if let Some(permit) = scheduler.try_acquire(&account_id) {
+                            return Ok((
+                                access_token,
+                                project_id,
+                                email,
+                                account_id,
+                                wait_ms,
+                                permit,
+                            ));
+                        }
+                        busy_accounts.insert(account_id);
+                    }
+                    Some(Err(selection_error)) => {
+                        if busy_accounts.is_empty() {
+                            return Err((
+                                StatusCode::SERVICE_UNAVAILABLE,
+                                format!("Token error: {}", selection_error),
+                            ));
+                        }
+                        break;
+                    }
+                }
+            }
+
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if !wait_for_image_account_change(&mut scheduler_changes, remaining).await {
+                return Err((
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "图片队列等待超时".to_string(),
+                ));
+            }
+        }
+    }
+
+    async fn get_token_filtered(
+        &self,
+        quota_group: &str,
+        force_rotate: bool,
+        session_id: Option<&str>,
+        target_model: &str,
+        excluded_accounts: &HashSet<String>,
+    ) -> Result<(String, String, String, String, u64), String> {
         // [FIX] 检查并处理待重新加载的账号（配额保护同步）
         let pending_reload = crate::proxy::server::take_pending_reload_accounts();
         for account_id in pending_reload {
@@ -1210,7 +1482,13 @@ impl TokenManager {
         let timeout_duration = std::time::Duration::from_secs(5);
         match tokio::time::timeout(
             timeout_duration,
-            self.get_token_internal(quota_group, force_rotate, session_id, target_model),
+            self.get_token_internal(
+                quota_group,
+                force_rotate,
+                session_id,
+                target_model,
+                excluded_accounts,
+            ),
         )
         .await
         {
@@ -1228,9 +1506,11 @@ impl TokenManager {
         force_rotate: bool,
         session_id: Option<&str>,
         target_model: &str,
+        excluded_accounts: &HashSet<String>,
     ) -> Result<(String, String, String, String, u64), String> {
         let mut tokens_snapshot: Vec<ProxyToken> =
             self.tokens.iter().map(|e| e.value().clone()).collect();
+        tokens_snapshot.retain(|token| !excluded_accounts.contains(&token.account_id));
         let mut total = tokens_snapshot.len();
         if total == 0 {
             return Err("Token pool is empty".to_string());
@@ -1473,12 +1753,27 @@ impl TokenManager {
                                                     entry.expires_in = token.expires_in;
                                                     entry.timestamp = token.timestamp;
                                                 }
-                                                let _ = self
-                                                    .save_refreshed_token(
-                                                        &token.account_id,
-                                                        &token_response,
-                                                    )
-                                                    .await;
+                                                // [FIX] 写盘操作后台化：避免阻塞 get_token 的 5s 超时窗口
+                                                // 内存已更新完毕，将磁盘持久化 spawn 到 blocking 线程池
+                                                {
+                                                    let write_path = token.account_path.clone();
+                                                    let access_token = token_response.access_token.clone();
+                                                    let expires_in = token_response.expires_in;
+                                                    let id_token = token_response.id_token.clone();
+                                                    let new_rt = token_response.refresh_token.clone();
+                                                    let write_ts = now + token_response.expires_in;
+                                                    tokio::task::spawn_blocking(move || {
+                                                        let Ok(_lk) = crate::modules::account::lock_account_file_updates() else { return; };
+                                                        let Ok(raw) = std::fs::read_to_string(&write_path) else { return; };
+                                                        let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&raw) else { return; };
+                                                        val["token"]["access_token"] = access_token.into();
+                                                        val["token"]["expires_in"] = expires_in.into();
+                                                        val["token"]["expiry_timestamp"] = write_ts.into();
+                                                        if let Some(it) = id_token { val["token"]["id_token"] = it.into(); }
+                                                        if let Some(rt) = new_rt { val["token"]["refresh_token"] = rt.into(); }
+                                                        if let Ok(s) = serde_json::to_string_pretty(&val) { let _ = std::fs::write(&write_path, s); }
+                                                    });
+                                                }
                                             }
                                             Err(e) => {
                                                 tracing::warn!(
@@ -1516,7 +1811,18 @@ impl TokenManager {
                                         {
                                             entry.project_id = Some(pid.clone());
                                         }
-                                        let _ = self.save_project_id(&token.account_id, &pid).await;
+                                        // [FIX] 写盘后台化：project_id 已写入内存，磁盘持久化不阻塞热路径
+                                        {
+                                            let write_path = token.account_path.clone();
+                                            let pid_clone = pid.clone();
+                                            tokio::task::spawn_blocking(move || {
+                                                let Ok(_lk) = crate::modules::account::lock_account_file_updates() else { return; };
+                                                let Ok(raw) = std::fs::read_to_string(&write_path) else { return; };
+                                                let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&raw) else { return; };
+                                                val["token"]["project_id"] = pid_clone.into();
+                                                if let Ok(s) = serde_json::to_string_pretty(&val) { let _ = std::fs::write(&write_path, s); }
+                                            });
+                                        }
                                         pid
                                     }
                                     Err(_) => "bamboo-precept-lgxtn".to_string(), // fallback
@@ -1762,15 +2068,23 @@ impl TokenManager {
                             tokio::time::sleep(tokio::time::Duration::from_millis(wait_ms)).await;
 
                             // 重新尝试选择账号
-                            let retry_token = tokens_snapshot.iter().find(|t| {
-                                !attempted.contains(&t.account_id)
-                                    && !self.is_rate_limited_sync(
-                                        &t.account_id,
-                                        Some(&normalized_target),
-                                    )
-                                    && !(quota_protection_enabled
-                                        && t.protected_models.contains(&normalized_target))
-                            });
+                            let mut retry_token = None;
+                            for token in &tokens_snapshot {
+                                if attempted.contains(&token.account_id)
+                                    || self
+                                        .is_rate_limited(
+                                            &token.account_id,
+                                            Some(&normalized_target),
+                                        )
+                                        .await
+                                    || (quota_protection_enabled
+                                        && token.protected_models.contains(&normalized_target))
+                                {
+                                    continue;
+                                }
+                                retry_token = Some(token);
+                                break;
+                            }
 
                             if let Some(t) = retry_token {
                                 tracing::info!(
@@ -1786,7 +2100,7 @@ impl TokenManager {
                                 );
 
                                 // 清除所有限流记录
-                                self.rate_limit_tracker.clear_all();
+                                self.rate_limit_tracker.clear_for_optimistic_reset();
 
                                 // 再次尝试选择账号
                                 let final_token = tokens_snapshot.iter().find(|t| {
@@ -1884,9 +2198,27 @@ impl TokenManager {
                                     entry.expires_in = token.expires_in;
                                     entry.timestamp = token.timestamp;
                                 }
-                                let _ = self
-                                    .save_refreshed_token(&token.account_id, &token_response)
-                                    .await;
+                                // [FIX] 写盘操作后台化：内存已更新，磁盘持久化 spawn 到 blocking 线程池
+                                // 避免在 get_token 的 5s 超时窗口内因磁盘 I/O 或锁争抢导致超时
+                                {
+                                    let write_path = token.account_path.clone();
+                                    let access_token = token_response.access_token.clone();
+                                    let expires_in = token_response.expires_in;
+                                    let id_token = token_response.id_token.clone();
+                                    let new_rt = token_response.refresh_token.clone();
+                                    let write_ts = now + token_response.expires_in;
+                                    tokio::task::spawn_blocking(move || {
+                                        let Ok(_lk) = crate::modules::account::lock_account_file_updates() else { return; };
+                                        let Ok(raw) = std::fs::read_to_string(&write_path) else { return; };
+                                        let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&raw) else { return; };
+                                        val["token"]["access_token"] = access_token.into();
+                                        val["token"]["expires_in"] = expires_in.into();
+                                        val["token"]["expiry_timestamp"] = write_ts.into();
+                                        if let Some(it) = id_token { val["token"]["id_token"] = it.into(); }
+                                        if let Some(rt) = new_rt { val["token"]["refresh_token"] = rt.into(); }
+                                        if let Ok(s) = serde_json::to_string_pretty(&val) { let _ = std::fs::write(&write_path, s); }
+                                    });
+                                }
                             }
                             Err(e) => {
                                 tracing::error!(
@@ -1894,9 +2226,13 @@ impl TokenManager {
                                     token.email,
                                     e
                                 );
-                                let is_grant_error = e.contains("\"invalid_grant\"") || e.contains("invalid_grant");
+                                let is_grant_error =
+                                    e.contains("\"invalid_grant\"") || e.contains("invalid_grant");
                                 if is_grant_error {
-                                    let mut fail_count = self.invalid_grant_failures.entry(token.account_id.clone()).or_insert(0);
+                                    let mut fail_count = self
+                                        .invalid_grant_failures
+                                        .entry(token.account_id.clone())
+                                        .or_insert(0);
                                     *fail_count += 1;
                                     let current_fails = *fail_count;
                                     if current_fails >= 2 {
@@ -1974,8 +2310,8 @@ impl TokenManager {
                             Ok(pid) => {
                                 if let Some(mut entry) = self.tokens.get_mut(&token.account_id) {
                                     entry.project_id = Some(pid.clone());
-                                    let _ = self.save_project_id(&token.account_id, &pid).await;
                                 }
+                                let _ = self.save_project_id(&token.account_id, &pid).await;
                                 Ok(pid)
                             }
                             Err(e) => Err(e),
@@ -2005,29 +2341,41 @@ impl TokenManager {
                         .clone();
                     let _guard = refresh_mu.lock().await;
 
-                    if let Some(mut entry) = self.tokens.get_mut(&token.account_id) {
-                        if let Some(pid) = &entry.project_id {
-                            if !pid.is_empty() {
-                                pid.clone()
-                            } else {
-                                match crate::proxy::project_resolver::fetch_project_id(
-                                    &entry.access_token,
-                                )
+                    let project_state = self
+                        .tokens
+                        .get(&token.account_id)
+                        .map(|entry| (entry.project_id.clone(), entry.access_token.clone()));
+                    match project_state {
+                        Some((Some(pid), _)) if !pid.is_empty() => pid,
+                        Some((Some(_), access_token)) => {
+                            match crate::proxy::project_resolver::fetch_project_id(&access_token)
                                 .await
-                                {
-                                    Ok(pid) => {
+                            {
+                                Ok(pid) => {
+                                    if let Some(mut entry) = self.tokens.get_mut(&token.account_id)
+                                    {
                                         entry.project_id = Some(pid.clone());
-                                        let _ = self.save_project_id(&token.account_id, &pid).await;
-                                        pid
                                     }
-                                    Err(_) => "bamboo-precept-lgxtn".to_string(),
+                                    // [FIX] 写盘后台化：project_id 已写入内存，磁盘持久化不阻塞热路径
+                                    {
+                                        let write_path = self.tokens.get(&token.account_id)
+                                            .map(|e| e.account_path.clone())
+                                            .unwrap_or_else(|| self.data_dir.join("accounts").join(format!("{}.json", token.account_id)));
+                                        let pid_clone = pid.clone();
+                                        tokio::task::spawn_blocking(move || {
+                                            let Ok(_lk) = crate::modules::account::lock_account_file_updates() else { return; };
+                                            let Ok(raw) = std::fs::read_to_string(&write_path) else { return; };
+                                            let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&raw) else { return; };
+                                            val["token"]["project_id"] = pid_clone.into();
+                                            if let Ok(s) = serde_json::to_string_pretty(&val) { let _ = std::fs::write(&write_path, s); }
+                                        });
+                                    }
+                                    pid
                                 }
+                                Err(_) => "bamboo-precept-lgxtn".to_string(),
                             }
-                        } else {
-                            "bamboo-precept-lgxtn".to_string()
                         }
-                    } else {
-                        "bamboo-precept-lgxtn".to_string()
+                        _ => "bamboo-precept-lgxtn".to_string(),
                     }
                 } else {
                     // 如果不是第一个，则等待结果 (虽然在 Mutex 模式下不需要 rx，但为了严谨性我们可以保留锁)
@@ -2080,24 +2428,17 @@ impl TokenManager {
                 .join(format!("{}.json", account_id))
         };
 
-        let mut content: serde_json::Value = serde_json::from_str(
-            &tokio::fs::read_to_string(&path)
-                .await
-                .map_err(|e| format!("读取文件失败: {}", e))?,
-        )
-        .map_err(|e| format!("解析 JSON 失败: {}", e))?;
-
         let now = chrono::Utc::now().timestamp();
-        content["disabled"] = serde_json::Value::Bool(true);
-        content["disabled_at"] = serde_json::Value::Number(now.into());
-        content["disabled_reason"] = serde_json::Value::String(truncate_reason(reason, 800));
-
-        tokio::fs::write(&path, serde_json::to_string_pretty(&content).unwrap())
-            .await
-            .map_err(|e| format!("写入文件失败: {}", e))?;
+        let reason_owned = reason.to_string();
+        update_account_json(&path, move |content| {
+            content["disabled"] = serde_json::Value::Bool(true);
+            content["disabled_at"] = serde_json::Value::Number(now.into());
+            content["disabled_reason"] = serde_json::Value::String(truncate_reason(&reason_owned, 800));
+        })
+        .await?;
 
         // 【修复 Issue #3】从内存中移除禁用的账号，防止被60s锁定逻辑继续使用
-        self.tokens.remove(account_id);
+        self.remove_account(account_id);
 
         tracing::warn!("Account disabled: {} ({:?})", account_id, path);
         Ok(())
@@ -2105,22 +2446,17 @@ impl TokenManager {
 
     /// 保存 project_id 到账号文件
     async fn save_project_id(&self, account_id: &str, project_id: &str) -> Result<(), String> {
-        let entry = self.tokens.get(account_id).ok_or("账号不存在")?;
-
-        let path = &entry.account_path;
-
-        let mut content: serde_json::Value = serde_json::from_str(
-            &tokio::fs::read_to_string(path)
-                .await
-                .map_err(|e| format!("读取文件失败: {}", e))?,
-        )
-        .map_err(|e| format!("解析 JSON 失败: {}", e))?;
-
-        content["token"]["project_id"] = serde_json::Value::String(project_id.to_string());
-
-        tokio::fs::write(path, serde_json::to_string_pretty(&content).unwrap())
-            .await
-            .map_err(|e| format!("写入文件失败: {}", e))?;
+        let path = self
+            .tokens
+            .get(account_id)
+            .ok_or("账号不存在")?
+            .account_path
+            .clone();
+        let project_id_owned = project_id.to_string();
+        update_account_json(&path, move |content| {
+            content["token"]["project_id"] = serde_json::Value::String(project_id_owned);
+        })
+        .await?;
 
         tracing::debug!("已保存 project_id 到账号 {}", account_id);
         Ok(())
@@ -2132,36 +2468,34 @@ impl TokenManager {
         account_id: &str,
         token_response: &crate::modules::oauth::TokenResponse,
     ) -> Result<(), String> {
-        let entry = self.tokens.get(account_id).ok_or("账号不存在")?;
-
-        let path = &entry.account_path;
-
-        let mut content: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(path).map_err(|e| format!("读取文件失败: {}", e))?,
-        )
-        .map_err(|e| format!("解析 JSON 失败: {}", e))?;
-
+        let path = self
+            .tokens
+            .get(account_id)
+            .ok_or("账号不存在")?
+            .account_path
+            .clone();
         let now = chrono::Utc::now().timestamp();
+        let access_token = token_response.access_token.clone();
+        let expires_in = token_response.expires_in;
+        let id_token = token_response.id_token.clone();
+        let refresh_token = token_response.refresh_token.clone();
+        let expiry_timestamp = now + expires_in;
+        update_account_json(&path, move |content| {
+            content["token"]["access_token"] = serde_json::Value::String(access_token);
+            content["token"]["expires_in"] = serde_json::Value::Number(expires_in.into());
+            content["token"]["expiry_timestamp"] = serde_json::Value::Number(expiry_timestamp.into());
 
-        content["token"]["access_token"] =
-            serde_json::Value::String(token_response.access_token.clone());
-        content["token"]["expires_in"] =
-            serde_json::Value::Number(token_response.expires_in.into());
-        content["token"]["expiry_timestamp"] =
-            serde_json::Value::Number((now + token_response.expires_in).into());
+            // 如果获取到了新的 id_token，则保存它
+            if let Some(it) = id_token {
+                content["token"]["id_token"] = serde_json::Value::String(it);
+            }
 
-        // 如果获取到了新的 id_token，则保存它
-        if let Some(ref id_token) = token_response.id_token {
-            content["token"]["id_token"] = serde_json::Value::String(id_token.clone());
-        }
-
-        // 如果获取到了新的 refresh_token（Token 轮转），也一并保存
-        if let Some(ref rt) = token_response.refresh_token {
-            content["token"]["refresh_token"] = serde_json::Value::String(rt.clone());
-        }
-
-        std::fs::write(path, serde_json::to_string_pretty(&content).unwrap())
-            .map_err(|e| format!("写入文件失败: {}", e))?;
+            // 如果获取到了新的 refresh_token（Token 轮转），也一并保存
+            if let Some(rt) = refresh_token {
+                content["token"]["refresh_token"] = serde_json::Value::String(rt);
+            }
+        })
+        .await?;
 
         tracing::debug!("已保存刷新后的 token 到账号 {}", account_id);
         Ok(())
@@ -2303,16 +2637,6 @@ impl TokenManager {
         self.rate_limit_tracker.is_rate_limited(account_id, model)
     }
 
-    /// [NEW] 检查账号是否在限流中 (同步版本，仅用于 Iterator)
-    pub fn is_rate_limited_sync(&self, account_id: &str, model: Option<&str>) -> bool {
-        // 同步版本无法读取 async RwLock，这里使用 blocking_read
-        let config = self.circuit_breaker_config.blocking_read();
-        if !config.enabled {
-            return false;
-        }
-        self.rate_limit_tracker.is_rate_limited(account_id, model)
-    }
-
     /// 获取距离限流重置还有多少秒
     #[allow(dead_code)]
     pub fn get_rate_limit_reset_seconds(&self, account_id: &str) -> Option<u64> {
@@ -2336,12 +2660,60 @@ impl TokenManager {
 
     /// 清除指定账号的限流记录
     pub fn clear_rate_limit(&self, account_id: &str) -> bool {
+        let cleared = self.rate_limit_tracker.clear(account_id);
+        let persisted_cleared = self.clear_all_persisted_live_limits(account_id);
+        cleared || persisted_cleared
+    }
+
+    pub fn clear_rate_limit_memory(&self, account_id: &str) -> bool {
         self.rate_limit_tracker.clear(account_id)
     }
 
     /// 清除所有限流记录
     pub fn clear_all_rate_limits(&self) {
         self.rate_limit_tracker.clear_all();
+        let accounts_dir = self.data_dir.join("accounts");
+        if let Ok(entries) = std::fs::read_dir(accounts_dir) {
+            for entry in entries.flatten() {
+                if entry.path().extension().and_then(|value| value.to_str()) == Some("json") {
+                    if let Some(account_id) =
+                        entry.path().file_stem().and_then(|value| value.to_str())
+                    {
+                        self.clear_all_persisted_live_limits(account_id);
+                    }
+                }
+            }
+        }
+    }
+
+    fn clear_all_persisted_live_limits(&self, account_id: &str) -> bool {
+        let path = self
+            .data_dir
+            .join("accounts")
+            .join(format!("{}.json", account_id));
+        let Ok(_account_write) = crate::modules::account::lock_account_file_updates() else {
+            return false;
+        };
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            return false;
+        };
+        let Ok(mut content) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            return false;
+        };
+        let Some(live_limits) = content
+            .get_mut("live_limited_models")
+            .and_then(|value| value.as_object_mut())
+        else {
+            return false;
+        };
+        if live_limits.is_empty() {
+            return false;
+        }
+        live_limits.clear();
+        let Ok(serialized) = serde_json::to_string_pretty(&content) else {
+            return false;
+        };
+        std::fs::write(path, serialized).is_ok()
     }
 
     /// 标记账号请求成功，重置连续失败计数
@@ -2575,195 +2947,316 @@ impl TokenManager {
         }
     }
 
-    /// 标记账号限流(异步版本,支持实时配额刷新)
-    ///
-    /// 三级降级策略:
-    /// 1. 优先: API 返回 quotaResetDelay → 直接使用
-    /// 2. 次优: 实时刷新配额 → 获取最新 reset_time
-    /// 3. 保底: 使用本地缓存配额 → 读取账号文件
-    /// 4. 兜底: 指数退避策略 → 默认锁定时间
-    ///
-    /// # 参数
-    /// - `email`: 账号邮箱,用于查找账号信息
-    /// - `status`: HTTP 状态码（如 429、500 等）
-    /// - `retry_after_header`: 可选的 Retry-After 响应头
-    /// - `error_body`: 错误响应体,用于解析 quotaResetDelay
-    /// - `model`: 可选的模型名称,用于模型级别限流
+    fn has_explicit_retry_time(
+        parser_mode: TrackerParserMode,
+        retry_after_header: Option<&str>,
+        error_body: &str,
+    ) -> bool {
+        match parser_mode {
+            TrackerParserMode::Current => {
+                crate::proxy::upstream::retry::parse_retry_delay(error_body, retry_after_header)
+                    .is_some()
+            }
+            TrackerParserMode::Baseline => {
+                retry_after_header.is_some() || error_body.contains("quotaResetDelay")
+            }
+        }
+    }
+
+    fn parse_rate_limit_with_mode(
+        &self,
+        account_id: &str,
+        status: u16,
+        retry_after_header: Option<&str>,
+        error_body: &str,
+        model: Option<&str>,
+        backoff_steps: &[u64],
+        parser_mode: TrackerParserMode,
+    ) -> Option<crate::proxy::rate_limit::RateLimitInfo> {
+        match parser_mode {
+            TrackerParserMode::Current => self.rate_limit_tracker.parse_from_error(
+                account_id,
+                status,
+                retry_after_header,
+                error_body,
+                model.map(str::to_string),
+                backoff_steps,
+            ),
+            TrackerParserMode::Baseline => self.rate_limit_tracker.parse_from_error_baseline(
+                account_id,
+                status,
+                retry_after_header,
+                error_body,
+                model.map(str::to_string),
+                backoff_steps,
+            ),
+        }
+    }
+
+    fn record_rate_limit_atomic(
+        &self,
+        account_id: &str,
+        status: u16,
+        retry_after_header: Option<&str>,
+        error_body: &str,
+        model: Option<&str>,
+        backoff_steps: &[u64],
+        parser_mode: TrackerParserMode,
+    ) -> Option<crate::proxy::rate_limit::RateLimitInfo> {
+        if model
+            .and_then(crate::proxy::rate_limit::normalize_image_model_id)
+            .is_some()
+        {
+            match crate::modules::account::lock_account_file_updates() {
+                Ok(_account_write) => {
+                    let info = self.parse_rate_limit_with_mode(
+                        account_id,
+                        status,
+                        retry_after_header,
+                        error_body,
+                        model,
+                        backoff_steps,
+                        parser_mode,
+                    );
+                    if parser_mode == TrackerParserMode::Current {
+                        if let Some(ref info) = info {
+                            self.persist_live_limit_locked(
+                                account_id,
+                                model,
+                                status,
+                                retry_after_header,
+                                error_body,
+                                info,
+                            );
+                        }
+                    }
+                    return info;
+                }
+                Err(error) => {
+                    tracing::debug!(
+                        "Failed to serialize live limit update for {}: {}",
+                        account_id,
+                        error
+                    );
+                }
+            }
+        }
+
+        self.parse_rate_limit_with_mode(
+            account_id,
+            status,
+            retry_after_header,
+            error_body,
+            model,
+            backoff_steps,
+            parser_mode,
+        )
+    }
+
+    /// Register the in-memory image exclusion before releasing its account permit.
+    /// Returns whether a slower quota refresh is still useful after the permit is released.
+    pub async fn mark_rate_limited_fast(
+        &self,
+        email: &str,
+        status: u16,
+        retry_after_header: Option<&str>,
+        error_body: &str,
+        model: Option<&str>,
+    ) -> bool {
+        let normalized_model =
+            model.and_then(crate::proxy::common::model_mapping::normalize_to_standard_id);
+        let model_to_track = normalized_model.as_deref().or(model);
+        let config = self.circuit_breaker_config.read().await.clone();
+        if !config.enabled {
+            return false;
+        }
+
+        let account_id = self
+            .email_to_account_id(email)
+            .unwrap_or_else(|| email.to_string());
+        let has_explicit_retry_time = Self::has_explicit_retry_time(
+            TrackerParserMode::Current,
+            retry_after_header,
+            error_body,
+        );
+        let reason = classify_rate_limit_reason(error_body);
+        let recorded = self.record_rate_limit_atomic(
+            &account_id,
+            status,
+            retry_after_header,
+            error_body,
+            model_to_track,
+            &config.backoff_steps,
+            TrackerParserMode::Current,
+        );
+
+        status == 429
+            && recorded.is_some()
+            && !has_explicit_retry_time
+            && reason == crate::proxy::rate_limit::RateLimitReason::QuotaExhausted
+    }
+
+    pub async fn refresh_quota_lock_after_fast_mark(&self, email: &str, model: Option<&str>) {
+        let normalized_model =
+            model.and_then(crate::proxy::common::model_mapping::normalize_to_standard_id);
+        let model_to_track = normalized_model.as_deref().or(model);
+        let account_id = self
+            .email_to_account_id(email)
+            .unwrap_or_else(|| email.to_string());
+        let reason = crate::proxy::rate_limit::RateLimitReason::QuotaExhausted;
+
+        if self
+            .fetch_and_lock_with_realtime_quota(email, reason, model_to_track.map(str::to_string))
+            .await
+        {
+            tracing::info!("账号 {} 已使用实时配额精确锁定", email);
+            return;
+        }
+        if self.set_precise_lockout(&account_id, reason, model_to_track.map(str::to_string)) {
+            tracing::info!("账号 {} 已使用本地缓存配额锁定", account_id);
+        }
+    }
+
     pub async fn mark_rate_limited_async(
         &self,
         email: &str,
         status: u16,
         retry_after_header: Option<&str>,
         error_body: &str,
-        model: Option<&str>, // 🆕 新增模型参数
+        model: Option<&str>,
     ) {
-        // [FIX #2209] 统一归一化模型名称，确保锁定 Key 与负载均衡检查 Key 一致
-        let normalized_model =
-            model.and_then(|m| crate::proxy::common::model_mapping::normalize_to_standard_id(m));
-        let model_to_track = normalized_model.as_deref().or(model);
+        self.mark_rate_limited_async_with_mode(
+            email,
+            status,
+            retry_after_header,
+            error_body,
+            model,
+            TrackerParserMode::Current,
+        )
+        .await;
+    }
 
-        // [NEW] 检查熔断是否启用
+    pub async fn mark_rate_limited_async_baseline(
+        &self,
+        email: &str,
+        status: u16,
+        retry_after_header: Option<&str>,
+        error_body: &str,
+        model: Option<&str>,
+    ) {
+        self.mark_rate_limited_async_with_mode(
+            email,
+            status,
+            retry_after_header,
+            error_body,
+            model,
+            TrackerParserMode::Baseline,
+        )
+        .await;
+    }
+
+    async fn mark_rate_limited_async_with_mode(
+        &self,
+        email: &str,
+        status: u16,
+        retry_after_header: Option<&str>,
+        error_body: &str,
+        model: Option<&str>,
+        parser_mode: TrackerParserMode,
+    ) {
+        let normalized_model =
+            model.and_then(crate::proxy::common::model_mapping::normalize_to_standard_id);
+        let model_to_track = normalized_model.as_deref().or(model);
         let config = self.circuit_breaker_config.read().await.clone();
         if !config.enabled {
             return;
         }
 
-        // [FIX] Convert email to account_id for consistent tracking
         let account_id = self
             .email_to_account_id(email)
             .unwrap_or_else(|| email.to_string());
-
-        // 检查 API 是否返回了精确的重试时间
-        let has_explicit_retry_time =
-            retry_after_header.is_some() || error_body.contains("quotaResetDelay");
-
-        if has_explicit_retry_time {
-            // API 返回了精确时间(quotaResetDelay),直接使用,无需实时刷新
-            if let Some(m) = model {
-                tracing::debug!(
-                    "账号 {} 的模型 {} 的 429 响应包含 quotaResetDelay,直接使用 API 返回的时间",
-                    account_id,
-                    m
-                );
-            } else {
-                tracing::debug!(
-                    "账号 {} 的 429 响应包含 quotaResetDelay,直接使用 API 返回的时间",
-                    account_id
-                );
-            }
-            self.rate_limit_tracker.parse_from_error(
+        if Self::has_explicit_retry_time(parser_mode, retry_after_header, error_body) {
+            self.record_rate_limit_atomic(
                 &account_id,
                 status,
                 retry_after_header,
                 error_body,
-                model_to_track.map(|s| s.to_string()),
-                &config.backoff_steps, // [NEW] 传入配置
-            );
-            let reason = if error_body.to_lowercase().contains("quota") {
-                crate::proxy::rate_limit::RateLimitReason::QuotaExhausted
-            } else {
-                crate::proxy::rate_limit::RateLimitReason::RateLimitExceeded
-            };
-            self.persist_live_limit(&account_id, model_to_track, status, reason, error_body);
-            return;
-        }
-
-        // 确定限流原因
-        let error_body_lower = error_body.to_lowercase();
-        let generic_resource_exhausted = error_body_lower.contains("resource has been exhausted")
-            || error_body_lower.contains("resource_exhausted");
-        let explicit_quota_exhausted = error_body_lower.contains("quota_exhausted")
-            || error_body_lower.contains("quotaresetdelay")
-            || error_body_lower.contains("quota reset")
-            || error_body_lower.contains("quota limit")
-            || error_body_lower.contains("per day")
-            || error_body_lower.contains("daily quota");
-
-        let reason = if error_body_lower.contains("model_capacity") {
-            crate::proxy::rate_limit::RateLimitReason::ModelCapacityExhausted
-        } else if error_body_lower.contains("per minute")
-            || error_body_lower.contains("rate limit")
-            || error_body_lower.contains("too many requests")
-            || (generic_resource_exhausted && !explicit_quota_exhausted)
-        {
-            crate::proxy::rate_limit::RateLimitReason::RateLimitExceeded
-        } else if explicit_quota_exhausted
-            || error_body_lower.contains("exhausted")
-            || error_body_lower.contains("quota")
-        {
-            crate::proxy::rate_limit::RateLimitReason::QuotaExhausted
-        } else {
-            crate::proxy::rate_limit::RateLimitReason::Unknown
-        };
-
-        if !matches!(
-            reason,
-            crate::proxy::rate_limit::RateLimitReason::QuotaExhausted
-        ) {
-            tracing::info!(
-                "账号 {} 的 {} 响应被识别为 {:?},使用短退避而不是配额重置锁定",
-                account_id,
-                status,
-                reason
-            );
-            self.rate_limit_tracker.parse_from_error(
-                &account_id,
-                status,
-                retry_after_header,
-                error_body,
-                model_to_track.map(|s| s.to_string()),
+                model_to_track,
                 &config.backoff_steps,
+                parser_mode,
             );
-            self.persist_live_limit(&account_id, model_to_track, status, reason, error_body);
             return;
         }
 
-        // API 未返回 quotaResetDelay,需要实时刷新配额获取精确锁定时间
-        if let Some(m) = model_to_track {
-            tracing::info!(
-                "账号 {} 的模型 {} 的 429 响应未包含 quotaResetDelay,尝试实时刷新配额...",
-                account_id,
-                m
+        let reason = classify_rate_limit_reason(error_body);
+        if reason != crate::proxy::rate_limit::RateLimitReason::QuotaExhausted {
+            self.record_rate_limit_atomic(
+                &account_id,
+                status,
+                retry_after_header,
+                error_body,
+                model_to_track,
+                &config.backoff_steps,
+                parser_mode,
             );
-        } else {
-            tracing::info!(
-                "账号 {} 的 429 响应未包含 quotaResetDelay,尝试实时刷新配额...",
-                account_id
-            );
+            return;
         }
 
-        // [FIX] 传入 email 而不是 account_id，因为 fetch_and_lock_with_realtime_quota 期望 email
         if self
-            .fetch_and_lock_with_realtime_quota(
-                email,
-                reason,
-                model_to_track.map(|s| s.to_string()),
-            )
+            .fetch_and_lock_with_realtime_quota(email, reason, model_to_track.map(str::to_string))
             .await
         {
             tracing::info!("账号 {} 已使用实时配额精确锁定", email);
-            self.persist_live_limit(&account_id, model_to_track, status, reason, error_body);
             return;
         }
-
-        // 实时刷新失败,尝试使用本地缓存的配额刷新时间
-        if self.set_precise_lockout(&account_id, reason, model_to_track.map(|s| s.to_string())) {
+        if self.set_precise_lockout(&account_id, reason, model_to_track.map(str::to_string)) {
             tracing::info!("账号 {} 已使用本地缓存配额锁定", account_id);
-            self.persist_live_limit(&account_id, model_to_track, status, reason, error_body);
             return;
         }
 
-        // 都失败了,回退到指数退避策略
         tracing::warn!("账号 {} 无法获取配额刷新时间,使用指数退避策略", account_id);
-        self.rate_limit_tracker.parse_from_error(
+        self.record_rate_limit_atomic(
             &account_id,
             status,
             retry_after_header,
             error_body,
-            model_to_track.map(|s| s.to_string()),
-            &config.backoff_steps, // [NEW] 传入配置
+            model_to_track,
+            &config.backoff_steps,
+            parser_mode,
         );
-        self.persist_live_limit(&account_id, model_to_track, status, reason, error_body);
     }
 
-    fn persist_live_limit(
+    fn persist_live_limit_locked(
         &self,
         account_id: &str,
         model: Option<&str>,
         status: u16,
-        reason: crate::proxy::rate_limit::RateLimitReason,
+        retry_after_header: Option<&str>,
         error_body: &str,
+        info: &crate::proxy::rate_limit::RateLimitInfo,
     ) {
-        let Some(model_key) = model.filter(|m| !m.is_empty()) else {
+        let Some(model_key) = model.and_then(crate::proxy::rate_limit::normalize_image_model_id)
+        else {
             return;
         };
-
-        let wait_sec = self
-            .rate_limit_tracker
-            .get_remaining_wait(account_id, Some(model_key));
-        if wait_sec == 0 {
+        let Some(explicit_delay_ms) =
+            crate::proxy::upstream::retry::parse_retry_delay(error_body, retry_after_header)
+        else {
+            return;
+        };
+        if status != 429
+            || info.reason != crate::proxy::rate_limit::RateLimitReason::QuotaExhausted
+            || info.retry_after_sec <= 300
+            || !crate::proxy::rate_limit::has_explicit_quota_exhausted(error_body)
+        {
             return;
         }
+        let (Some(until), Some(detected_at)) = (
+            unix_timestamp_ceil(info.reset_time),
+            unix_timestamp_ceil(info.detected_at),
+        ) else {
+            return;
+        };
 
         let path = if let Some(entry) = self.tokens.get(account_id) {
             entry.account_path.clone()
@@ -2788,25 +3281,33 @@ impl TokenManager {
             content["live_limited_models"] = serde_json::Value::Object(serde_json::Map::new());
         }
 
-        let now = chrono::Utc::now().timestamp();
-        content["live_limited_models"][model_key] = serde_json::json!({
+        content["live_limited_models"][&model_key] = serde_json::json!({
             "model": model_key,
             "status": status,
-            "reason": format!("{:?}", reason),
-            "until": now + wait_sec as i64,
-            "detected_at": now,
-            "message": truncate_reason(error_body, 500),
+            "reason": format!("{:?}", info.reason),
+            "until": until,
+            "detected_at": detected_at,
+            "message": format!(
+                "QUOTA_EXHAUSTED; retry after {}ms; {}",
+                explicit_delay_ms,
+                truncate_reason(error_body, 400)
+            ),
         });
 
-        if let Err(e) = std::fs::write(&path, serde_json::to_string_pretty(&content).unwrap()) {
+        let Ok(serialized) = serde_json::to_string_pretty(&content) else {
+            return;
+        };
+        if let Err(e) = std::fs::write(&path, serialized) {
             tracing::debug!("Failed to persist live limit for {}: {}", account_id, e);
         }
     }
 
-    pub async fn clear_persisted_live_limit(&self, account_id: &str, model: Option<&str>) {
-        let Some(model_key) = model.filter(|m| !m.is_empty()) else {
+    pub fn clear_persisted_live_limit(&self, account_id: &str, model: Option<&str>) {
+        let Some(raw_model) = model.filter(|m| !m.is_empty()) else {
             return;
         };
+        let model_key = crate::proxy::common::model_mapping::normalize_to_standard_id(raw_model)
+            .unwrap_or_else(|| raw_model.to_string());
 
         let path = if let Some(entry) = self.tokens.get(account_id) {
             entry.account_path.clone()
@@ -2816,8 +3317,20 @@ impl TokenManager {
                 .join(format!("{}.json", account_id))
         };
 
-        let Ok(raw) = std::fs::read_to_string(&path) else {
+        let Ok(_account_write) = crate::modules::account::lock_account_file_updates() else {
             return;
+        };
+
+        let raw = match std::fs::read_to_string(&path) {
+            Ok(raw) => raw,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                self.rate_limit_tracker.clear_model(account_id, &model_key);
+                return;
+            }
+            Err(error) => {
+                tracing::debug!("Failed to read live limit for {}: {}", account_id, error);
+                return;
+            }
         };
         let Ok(mut content) = serde_json::from_str::<serde_json::Value>(&raw) else {
             return;
@@ -2827,18 +3340,25 @@ impl TokenManager {
             .get_mut("live_limited_models")
             .and_then(|value| value.as_object_mut())
         else {
+            self.rate_limit_tracker.clear_model(account_id, &model_key);
             return;
         };
 
-        live_limits.remove(model_key);
-        if model_key.contains("image") {
-            live_limits.remove("gemini-3.1-flash-image");
-            live_limits.remove("gemini-3-pro-image");
+        let mut changed = live_limits.remove(&model_key).is_some();
+        if model_key != raw_model {
+            changed |= live_limits.remove(raw_model).is_some();
         }
 
-        if let Err(e) = std::fs::write(&path, serde_json::to_string_pretty(&content).unwrap()) {
-            tracing::debug!("Failed to clear live limit for {}: {}", account_id, e);
+        if changed {
+            let Ok(serialized) = serde_json::to_string_pretty(&content) else {
+                return;
+            };
+            if let Err(error) = std::fs::write(&path, serialized) {
+                tracing::debug!("Failed to clear live limit for {}: {}", account_id, error);
+                return;
+            }
         }
+        self.rate_limit_tracker.clear_model(account_id, &model_key);
     }
 
     // ===== 调度配置相关方法 =====
@@ -3105,17 +3625,6 @@ impl TokenManager {
             return Err(format!("Account file not found: {:?}", path));
         }
 
-        let content = std::fs::read_to_string(&path)
-            .map_err(|e| format!("Failed to read account file: {}", e))?;
-
-        let mut account: serde_json::Value = serde_json::from_str(&content)
-            .map_err(|e| format!("Failed to parse account JSON: {}", e))?;
-
-        account["validation_blocked"] = serde_json::Value::Bool(true);
-        account["validation_blocked_until"] =
-            serde_json::Value::Number(serde_json::Number::from(block_until));
-        account["validation_blocked_reason"] = serde_json::Value::String(reason.to_string());
-
         // [NEW] 尝试从消息中提取验证链接 (#1522)
         let extracted_url = if let Ok(parsed_json) =
             serde_json::from_str::<serde_json::Value>(reason)
@@ -3149,21 +3658,26 @@ impl TokenManager {
             })
         };
 
-        if let Some(url) = extracted_url {
-            account["validation_url"] = serde_json::Value::String(url.clone());
+        if let Some(ref url) = extracted_url {
             if let Some(mut token) = self.tokens.get_mut(account_id) {
-                token.validation_url = Some(url);
+                token.validation_url = Some(url.clone());
             }
         }
 
+        let reason_owned = reason.to_string();
+        update_account_json(&path, move |account| {
+            account["validation_blocked"] = serde_json::Value::Bool(true);
+            account["validation_blocked_until"] =
+                serde_json::Value::Number(serde_json::Number::from(block_until));
+            account["validation_blocked_reason"] = serde_json::Value::String(reason_owned);
+            if let Some(url) = extracted_url {
+                account["validation_url"] = serde_json::Value::String(url);
+            }
+        })
+        .await?;
+
         // Clear sticky session if blocked
         self.session_accounts.retain(|_, v| *v != account_id);
-
-        let json_str = serde_json::to_string_pretty(&account)
-            .map_err(|e| format!("Failed to serialize account JSON: {}", e))?;
-
-        std::fs::write(&path, json_str)
-            .map_err(|e| format!("Failed to write account file: {}", e))?;
 
         tracing::info!(
             "🚫 Account {} validation blocked until {} (reason: {})",
@@ -3241,7 +3755,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_reload_account_purges_cache_when_account_becomes_proxy_disabled() {
+    async fn task_reload_account_preserves_live_limit_and_syncs_disabled_state() {
         let tmp_root = std::env::temp_dir().join(format!(
             "antigravity-token-manager-test-{}",
             uuid::Uuid::new_v4()
@@ -3250,6 +3764,7 @@ mod tests {
         std::fs::create_dir_all(&accounts_dir).unwrap();
 
         let account_id = "acc1";
+        let model = "gemini-3-pro-image";
         let email = "a@test.com";
         let now = chrono::Utc::now().timestamp();
         let account_path = accounts_dir.join(format!("{}.json", account_id));
@@ -3266,7 +3781,33 @@ mod tests {
             "disabled": false,
             "proxy_disabled": false,
             "created_at": now,
-            "last_used": now
+            "last_used": now,
+            "live_limited_models": {
+                model: {
+                    "model": model,
+                    "status": 429,
+                    "reason": "QuotaExhausted",
+                    "until": now + 7200,
+                    "detected_at": now,
+                    "message": "{\"error\":{\"details\":[{\"reason\":\"QUOTA_EXHAUSTED\",\"metadata\":{\"quotaResetDelay\":\"2h\"}}]}}"
+                },
+                "gemini-3.1-flash-image": {
+                    "model": "gemini-3.1-flash-image",
+                    "status": 429,
+                    "reason": "QuotaExhausted",
+                    "until": now + 7200,
+                    "detected_at": now,
+                    "message": "QUOTA_EXHAUSTED"
+                },
+                "gemini-2.5-pro": {
+                    "model": "gemini-2.5-pro",
+                    "status": 429,
+                    "reason": "QuotaExhausted",
+                    "until": now + 7200,
+                    "detected_at": now,
+                    "message": "QUOTA_EXHAUSTED; reset after 2h"
+                }
+            }
         });
         std::fs::write(
             &account_path,
@@ -3277,6 +3818,40 @@ mod tests {
         let manager = TokenManager::new(tmp_root.clone());
         manager.load_accounts().await.unwrap();
         assert!(manager.tokens.get(account_id).is_some());
+        assert!(manager
+            .rate_limit_tracker
+            .is_rate_limited(account_id, Some(model)));
+        assert!(!manager
+            .rate_limit_tracker
+            .is_rate_limited(account_id, Some("gemini-3.1-flash-image")));
+        assert!(!manager
+            .rate_limit_tracker
+            .is_rate_limited(account_id, Some("gemini-2.5-pro")));
+
+        let temporary_model = "gemini-3.1-flash-image";
+        manager.rate_limit_tracker.parse_from_error(
+            account_id,
+            429,
+            Some("60"),
+            "temporary rate limit",
+            Some(temporary_model.to_string()),
+            &[60, 300],
+        );
+        assert!(manager
+            .rate_limit_tracker
+            .is_rate_limited(account_id, Some(temporary_model)));
+        assert!(manager.clear_rate_limit_memory(account_id));
+        assert!(!manager
+            .rate_limit_tracker
+            .is_rate_limited(account_id, Some(model)));
+
+        manager.reload_account(account_id).await.unwrap();
+        assert!(manager
+            .rate_limit_tracker
+            .is_rate_limited(account_id, Some(model)));
+        assert!(!manager
+            .rate_limit_tracker
+            .is_rate_limited(account_id, Some(temporary_model)));
 
         // Prime extra caches to ensure remove_account() is really called.
         manager
@@ -3303,6 +3878,312 @@ mod tests {
         assert!(manager.tokens.get(account_id).is_none());
         assert!(manager.session_accounts.get("sid1").is_none());
         assert!(manager.preferred_account_id.read().await.is_none());
+
+        disabled_json["proxy_disabled"] = serde_json::Value::Bool(false);
+        std::fs::write(
+            &account_path,
+            serde_json::to_string_pretty(&disabled_json).unwrap(),
+        )
+        .unwrap();
+        manager.reload_account(account_id).await.unwrap();
+        assert!(manager
+            .rate_limit_tracker
+            .is_rate_limited(account_id, Some(model)));
+
+        let restarted = TokenManager::new(tmp_root.clone());
+        restarted.load_accounts().await.unwrap();
+        assert!(restarted
+            .rate_limit_tracker
+            .is_rate_limited(account_id, Some(model)));
+
+        let _ = std::fs::remove_dir_all(&tmp_root);
+    }
+
+    #[tokio::test]
+    async fn task_account_json_update_preserves_live_limits() {
+        let tmp_root = std::env::temp_dir().join(format!(
+            "antigravity-account-update-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let accounts_dir = tmp_root.join("accounts");
+        std::fs::create_dir_all(&accounts_dir).unwrap();
+        let account_id = "acc-update";
+        let account_path = accounts_dir.join(format!("{}.json", account_id));
+        let live_limit = serde_json::json!({
+            "model": "gemini-3-pro-image",
+            "status": 429,
+            "reason": "QuotaExhausted",
+            "until": chrono::Utc::now().timestamp() + 7200,
+            "detected_at": chrono::Utc::now().timestamp(),
+            "message": "QUOTA_EXHAUSTED; reset after 2h"
+        });
+        std::fs::write(
+            &account_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "id": account_id,
+                "live_limited_models": {
+                    "gemini-3-pro-image": live_limit
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let manager = TokenManager::new(tmp_root.clone());
+        manager.disable_account(account_id, "test").await.unwrap();
+
+        let updated: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&account_path).unwrap()).unwrap();
+        assert_eq!(
+            updated["live_limited_models"]["gemini-3-pro-image"],
+            live_limit
+        );
+        assert_eq!(updated["disabled"], true);
+
+        let mut account_snapshot = updated;
+        assert!(manager
+            .trigger_quota_protection(
+                &mut account_snapshot,
+                account_id,
+                &account_path,
+                0,
+                10,
+                "gemini-3-flash",
+            )
+            .await
+            .unwrap());
+        assert!(manager
+            .restore_quota_protection(
+                &mut account_snapshot,
+                account_id,
+                &account_path,
+                "gemini-3-flash",
+            )
+            .await
+            .unwrap());
+
+        account_snapshot["proxy_disabled"] = serde_json::Value::Bool(true);
+        account_snapshot["proxy_disabled_reason"] =
+            serde_json::Value::String("quota_protection".to_string());
+        let quota = serde_json::json!({
+            "models": [{ "name": "gemini-3-flash", "percentage": 0 }]
+        });
+        let config = crate::models::QuotaProtectionConfig {
+            enabled: true,
+            threshold_percentage: 10,
+            monitored_models: vec!["gemini-3-flash".to_string()],
+        };
+        manager
+            .check_and_restore_quota(&mut account_snapshot, &account_path, &quota, &config)
+            .await;
+
+        update_account_json(&account_path, |latest| {
+            latest["validation_blocked"] = serde_json::Value::Bool(true);
+            latest["validation_blocked_until"] =
+                serde_json::Value::Number((chrono::Utc::now().timestamp() - 1).into());
+            latest["validation_blocked_reason"] = serde_json::Value::String("expired".to_string());
+        })
+        .await
+        .unwrap();
+        manager.load_single_account(&account_path).await.unwrap();
+
+        let updated: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&account_path).unwrap()).unwrap();
+        assert_eq!(
+            updated["live_limited_models"]["gemini-3-pro-image"],
+            live_limit
+        );
+        assert_eq!(updated["validation_blocked"], false);
+        assert_eq!(
+            updated["protected_models"],
+            serde_json::json!(["gemini-3-flash"])
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp_root);
+    }
+
+    #[tokio::test]
+    async fn task_image_selection_respects_queue_deadline() {
+        let result = wait_for_image_token_selection(
+            tokio::time::Instant::now() + std::time::Duration::from_millis(20),
+            std::future::pending::<()>(),
+        )
+        .await;
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn task_image_queue_reselects_without_scheduler_notification() {
+        let (_sender, mut changes) = tokio::sync::watch::channel(0);
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            wait_for_image_account_change(&mut changes, std::time::Duration::from_secs(1)),
+        )
+        .await;
+        assert_eq!(result, Ok(true));
+    }
+
+    #[tokio::test]
+    async fn task_short_limit_buffer_reselects_without_blocking_runtime() {
+        let tmp_root = std::env::temp_dir().join(format!(
+            "antigravity-short-limit-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let accounts_dir = tmp_root.join("accounts");
+        std::fs::create_dir_all(&accounts_dir).unwrap();
+        let account_id = "acc-short-limit";
+        let model = "gemini-3-flash";
+        let now = chrono::Utc::now().timestamp();
+        std::fs::write(
+            accounts_dir.join(format!("{}.json", account_id)),
+            serde_json::to_string_pretty(&serde_json::json!({
+                "id": account_id,
+                "email": "short-limit@test.com",
+                "token": {
+                    "access_token": "atk",
+                    "refresh_token": "rtk",
+                    "expires_in": 3600,
+                    "expiry_timestamp": now + 3600,
+                    "project_id": "pid"
+                },
+                "quota": {
+                    "models": [{ "name": model, "percentage": 100 }]
+                },
+                "disabled": false,
+                "proxy_disabled": false,
+                "created_at": now,
+                "last_used": now
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let manager = TokenManager::new(tmp_root.clone());
+        manager.load_accounts().await.unwrap();
+        manager.rate_limit_tracker.parse_from_error(
+            account_id,
+            429,
+            Some("1"),
+            r#"{"error":{"details":[{"reason":"QUOTA_EXHAUSTED"}]}}"#,
+            Some(model.to_string()),
+            &[60, 300],
+        );
+
+        let selected = tokio::time::timeout(
+            std::time::Duration::from_secs(4),
+            manager.get_token("gemini", false, None, model),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(selected.3, account_id);
+        assert!(!manager.is_rate_limited(account_id, Some(model)).await);
+
+        let _ = std::fs::remove_dir_all(&tmp_root);
+    }
+
+    #[tokio::test]
+    async fn task_concurrent_image_limits_persist_and_clear_exact_bucket() {
+        let tmp_root = std::env::temp_dir().join(format!(
+            "antigravity-live-limit-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let accounts_dir = tmp_root.join("accounts");
+        std::fs::create_dir_all(&accounts_dir).unwrap();
+        let account_id = "acc-concurrent";
+        let account_path = accounts_dir.join(format!("{}.json", account_id));
+        std::fs::write(
+            &account_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "id": account_id,
+                "email": "concurrent@test.com",
+                "live_limited_models": {}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let manager = TokenManager::new(tmp_root.clone());
+        let body = r#"{"error":{"details":[{"reason":"QUOTA_EXHAUSTED","metadata":{"quotaResetDelay":"72h"}}]}}"#;
+        assert!(!manager
+            .mark_rate_limited_fast(
+                account_id,
+                429,
+                None,
+                body,
+                Some("gemini-3.1-flash-image"),
+            )
+            .await);
+        assert!(manager
+            .rate_limit_tracker
+            .is_rate_limited(account_id, Some("gemini-3.1-flash-image")));
+        let persisted: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&account_path).unwrap()).unwrap();
+        let flash_limit = &persisted["live_limited_models"]["gemini-3.1-flash-image"];
+        assert_eq!(flash_limit["status"], 429);
+        assert!(
+            flash_limit["until"].as_i64().unwrap() - chrono::Utc::now().timestamp() > 71 * 3600
+        );
+
+        manager.clear_persisted_live_limit(account_id, Some("gemini-3.1-flash-image-4k"));
+        std::thread::scope(|scope| {
+            for model in ["gemini-3.1-flash-image", "gemini-3-pro-image"] {
+                let manager = &manager;
+                scope.spawn(move || {
+                    manager.record_rate_limit_atomic(
+                        account_id,
+                        429,
+                        None,
+                        body,
+                        Some(model),
+                        &[60, 300],
+                        TrackerParserMode::Current,
+                    );
+                });
+            }
+        });
+
+        let persisted: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&account_path).unwrap()).unwrap();
+        let limits = persisted["live_limited_models"].as_object().unwrap();
+        assert!(limits.contains_key("gemini-3.1-flash-image"));
+        assert!(limits.contains_key("gemini-3-pro-image"));
+
+        manager.clear_persisted_live_limit(account_id, Some("gemini-3.1-flash-image-4k"));
+        let persisted: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&account_path).unwrap()).unwrap();
+        let limits = persisted["live_limited_models"].as_object().unwrap();
+        assert!(!limits.contains_key("gemini-3.1-flash-image"));
+        assert!(limits.contains_key("gemini-3-pro-image"));
+
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                manager.record_rate_limit_atomic(
+                    account_id,
+                    429,
+                    None,
+                    body,
+                    Some("gemini-3-pro-image"),
+                    &[60, 300],
+                    TrackerParserMode::Current,
+                );
+            });
+            scope.spawn(|| {
+                manager.clear_persisted_live_limit(account_id, Some("gemini-3-pro-image"));
+            });
+        });
+        let persisted: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&account_path).unwrap()).unwrap();
+        let disk_has_limit = persisted["live_limited_models"]
+            .as_object()
+            .unwrap()
+            .contains_key("gemini-3-pro-image");
+        assert_eq!(
+            disk_has_limit,
+            manager
+                .rate_limit_tracker
+                .is_rate_limited(account_id, Some("gemini-3-pro-image"))
+        );
 
         let _ = std::fs::remove_dir_all(&tmp_root);
     }

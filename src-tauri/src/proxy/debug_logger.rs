@@ -5,6 +5,64 @@ use tokio::fs;
 
 use crate::proxy::config::DebugLoggingConfig;
 
+const DEBUG_STREAM_HEAD_BYTES: usize = 256 * 1024;
+const DEBUG_STREAM_TAIL_BYTES: usize = 256 * 1024;
+
+struct BoundedStreamCapture {
+    head: Vec<u8>,
+    tail: Vec<u8>,
+    total_bytes: usize,
+}
+
+impl BoundedStreamCapture {
+    fn new() -> Self {
+        Self {
+            head: Vec::with_capacity(DEBUG_STREAM_HEAD_BYTES),
+            tail: Vec::with_capacity(DEBUG_STREAM_TAIL_BYTES),
+            total_bytes: 0,
+        }
+    }
+
+    fn push(&mut self, bytes: &[u8]) {
+        self.total_bytes = self.total_bytes.saturating_add(bytes.len());
+        let head_len = (DEBUG_STREAM_HEAD_BYTES - self.head.len()).min(bytes.len());
+        self.head.extend_from_slice(&bytes[..head_len]);
+        let remaining = &bytes[head_len..];
+        if remaining.len() >= DEBUG_STREAM_TAIL_BYTES {
+            self.tail.clear();
+            self.tail
+                .extend_from_slice(&remaining[remaining.len() - DEBUG_STREAM_TAIL_BYTES..]);
+        } else if !remaining.is_empty() {
+            let overflow = self
+                .tail
+                .len()
+                .saturating_add(remaining.len())
+                .saturating_sub(DEBUG_STREAM_TAIL_BYTES);
+            if overflow > 0 {
+                self.tail.drain(..overflow);
+            }
+            self.tail.extend_from_slice(remaining);
+        }
+    }
+
+    fn truncated(&self) -> bool {
+        self.total_bytes > self.head.len() + self.tail.len()
+    }
+
+    fn bounded_bytes(&self) -> Vec<u8> {
+        let marker = b"\n...[debug stream truncated]...\n";
+        let mut bytes = Vec::with_capacity(
+            self.head.len() + self.tail.len() + usize::from(self.truncated()) * marker.len(),
+        );
+        bytes.extend_from_slice(&self.head);
+        if self.truncated() {
+            bytes.extend_from_slice(marker);
+        }
+        bytes.extend_from_slice(&self.tail);
+        bytes
+    }
+}
+
 fn build_filename(prefix: &str, trace_id: Option<&str>) -> String {
     let ts = chrono::Utc::now().format("%Y%m%d_%H%M%S%.3f");
     let tid = trace_id.unwrap_or("unknown");
@@ -186,16 +244,16 @@ where
     }
 
     let wrapped = async_stream::stream! {
-        let mut collected: Vec<u8> = Vec::new();
+        let mut capture = BoundedStreamCapture::new();
         let mut inner = stream;
         while let Some(item) = inner.next().await {
             if let Ok(bytes) = &item {
-                collected.extend_from_slice(bytes);
+                capture.push(bytes);
             }
             yield item;
         }
 
-        let raw_text = String::from_utf8_lossy(&collected).to_string();
+        let raw_text = String::from_utf8_lossy(&capture.bounded_bytes()).to_string();
         let (thinking_content, response_content) = parse_sse_stream(&raw_text);
 
         let mut payload = serde_json::json!({
@@ -203,6 +261,8 @@ where
             "trace_id": trace_id,
             "meta": meta,
             "raw_stream": raw_text,
+            "raw_stream_bytes": capture.total_bytes,
+            "truncated": capture.truncated(),
         });
 
         // 只有在有内容时才添加对应字段
@@ -217,4 +277,58 @@ where
     };
 
     Box::pin(wrapped)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::{stream, StreamExt};
+
+    #[tokio::test]
+    async fn debug_stream_capture_is_bounded_and_forwarding_is_unchanged() {
+        let data = bytes::Bytes::from(vec![b'A'; 1024 * 1024]);
+        let output_dir = std::env::temp_dir().join(format!(
+            "antigravity-debug-stream-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let cfg = DebugLoggingConfig {
+            enabled: true,
+            output_dir: Some(output_dir.to_string_lossy().into_owned()),
+        };
+        let wrapped = wrap_stream_with_debug(
+            Box::pin(stream::iter(vec![Ok::<_, String>(data.clone())])),
+            cfg,
+            "bounded-stream".to_string(),
+            "test_stream",
+            serde_json::json!({}),
+        );
+        let forwarded = wrapped
+            .map(|item| item.expect("forwarded chunk"))
+            .collect::<Vec<_>>()
+            .await;
+        assert_eq!(forwarded, vec![data]);
+
+        let exchange_dir = output_dir.join("debug_exchanges");
+        let mut entries = tokio::fs::read_dir(&exchange_dir)
+            .await
+            .expect("debug log dir");
+        let path = entries
+            .next_entry()
+            .await
+            .expect("read debug entry")
+            .expect("debug entry")
+            .path();
+        let payload: Value =
+            serde_json::from_slice(&tokio::fs::read(path).await.expect("read debug payload"))
+                .expect("debug json");
+        assert_eq!(payload["raw_stream_bytes"], 1024 * 1024);
+        assert_eq!(payload["truncated"], true);
+        assert!(
+            payload["raw_stream"].as_str().unwrap().len()
+                <= DEBUG_STREAM_HEAD_BYTES + DEBUG_STREAM_TAIL_BYTES + 64
+        );
+        tokio::fs::remove_dir_all(output_dir)
+            .await
+            .expect("remove test debug dir");
+    }
 }

@@ -17,16 +17,250 @@ use crate::proxy::server::AppState;
 use crate::proxy::upstream::client::mask_email;
 
 const MAX_RETRY_ATTEMPTS: usize = 3;
+const MAX_INPUT_IMAGES: usize = 16;
+const MAX_INPUT_IMAGE_BYTES: usize = 20 * 1024 * 1024;
+const MAX_TOTAL_INPUT_IMAGE_BYTES: usize = 32 * 1024 * 1024;
 const CODEX_VISIBLE_THOUGHT_MESSAGE_PREFIX: &str = "msg_thought_";
 use super::common::{
-    apply_retry_strategy, determine_retry_strategy, should_rotate_account, RetryStrategy,
+    apply_retry_strategy, next_rotation_attempt, should_rotate_account, FailureStatusTracker,
+    RequestRetryState, RetryStrategy,
 };
 use crate::modules::account;
 use crate::proxy::common::client_adapter::CLIENT_ADAPTERS; // [NEW] Adapter Registry
 use crate::proxy::session_manager::SessionManager;
 use axum::http::HeaderMap;
 use std::collections::VecDeque;
+use std::io;
+use tokio::task::JoinSet;
 use tokio::time::Duration;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct NormalizedInputImage {
+    mime_type: String,
+    base64_data: String,
+    decoded_len: usize,
+}
+
+fn validate_input_image_limits(
+    image_count: usize,
+    image_bytes: usize,
+    total_bytes: usize,
+) -> Result<(), String> {
+    if image_count > MAX_INPUT_IMAGES {
+        return Err(format!(
+            "Too many input images: maximum is {}",
+            MAX_INPUT_IMAGES
+        ));
+    }
+    if image_bytes > MAX_INPUT_IMAGE_BYTES {
+        return Err(format!(
+            "Input image is too large: maximum decoded size is {} bytes",
+            MAX_INPUT_IMAGE_BYTES
+        ));
+    }
+    if total_bytes > MAX_TOTAL_INPUT_IMAGE_BYTES {
+        return Err(format!(
+            "Total input image data is too large: maximum decoded size is {} bytes",
+            MAX_TOTAL_INPUT_IMAGE_BYTES
+        ));
+    }
+    Ok(())
+}
+
+fn normalized_image_from_bytes(
+    bytes: &[u8],
+    mime_type: &str,
+    image_count: usize,
+    total_bytes: usize,
+) -> Result<NormalizedInputImage, String> {
+    let next_total = total_bytes.saturating_add(bytes.len());
+    validate_input_image_limits(image_count, bytes.len(), next_total)?;
+    Ok(NormalizedInputImage {
+        mime_type: mime_type.to_string(),
+        base64_data: base64::engine::general_purpose::STANDARD.encode(bytes),
+        decoded_len: bytes.len(),
+    })
+}
+
+fn parse_image_data_url(
+    data_url: &str,
+    image_count: usize,
+    total_bytes: usize,
+) -> Result<NormalizedInputImage, String> {
+    let (mime_type, encoded) = parse_image_data_url_parts(data_url)?;
+
+    let max_encoded_len = MAX_INPUT_IMAGE_BYTES.div_ceil(3).saturating_mul(4);
+    if encoded.len() > max_encoded_len {
+        return Err(format!(
+            "Input image is too large: maximum decoded size is {} bytes",
+            MAX_INPUT_IMAGE_BYTES
+        ));
+    }
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|_| "Input image contains invalid base64 data".to_string())?;
+    normalized_image_from_bytes(&decoded, mime_type, image_count, total_bytes)
+}
+
+fn parse_image_data_url_parts(data_url: &str) -> Result<(&str, &str), String> {
+    let (metadata, encoded) = data_url
+        .strip_prefix("data:")
+        .and_then(|value| value.split_once(','))
+        .ok_or_else(|| "Input image must be a base64 data:image URL".to_string())?;
+    let mut metadata_parts = metadata.split(';');
+    let mime_type = metadata_parts.next().unwrap_or_default();
+    if !mime_type.starts_with("image/") || mime_type.len() <= "image/".len() {
+        return Err("Input image data URL must use an image MIME type".to_string());
+    }
+    if !metadata_parts.any(|part| part.eq_ignore_ascii_case("base64")) {
+        return Err("Input image data URL must be base64 encoded".to_string());
+    }
+    if encoded.is_empty() {
+        return Err("Input image data URL is empty".to_string());
+    }
+    Ok((mime_type, encoded))
+}
+
+fn parse_generation_input_images(
+    image: Option<&Value>,
+) -> Result<Vec<NormalizedInputImage>, String> {
+    let Some(image) = image else {
+        return Ok(Vec::new());
+    };
+
+    let urls: Vec<&str> = match image {
+        Value::String(url) => vec![url.as_str()],
+        Value::Array(urls) if urls.is_empty() => {
+            return Err("Input image array must not be empty".to_string())
+        }
+        Value::Array(urls) => urls
+            .iter()
+            .map(|url| {
+                url.as_str()
+                    .ok_or_else(|| "Every input image must be a base64 data:image URL".to_string())
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        _ => return Err("Input image must be a string or an array of strings".to_string()),
+    };
+
+    validate_input_image_limits(urls.len(), 0, 0)?;
+    let mut images = Vec::with_capacity(urls.len());
+    let mut total_bytes = 0;
+    for url in urls {
+        let image = parse_image_data_url(url, images.len() + 1, total_bytes)?;
+        total_bytes = total_bytes.saturating_add(image.decoded_len);
+        images.push(image);
+    }
+    Ok(images)
+}
+
+fn generation_image_size_param(body: &Value) -> Result<Option<&str>, String> {
+    for key in ["image_size", "imageSize"] {
+        let Some(value) = body.get(key) else {
+            continue;
+        };
+        if value.is_null() {
+            continue;
+        }
+        return value
+            .as_str()
+            .map(Some)
+            .ok_or_else(|| "Invalid image_size: expected one of 1K, 2K, 4K, or auto".to_string());
+    }
+    Ok(None)
+}
+
+fn is_edit_image_field(name: &str) -> bool {
+    name == "image"
+        || name == "image[]"
+        || name.strip_prefix("image").is_some_and(|suffix| {
+            !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
+        })
+}
+
+fn edit_size_input<'a>(aspect_ratio: Option<&'a str>, size: Option<&'a str>) -> Option<&'a str> {
+    aspect_ratio
+        .filter(|value| {
+            crate::proxy::mappers::common_utils::image_aspect_ratio_from_size(value).is_some()
+        })
+        .or_else(|| {
+            size.filter(|value| {
+                crate::proxy::mappers::common_utils::image_aspect_ratio_from_size(value).is_some()
+            })
+        })
+}
+
+fn image_account_selection_target(model_to_use: &str) -> &str {
+    model_to_use
+}
+
+fn image_inline_part(image: &NormalizedInputImage) -> Value {
+    json!({
+        "inlineData": {
+            "mimeType": image.mime_type,
+            "data": image.base64_data
+        }
+    })
+}
+
+fn build_image_contents(
+    prompt: String,
+    input_images: &[NormalizedInputImage],
+    mask: Option<&NormalizedInputImage>,
+) -> Vec<Value> {
+    let mut parts = Vec::with_capacity(1 + input_images.len() + usize::from(mask.is_some()));
+    parts.push(json!({ "text": prompt }));
+    for (index, image) in input_images.iter().enumerate() {
+        parts.push(image_inline_part(image));
+        if index == 0 {
+            if let Some(mask) = mask {
+                parts.push(image_inline_part(mask));
+            }
+        }
+    }
+    if input_images.is_empty() {
+        if let Some(mask) = mask {
+            parts.push(image_inline_part(mask));
+        }
+    }
+    parts
+}
+
+fn build_image_edit_body(
+    project_id: String,
+    resolved_model: &str,
+    contents_parts: Vec<Value>,
+    image_config: Value,
+) -> Value {
+    json!({
+        "project": project_id,
+        "requestId": format!("img-edit-{}", uuid::Uuid::new_v4()),
+        "model": resolved_model,
+        "userAgent": "antigravity",
+        "requestType": "image_gen",
+        "request": {
+            "contents": [{
+                "role": "user",
+                "parts": contents_parts
+            }],
+            "generationConfig": {
+                "candidateCount": 1,
+                "imageConfig": image_config,
+                "maxOutputTokens": 8192,
+                "stopSequences": [],
+                "temperature": 1.0,
+                "topP": 0.95,
+                "topK": 40
+            },
+            "safetySettings": [
+                { "category": "HARM_CATEGORY_HARASSMENT", "threshold": "OFF" },
+                { "category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "OFF" },
+                { "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "OFF" },
+                { "category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "OFF" },
+            ]
+        }
+    })
+}
 
 /// Return true only when a streamed chunk contains an actual error event.
 ///
@@ -49,6 +283,66 @@ fn stream_chunk_has_error_event(bytes: &[u8]) -> bool {
     })
 }
 
+fn response_has_inline_image_data(value: &Value) -> bool {
+    let response = value.get("response").unwrap_or(value);
+    response
+        .get("candidates")
+        .and_then(Value::as_array)
+        .is_some_and(|candidates| {
+            candidates.iter().any(|candidate| {
+                candidate
+                    .get("content")
+                    .and_then(|content| content.get("parts"))
+                    .and_then(Value::as_array)
+                    .is_some_and(|parts| {
+                        parts.iter().any(|part| {
+                            part.get("inlineData")
+                                .or_else(|| part.get("inline_data"))
+                                .and_then(|image| image.get("data"))
+                                .and_then(Value::as_str)
+                                .is_some_and(|data| !data.is_empty())
+                        })
+                    })
+            })
+        })
+}
+
+fn text_has_nonempty_image_data_url(text: &str) -> bool {
+    let mut remaining = text;
+    while let Some(start) = remaining.find("data:image/") {
+        let candidate = &remaining[start..];
+        if let Some((_, encoded)) = candidate.split_once(";base64,") {
+            if encoded.chars().next().is_some_and(|first| {
+                !first.is_whitespace() && !matches!(first, '"' | '\\' | ')' | ']' | '}')
+            }) {
+                return true;
+            }
+        }
+        remaining = &candidate["data:image/".len()..];
+    }
+    false
+}
+
+fn value_has_nonempty_image_data_url(value: &Value) -> bool {
+    match value {
+        Value::String(text) => text_has_nonempty_image_data_url(text),
+        Value::Array(values) => values.iter().any(value_has_nonempty_image_data_url),
+        Value::Object(values) => values.values().any(value_has_nonempty_image_data_url),
+        _ => false,
+    }
+}
+
+fn stream_chunk_has_image_data(bytes: &[u8]) -> bool {
+    String::from_utf8_lossy(bytes).lines().any(|line| {
+        let Some(data) = line.trim_start().strip_prefix("data:") else {
+            return false;
+        };
+        serde_json::from_str::<Value>(data.trim())
+            .ok()
+            .is_some_and(|payload| value_has_nonempty_image_data_url(&payload))
+    })
+}
+
 fn responses_input_item_type(item: &Value) -> &str {
     item.get("type")
         .and_then(Value::as_str)
@@ -56,55 +350,397 @@ fn responses_input_item_type(item: &Value) -> &str {
         .unwrap_or("")
 }
 
-fn responses_message_parts(item: &Value) -> (Vec<String>, Vec<Value>) {
-    let mut text_parts = Vec::new();
-    let mut image_parts = Vec::new();
+fn push_responses_content_part(
+    mut part: Value,
+    text_parts: &mut Vec<String>,
+    media_parts: &mut Vec<Value>,
+) -> Result<(), Value> {
+    let part_type = part
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    if let Some(Value::String(text)) = part.as_object_mut().and_then(|obj| obj.remove("text")) {
+        text_parts.push(text);
+        Ok(())
+    } else if part_type == "input_image" {
+        if let Some(Value::String(image_url)) =
+            part.as_object_mut().and_then(|obj| obj.remove("image_url"))
+        {
+            media_parts.push(json!({
+                "type": "image_url",
+                "image_url": { "url": image_url }
+            }));
+            Ok(())
+        } else {
+            Err(part)
+        }
+    } else if part_type == "image_url" {
+        if let Some(image_url) = part.as_object_mut().and_then(|obj| obj.remove("image_url")) {
+            media_parts.push(json!({
+                "type": "image_url",
+                "image_url": image_url
+            }));
+            Ok(())
+        } else {
+            Err(part)
+        }
+    } else if matches!(part_type.as_str(), "input_audio" | "audio") {
+        if let Some(input_audio) = part
+            .as_object_mut()
+            .and_then(|obj| obj.remove("input_audio"))
+        {
+            media_parts.push(json!({
+                "type": "input_audio",
+                "input_audio": input_audio
+            }));
+            Ok(())
+        } else {
+            Err(part)
+        }
+    } else if part_type == "audio_url" {
+        if let Some(audio_url) = part.as_object_mut().and_then(|obj| obj.remove("audio_url")) {
+            media_parts.push(json!({
+                "type": "audio_url",
+                "audio_url": audio_url
+            }));
+            Ok(())
+        } else {
+            Err(part)
+        }
+    } else {
+        Err(part)
+    }
+}
 
-    match item.get("content") {
-        Some(Value::String(text)) => text_parts.push(text.clone()),
+fn responses_content_parts(content: Option<Value>) -> (Vec<String>, Vec<Value>, Vec<Value>) {
+    let mut text_parts = Vec::new();
+    let mut media_parts = Vec::new();
+    let mut unhandled_parts = Vec::new();
+
+    match content {
+        Some(Value::String(text)) => text_parts.push(text),
         Some(Value::Array(parts)) => {
             for part in parts {
-                if let Some(text) = part.get("text").and_then(Value::as_str) {
-                    text_parts.push(text.to_string());
-                } else if part.get("type").and_then(Value::as_str) == Some("input_image") {
-                    if let Some(image_url) = part.get("image_url").and_then(Value::as_str) {
-                        image_parts.push(json!({
-                            "type": "image_url",
-                            "image_url": { "url": image_url }
-                        }));
-                    }
-                } else if part.get("type").and_then(Value::as_str) == Some("image_url") {
-                    if let Some(image_url) = part.get("image_url") {
-                        image_parts.push(json!({
-                            "type": "image_url",
-                            "image_url": image_url.clone()
-                        }));
-                    }
-                } else if matches!(
-                    part.get("type").and_then(Value::as_str),
-                    Some("input_audio") | Some("audio")
-                ) {
-                    // [NEW] Responses API 音频入参透传给 chat/completions 映射层
-                    if let Some(input_audio) = part.get("input_audio") {
-                        image_parts.push(json!({
-                            "type": "input_audio",
-                            "input_audio": input_audio.clone()
-                        }));
-                    }
-                } else if part.get("type").and_then(Value::as_str) == Some("audio_url") {
-                    if let Some(audio_url) = part.get("audio_url") {
-                        image_parts.push(json!({
-                            "type": "audio_url",
-                            "audio_url": audio_url.clone()
-                        }));
-                    }
+                if let Err(part) =
+                    push_responses_content_part(part, &mut text_parts, &mut media_parts)
+                {
+                    unhandled_parts.push(part);
                 }
             }
         }
-        _ => {}
+        Some(part @ Value::Object(_)) => {
+            if let Err(part) = push_responses_content_part(part, &mut text_parts, &mut media_parts)
+            {
+                unhandled_parts.push(part);
+            }
+        }
+        Some(other) => unhandled_parts.push(other),
+        None => {}
     }
 
-    (text_parts, image_parts)
+    (text_parts, media_parts, unhandled_parts)
+}
+
+fn responses_message_parts(item: &mut Value) -> (Vec<String>, Vec<Value>) {
+    let content = item.as_object_mut().and_then(|obj| obj.remove("content"));
+    let (text, media, _) = responses_content_parts(content);
+    (text, media)
+}
+
+fn responses_tool_output_parts(item: &mut Value) -> (String, Vec<Value>) {
+    let Some(output) = item.as_object_mut().and_then(|obj| obj.remove("output")) else {
+        return (String::new(), Vec::new());
+    };
+    let mut output = output;
+    let content = output
+        .as_object_mut()
+        .and_then(|obj| obj.remove("content"))
+        .unwrap_or(output);
+
+    match content {
+        Value::String(text) => (text, Vec::new()),
+        content @ Value::Array(_) => {
+            let (text_parts, media_parts, unhandled) = responses_content_parts(Some(content));
+            if text_parts.is_empty() && media_parts.is_empty() {
+                (Value::Array(unhandled).to_string(), Vec::new())
+            } else {
+                (text_parts.join("\n"), media_parts)
+            }
+        }
+        content @ Value::Object(_) if content.get("type").is_some() => {
+            let (text_parts, media_parts, unhandled) = responses_content_parts(Some(content));
+            if text_parts.is_empty() && media_parts.is_empty() {
+                (
+                    unhandled
+                        .into_iter()
+                        .next()
+                        .unwrap_or(Value::Null)
+                        .to_string(),
+                    Vec::new(),
+                )
+            } else {
+                (text_parts.join("\n"), media_parts)
+            }
+        }
+        _ => (content.to_string(), Vec::new()),
+    }
+}
+
+fn decoded_base64_len(encoded: &str) -> Result<usize, String> {
+    let mut decoder = base64::read::DecoderReader::new(
+        encoded.as_bytes(),
+        &base64::engine::general_purpose::STANDARD,
+    );
+    let mut sink = io::sink();
+    usize::try_from(
+        io::copy(&mut decoder, &mut sink)
+            .map_err(|_| "Input image contains invalid base64 data".to_string())?,
+    )
+    .map_err(|_| "Input image is too large".to_string())
+}
+
+fn validate_responses_image_data_url(
+    data_url: &str,
+    image_count: usize,
+    total_bytes: usize,
+) -> Result<usize, String> {
+    let (_, encoded) = parse_image_data_url_parts(data_url)?;
+    validate_input_image_limits(image_count, 0, total_bytes)?;
+    let max_encoded_len = MAX_INPUT_IMAGE_BYTES.div_ceil(3).saturating_mul(4);
+    if encoded.len() > max_encoded_len {
+        return Err(format!(
+            "Input image is too large: maximum decoded size is {} bytes",
+            MAX_INPUT_IMAGE_BYTES
+        ));
+    }
+    let decoded_len = decoded_base64_len(encoded)?;
+    validate_input_image_limits(
+        image_count,
+        decoded_len,
+        total_bytes.saturating_add(decoded_len),
+    )?;
+    Ok(decoded_len)
+}
+
+fn validate_responses_input_image_limits(input: Option<&Value>) -> Result<(), String> {
+    fn visit(value: &Value, count: &mut usize, total: &mut usize) -> Result<(), String> {
+        match value {
+            Value::Array(values) => {
+                for value in values {
+                    visit(value, count, total)?;
+                }
+            }
+            Value::Object(values) => {
+                if matches!(
+                    values.get("type").and_then(Value::as_str),
+                    Some("input_image") | Some("image_url")
+                ) {
+                    let image_url = values.get("image_url").and_then(|value| {
+                        value
+                            .as_str()
+                            .or_else(|| value.get("url").and_then(Value::as_str))
+                    });
+                    if let Some(data_url) = image_url {
+                        if !data_url.starts_with("data:") {
+                            return Ok(());
+                        }
+                        *count = count.saturating_add(1);
+                        let decoded_len =
+                            validate_responses_image_data_url(data_url, *count, *total)?;
+                        *total = total.saturating_add(decoded_len);
+                    }
+                    return Ok(());
+                }
+                for value in values.values() {
+                    visit(value, count, total)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    let mut count = 0;
+    let mut total = 0;
+    if let Some(input) = input {
+        visit(input, &mut count, &mut total)?;
+    }
+    Ok(())
+}
+
+fn historical_media_placeholder(value: &serde_json::Map<String, Value>) -> Option<Value> {
+    match value.get("type").and_then(Value::as_str) {
+        Some("input_image") | Some("image_url") => Some(json!({
+            "type": "input_text",
+            "text": "[historical image omitted]"
+        })),
+        Some("input_audio") | Some("audio") | Some("audio_url") => Some(json!({
+            "type": "input_text",
+            "text": "[historical audio omitted]"
+        })),
+        _ => None,
+    }
+}
+
+fn history_without_inline_media(value: &Value) -> Value {
+    fn clone_bounded(value: &Value) -> Option<Value> {
+        match value {
+            Value::String(text)
+                if text.starts_with("data:image/") || text.starts_with("data:audio/") =>
+            {
+                None
+            }
+            Value::Array(values) => Some(Value::Array(
+                values.iter().filter_map(clone_bounded).collect(),
+            )),
+            Value::Object(values) => historical_media_placeholder(values).or_else(|| {
+                Some(Value::Object(
+                    values
+                        .iter()
+                        .filter_map(|(key, value)| {
+                            clone_bounded(value).map(|value| (key.clone(), value))
+                        })
+                        .collect(),
+                ))
+            }),
+            _ => Some(value.clone()),
+        }
+    }
+
+    clone_bounded(value).unwrap_or(Value::Null)
+}
+
+fn into_history_without_inline_media(value: Value) -> Option<Value> {
+    match value {
+        Value::String(text)
+            if text.starts_with("data:image/") || text.starts_with("data:audio/") =>
+        {
+            None
+        }
+        Value::Array(values) => Some(Value::Array(
+            values
+                .into_iter()
+                .filter_map(into_history_without_inline_media)
+                .collect(),
+        )),
+        Value::Object(values) => {
+            if let Some(placeholder) = historical_media_placeholder(&values) {
+                Some(placeholder)
+            } else {
+                Some(Value::Object(
+                    values
+                        .into_iter()
+                        .filter_map(|(key, value)| {
+                            into_history_without_inline_media(value).map(|value| (key, value))
+                        })
+                        .collect(),
+                ))
+            }
+        }
+        other => Some(other),
+    }
+}
+
+fn omit_media_before_latest_user_turn(items: &mut [Value]) {
+    let Some(current_turn_start) = items.iter().rposition(|item| {
+        item.get("role").and_then(Value::as_str) == Some("user")
+            && matches!(
+                item.get("type").and_then(Value::as_str),
+                None | Some("message")
+            )
+    }) else {
+        return;
+    };
+
+    for item in &mut items[..current_turn_start] {
+        let historical = std::mem::take(item);
+        *item = into_history_without_inline_media(historical).unwrap_or(Value::Null);
+    }
+}
+
+async fn save_session_unless_response_cancelled<F>(
+    mut ack_tx: tokio::sync::oneshot::Sender<()>,
+    save: F,
+) where
+    F: std::future::Future<Output = ()>,
+{
+    let saved = tokio::select! {
+        biased;
+        _ = ack_tx.closed() => false,
+        _ = save => true,
+    };
+    if saved {
+        let _ = ack_tx.send(());
+    }
+}
+
+fn build_responses_tool_output_content(text: String, mut media_parts: Vec<Value>) -> Value {
+    if media_parts.is_empty() {
+        return Value::String(text);
+    }
+
+    let mut content = Vec::with_capacity(media_parts.len() + usize::from(!text.is_empty()));
+    if !text.is_empty() {
+        content.push(json!({ "type": "text", "text": text }));
+    }
+    content.append(&mut media_parts);
+    Value::Array(content)
+}
+
+fn debug_value_without_inline_data(value: &Value) -> Value {
+    match value {
+        Value::String(text)
+            if text.starts_with("data:image/") || text.starts_with("data:audio/") =>
+        {
+            Value::String(format!("[inline data omitted: {} chars]", text.len()))
+        }
+        Value::Array(values) => {
+            Value::Array(values.iter().map(debug_value_without_inline_data).collect())
+        }
+        Value::Object(values) => {
+            let is_inline_data = values.get("mimeType").and_then(Value::as_str).is_some()
+                && values.get("data").and_then(Value::as_str).is_some();
+            Value::Object(
+                values
+                    .iter()
+                    .map(|(key, value)| {
+                        let value = if is_inline_data && key == "data" {
+                            Value::String(format!(
+                                "[inline data omitted: {} chars]",
+                                value.as_str().map(str::len).unwrap_or_default()
+                            ))
+                        } else {
+                            debug_value_without_inline_data(value)
+                        };
+                        (key.clone(), value)
+                    })
+                    .collect(),
+            )
+        }
+        _ => value.clone(),
+    }
+}
+
+#[derive(Default)]
+struct JsonByteCounter(usize);
+
+impl std::io::Write for JsonByteCounter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0 += bytes.len();
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn serialized_json_len(value: &Value) -> usize {
+    let mut counter = JsonByteCounter::default();
+    serde_json::to_writer(&mut counter, value)
+        .map(|_| counter.0)
+        .unwrap_or_default()
 }
 
 fn rewrite_terminal_assistant_prefill(messages: &mut [Value]) -> bool {
@@ -301,15 +937,33 @@ fn is_codex_transcript_only_assistant_message(item: &Value, text: &str) -> bool 
 
 #[cfg(test)]
 mod stream_peek_tests {
+    use super::build_image_contents;
+    use super::build_image_edit_body;
     use super::convert_chat_response_to_responses;
     use super::convert_codex_to_openai_request;
     use super::drop_leading_orphan_tool_history;
+    use super::edit_size_input;
+    use super::generation_image_size_param;
+    use super::history_without_inline_media;
+    use super::image_account_selection_target;
+    use super::into_history_without_inline_media;
     use super::is_codex_transcript_only_assistant_message;
+    use super::is_edit_image_field;
+    use super::omit_media_before_latest_user_turn;
+    use super::parse_generation_input_images;
+    use super::response_has_inline_image_data;
     use super::responses_input_item_type;
     use super::responses_message_parts;
     use super::rewrite_terminal_assistant_prefill;
+    use super::save_session_unless_response_cancelled;
     use super::stream_chunk_has_error_event;
-    use serde_json::json;
+    use super::stream_chunk_has_image_data;
+    use super::validate_input_image_limits;
+    use super::validate_responses_image_data_url;
+    use super::validate_responses_input_image_limits;
+    use super::{MAX_INPUT_IMAGES, MAX_INPUT_IMAGE_BYTES, MAX_TOTAL_INPUT_IMAGE_BYTES};
+    use crate::proxy::mappers::openai::{transform_openai_request, OpenAIRequest};
+    use serde_json::{json, Value};
 
     #[test]
     fn responses_created_with_null_error_is_not_an_error_event() {
@@ -346,6 +1000,29 @@ data: {"type":"response.failed","response":{"status":"failed","error":{"code":"u
     }
 
     #[test]
+    fn task_image_success_requires_nonempty_payload() {
+        let empty = json!({
+            "response": {"candidates": [{"content": {"parts": [{"inlineData": {"data": ""}}]}}]}
+        });
+        let image = json!({
+            "response": {"candidates": [{"content": {"parts": [{"inlineData": {"data": "AQ=="}}]}}]}
+        });
+        assert!(!response_has_inline_image_data(&empty));
+        assert!(response_has_inline_image_data(&image));
+
+        let empty_chunk =
+            br#"data: {"choices":[{"delta":{"content":"![image](data:image/png;base64,)"}}]}
+
+"#;
+        let image_chunk =
+            br#"data: {"choices":[{"delta":{"content":"![image](data:image/png;base64,AQ==)"}}]}
+
+"#;
+        assert!(!stream_chunk_has_image_data(empty_chunk));
+        assert!(stream_chunk_has_image_data(image_chunk));
+    }
+
+    #[test]
     fn responses_compat_accepts_optional_type_and_string_or_array_content() {
         let string_message = json!({
             "role": "system",
@@ -358,11 +1035,11 @@ data: {"type":"response.failed","response":{"status":"failed","error":{"code":"u
 
         assert_eq!(responses_input_item_type(&string_message), "message");
         assert_eq!(
-            responses_message_parts(&string_message).0,
+            responses_message_parts(&mut string_message.clone()).0,
             vec!["Follow the system instructions."]
         );
         assert_eq!(
-            responses_message_parts(&array_message).0,
+            responses_message_parts(&mut array_message.clone()).0,
             vec!["Continue planning."]
         );
 
@@ -386,6 +1063,178 @@ data: {"type":"response.failed","response":{"status":"failed","error":{"code":"u
                 {"role": "user", "content": "Continue planning."}
             ])
         );
+    }
+
+    #[test]
+    fn responses_tool_output_image_is_sent_as_inline_data() {
+        let converted = convert_codex_to_openai_request(json!({
+            "model": "gemini-3.7-flash-high",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Generate an image."}]
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_image",
+                    "name": "view_image",
+                    "arguments": "{}"
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_image",
+                    "output": [
+                        {"type": "input_text", "text": "image generated"},
+                        {"type": "input_image", "image_url": "data:image/png;base64,AQ=="}
+                    ]
+                }
+            ]
+        }));
+        assert!(converted.get("input").is_none());
+        let request: OpenAIRequest =
+            serde_json::from_value(converted).expect("valid OpenAI request");
+
+        let (upstream, _, _, _) =
+            transform_openai_request(&request, "project", "gemini-3.7-flash-high", None);
+        let parts = upstream["request"]["contents"]
+            .as_array()
+            .expect("contents")
+            .iter()
+            .flat_map(|content| content["parts"].as_array().expect("content parts").iter())
+            .collect::<Vec<_>>();
+        let function_response = parts
+            .iter()
+            .find(|part| part.get("functionResponse").is_some())
+            .expect("function response");
+        let inline_data = parts
+            .iter()
+            .find(|part| part.get("inlineData").is_some())
+            .expect("inline image data");
+
+        assert_eq!(
+            function_response["functionResponse"]["response"]["result"],
+            "image generated"
+        );
+        assert!(!function_response.to_string().contains("data:image/"));
+        assert_eq!(inline_data["inlineData"]["mimeType"], "image/png");
+        assert_eq!(inline_data["inlineData"]["data"], "AQ==");
+    }
+
+    #[test]
+    fn pure_image_tool_history_keeps_small_placeholder() {
+        let history = json!({
+            "type": "function_call_output",
+            "call_id": "call_image",
+            "output": [{
+                "type": "input_image",
+                "image_url": "data:image/png;base64,AQ=="
+            }]
+        });
+        let expected = json!({
+            "type": "function_call_output",
+            "call_id": "call_image",
+            "output": [{
+                "type": "input_text",
+                "text": "[historical image omitted]"
+            }]
+        });
+
+        let borrowed = history_without_inline_media(&history);
+        let moved = into_history_without_inline_media(history).expect("bounded history");
+        assert_eq!(borrowed, expected);
+        assert_eq!(moved, expected);
+        assert!(!borrowed.to_string().contains("base64"));
+    }
+
+    #[test]
+    fn responses_data_url_metadata_and_byte_limits() {
+        assert_eq!(
+            validate_responses_image_data_url("data:image/png;BASE64,AQ==", 1, 0)
+                .expect("uppercase base64 token"),
+            1
+        );
+        let encoded = "AAAA".repeat(MAX_INPUT_IMAGE_BYTES / 3 + 1);
+        assert_eq!(
+            validate_responses_image_data_url(&format!("data:image/png;BASE64,{encoded}"), 1, 0)
+                .unwrap_err(),
+            format!(
+                "Input image is too large: maximum decoded size is {} bytes",
+                MAX_INPUT_IMAGE_BYTES
+            )
+        );
+        assert!(validate_responses_image_data_url(
+            "data:image/png;BASE64,AQ==",
+            1,
+            MAX_TOTAL_INPUT_IMAGE_BYTES
+        )
+        .unwrap_err()
+        .starts_with("Total input image data is too large"));
+        assert!(validate_input_image_limits(
+            MAX_INPUT_IMAGES,
+            2 * 1024 * 1024,
+            MAX_TOTAL_INPUT_IMAGE_BYTES
+        )
+        .is_ok());
+        assert!(validate_input_image_limits(
+            MAX_INPUT_IMAGES,
+            2 * 1024 * 1024,
+            MAX_TOTAL_INPUT_IMAGE_BYTES + 1
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn responses_omits_old_images_before_validating_current_turn() {
+        let images = |count| {
+            (0..count)
+                .map(|_| json!({"type": "input_image", "image_url": "data:image/png;base64,AQ=="}))
+                .collect::<Vec<_>>()
+        };
+        let mut input = vec![
+            json!({"type": "message", "role": "user", "content": images(16)}),
+            json!({"type": "message", "role": "assistant", "content": "done"}),
+            json!({"type": "message", "role": "user", "content": images(16)}),
+        ];
+
+        omit_media_before_latest_user_turn(&mut input);
+        assert!(input[0].to_string().contains("[historical image omitted]"));
+        assert!(!input[0].to_string().contains("data:image/"));
+        assert!(validate_responses_input_image_limits(Some(&Value::Array(input.clone()))).is_ok());
+
+        input[2]["content"] = Value::Array(images(17));
+        assert!(validate_responses_input_image_limits(Some(&Value::Array(input))).is_err());
+    }
+
+    #[tokio::test]
+    async fn cancelled_response_drops_pending_session_save() {
+        let response_id = format!("resp-cancelled-{}", uuid::Uuid::new_v4());
+        let save_response_id = response_id.clone();
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let save_task = tokio::spawn(save_session_unless_response_cancelled(ack_tx, async move {
+            entered_tx.send(()).expect("save future entered");
+            std::future::pending::<()>().await;
+            crate::proxy::http_session_store::save_session_delta(
+                save_response_id,
+                None,
+                vec![json!({"id": "cancelled-user"})],
+                Vec::new(),
+                String::new(),
+                "gemini-pro-agent".to_string(),
+            )
+            .await;
+        }));
+
+        entered_rx.await.expect("save future is waiting");
+        drop(ack_rx);
+        tokio::time::timeout(std::time::Duration::from_secs(1), save_task)
+            .await
+            .expect("cancelled save task exits")
+            .expect("save task");
+        assert!(crate::proxy::http_session_store::get_session(&response_id)
+            .await
+            .is_none());
     }
 
     #[test]
@@ -590,6 +1439,137 @@ data: {"type":"response.failed","response":{"status":"failed","error":{"code":"u
             "done"
         ));
     }
+
+    #[test]
+    fn generation_image_extension_adds_single_and_array_images_in_order() {
+        let single = json!("data:image/png;base64,AQ==");
+        let single_images = parse_generation_input_images(Some(&single)).expect("single data URL");
+        let single_parts = build_image_contents("prompt".to_string(), &single_images, None);
+        assert_eq!(single_parts.len(), 2);
+        assert_eq!(single_parts[1]["inlineData"]["data"], "AQ==");
+
+        let multiple = json!(["data:image/png;base64,AQ==", "data:image/jpeg;base64,Ag=="]);
+        let multiple_images =
+            parse_generation_input_images(Some(&multiple)).expect("ordered data URL array");
+        let multiple_parts = build_image_contents("prompt".to_string(), &multiple_images, None);
+        assert_eq!(multiple_parts.len(), 3);
+        assert_eq!(multiple_parts[1]["inlineData"]["data"], "AQ==");
+        assert_eq!(multiple_parts[2]["inlineData"]["data"], "Ag==");
+    }
+
+    #[test]
+    fn generation_without_image_remains_text_only() {
+        let images =
+            parse_generation_input_images(None).expect("absent image is standard text-to-image");
+        let parts = build_image_contents("prompt".to_string(), &images, None);
+        assert_eq!(parts, vec![json!({"text": "prompt"})]);
+    }
+
+    #[test]
+    fn generation_image_extension_rejects_invalid_or_remote_inputs() {
+        let invalid_inputs = [
+            json!("https://example.invalid/image.png"),
+            json!("data:text/plain;base64,AQ=="),
+            json!("data:image/png;base64,not-base64"),
+            json!([]),
+            json!(["data:image/png;base64,AQ==", 2]),
+        ];
+        for input in invalid_inputs {
+            assert!(parse_generation_input_images(Some(&input)).is_err());
+        }
+
+        let too_many = Value::Array(
+            (0..=MAX_INPUT_IMAGES)
+                .map(|_| json!("data:image/png;base64,AQ=="))
+                .collect(),
+        );
+        assert!(parse_generation_input_images(Some(&too_many)).is_err());
+        assert!(validate_input_image_limits(1, MAX_INPUT_IMAGE_BYTES + 1, 0).is_err());
+        assert!(validate_input_image_limits(1, 1, MAX_TOTAL_INPUT_IMAGE_BYTES + 1).is_err());
+
+        assert!(generation_image_size_param(&json!({"imageSize": 4})).is_err());
+    }
+
+    #[test]
+    fn edit_image_fields_preserve_all_supported_forms_in_arrival_order() {
+        let field_names = [
+            "image",
+            "image",
+            "image[]",
+            "image[]",
+            "image1",
+            "image2",
+            "imageSize",
+            "image_size",
+            "imageReference",
+        ];
+        let accepted: Vec<(usize, &str)> = field_names
+            .iter()
+            .enumerate()
+            .filter(|(_, name)| is_edit_image_field(name))
+            .map(|(index, name)| (index, *name))
+            .collect();
+        assert_eq!(
+            accepted,
+            vec![
+                (0, "image"),
+                (1, "image"),
+                (2, "image[]"),
+                (3, "image[]"),
+                (4, "image1"),
+                (5, "image2"),
+            ]
+        );
+    }
+
+    #[test]
+    fn edit_aspect_ratio_priority_preserves_suffix_without_explicit_size() {
+        use crate::proxy::mappers::common_utils::try_parse_image_config_with_params;
+
+        let suffix_input = edit_size_input(None, None);
+        let (suffix_config, _) = try_parse_image_config_with_params(
+            "gemini-3.1-flash-image-16x9",
+            suffix_input,
+            None,
+            None,
+        )
+        .expect("model suffix config");
+        assert_eq!(suffix_config["aspectRatio"], "16:9");
+
+        let explicit_input = edit_size_input(Some("4:3"), Some("1280x720"));
+        let (explicit_config, _) = try_parse_image_config_with_params(
+            "gemini-3.1-flash-image-16x9",
+            explicit_input,
+            None,
+            None,
+        )
+        .expect("explicit aspect ratio config");
+        assert_eq!(explicit_config["aspectRatio"], "4:3");
+    }
+
+    #[test]
+    fn edit_flash_model_is_used_for_account_selection_and_resolved_upstream_body() {
+        use crate::proxy::mappers::common_utils::try_parse_image_config_with_params;
+
+        let (image_config, model_to_use) =
+            try_parse_image_config_with_params("gemini-3.1-flash-image", None, None, None)
+                .expect("flash edit model config");
+        assert_eq!(
+            image_account_selection_target(&model_to_use),
+            "gemini-3.1-flash-image"
+        );
+
+        let body = build_image_edit_body(
+            "project".to_string(),
+            "account-resolved-image-model",
+            json!([{"text": "prompt"}])
+                .as_array()
+                .cloned()
+                .expect("parts"),
+            image_config,
+        );
+        assert_eq!(body["model"], "account-resolved-image-model");
+    }
 }
 
 #[cfg(test)]
@@ -735,9 +1715,9 @@ pub async fn handle_chat_completions(
         return intercept_chat_to_image(state, body, &model_name).await;
     }
 
-    // [FIX] 保存原始请求体的完整副本，用于日志记录
-    // 这确保了即使结构体定义遗漏字段，日志也能完整记录所有参数
-    let original_body = body.clone();
+    let debug_cfg = state.debug_logging.read().await.clone();
+    let original_body =
+        debug_logger::is_enabled(&debug_cfg).then(|| debug_value_without_inline_data(&body));
 
     // [NEW] 自动检测并转换 Responses 格式
     // 如果请求包含 instructions 或 input 但没有 messages，则认为是 Responses 格式
@@ -822,8 +1802,6 @@ pub async fn handle_chat_completions(
         openai_req.messages.len(),
         openai_req.stream
     );
-    let debug_cfg = state.debug_logging.read().await.clone();
-
     let mut force_rotate = false;
 
     if debug_logger::is_enabled(&debug_cfg) {
@@ -850,7 +1828,7 @@ pub async fn handle_chat_completions(
             "protocol": "openai",
             "trace_id": trace_id,
             "original_model": openai_req.model,
-            "request": original_body,  // 使用原始请求体，不是结构体序列化
+            "request": original_body.as_ref(),
         });
         debug_logger::write_exchange_payload(
             &debug_cfg,
@@ -910,13 +1888,19 @@ pub async fn handle_chat_completions(
 
     // 1. 获取 UpstreamClient (Clone handle)
     let upstream = state.upstream.clone();
+    let image_scheduler = state.image_scheduler.clone();
+    let request_timeout = state.request_timeout;
     let token_manager = state.token_manager;
     let pool_size = token_manager.len();
-    // [FIX] Ensure max_attempts is at least 2 to allow for internal retries
-    let max_attempts = MAX_RETRY_ATTEMPTS.min(pool_size.saturating_add(1)).max(2);
+    let max_attempts = MAX_RETRY_ATTEMPTS.min(pool_size).max(1);
 
     let mut last_error = String::new();
     let mut last_email: Option<String> = None;
+    let mut retry_state = RequestRetryState::default();
+    let mut retry_credentials: Option<(String, String, String, String, u64)> = None;
+    let mut image_permit = None;
+    let mut failure_statuses = FailureStatusTracker::default();
+    let mut used_attempts = 0;
 
     // 2. 模型路由解析 (移到循环外以支持在所有路径返回 X-Mapped-Model)
     let mapped_model = crate::proxy::common::model_mapping::resolve_model_route(
@@ -924,7 +1908,11 @@ pub async fn handle_chat_completions(
         &*state.custom_mapping.read().await,
     );
 
-    for attempt in 0..max_attempts {
+    while let Some(attempt) = next_rotation_attempt(
+        &mut used_attempts,
+        max_attempts,
+        retry_credentials.is_some(),
+    ) {
         // 将 OpenAI 工具转为 Value 数组以便探测联网
         let tools_val: Option<Vec<Value>> = openai_req
             .tools
@@ -945,27 +1933,54 @@ pub async fn handle_chat_completions(
 
         // 4. 获取 Token (使用准确的 request_type)
         // 关键：在重试尝试时根据 force_rotate 决定是否轮换账号
-        let (access_token, project_id, email, account_id, _wait_ms) = match token_manager
-            .get_token(
-                &config.request_type,
-                force_rotate,
-                Some(&session_id),
-                &mapped_model,
-            )
-            .await
-        {
-            Ok(t) => t,
-            Err(e) => {
-                // [FIX] Attach headers to error response for logging visibility
-                let headers = [("X-Mapped-Model", mapped_model.as_str())];
-                return Ok((
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    headers,
-                    format!("Token error: {}", e),
-                )
-                    .into_response());
-            }
-        };
+        let (access_token, project_id, email, account_id, _wait_ms) =
+            if let Some(credentials) = retry_credentials.take() {
+                credentials
+            } else if config.request_type == "image_gen" {
+                drop(image_permit.take());
+                match token_manager
+                    .get_image_token(
+                        force_rotate,
+                        Some(&session_id),
+                        &mapped_model,
+                        &image_scheduler,
+                        request_timeout,
+                    )
+                    .await
+                {
+                    Ok((access_token, project_id, email, account_id, wait_ms, permit)) => {
+                        image_permit = Some(permit);
+                        (access_token, project_id, email, account_id, wait_ms)
+                    }
+                    Err((status, message)) => {
+                        failure_statuses.record(status);
+                        last_error = message;
+                        break;
+                    }
+                }
+            } else {
+                match token_manager
+                    .get_token(
+                        &config.request_type,
+                        force_rotate,
+                        Some(&session_id),
+                        &mapped_model,
+                    )
+                    .await
+                {
+                    Ok(t) => t,
+                    Err(e) => {
+                        // [FIX] Attach headers to error response for logging visibility
+                        let headers = [("X-Mapped-Model", mapped_model.as_str())];
+                        return Ok((
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            headers,
+                            format!("Token error: {}", e),
+                        )
+                            .into_response());
+                    }
+                }
+            };
 
         // [NEW v4.1.29] 获取完整 Token 对象用于动态规格查询
         let proxy_token = token_manager.get_token_by_id(&account_id);
@@ -983,7 +1998,8 @@ pub async fn handle_chat_completions(
             &mapped_model,
             proxy_token.as_ref(),
         );
-        let gemini_body_for_debug = gemini_body.clone();
+        let gemini_body_for_debug = debug_logger::is_enabled(&debug_cfg)
+            .then(|| debug_value_without_inline_data(&gemini_body));
 
         if debug_logger::is_enabled(&debug_cfg) {
             let payload = json!({
@@ -994,7 +2010,7 @@ pub async fn handle_chat_completions(
                 "mapped_model": mapped_model,
                 "request_type": config.request_type,
                 "attempt": attempt,
-                "v1internal_request": gemini_body.clone(),
+                "v1internal_request": gemini_body_for_debug.as_ref(),
             });
             debug_logger::write_exchange_payload(
                 &debug_cfg,
@@ -1005,10 +2021,10 @@ pub async fn handle_chat_completions(
             .await;
         }
 
-        // [New] 打印转换后的报文 (Gemini Body) 供调试
-        if let Ok(body_json) = serde_json::to_string_pretty(&gemini_body) {
-            debug!("[OpenAI-Request] Transformed Gemini Body:\n{}", body_json);
-        }
+        debug!(
+            "[OpenAI-Request] Transformed Gemini body: {} bytes",
+            serialized_json_len(&gemini_body)
+        );
 
         // 5. 发送请求
         let client_wants_stream = openai_req.stream;
@@ -1056,6 +2072,8 @@ pub async fn handle_chat_completions(
             Ok(r) => r,
             Err(e) => {
                 last_error = e.clone();
+                failure_statuses.record(StatusCode::BAD_GATEWAY);
+                drop(image_permit.take());
                 debug!(
                     "OpenAI Request failed on attempt {}/{}: {}",
                     attempt + 1,
@@ -1197,9 +2215,9 @@ pub async fn handle_chat_completions(
                 }
 
                 if retry_this_account {
+                    failure_statuses.record(StatusCode::BAD_GATEWAY);
                     continue; // Rotate to next account
                 }
-
                 // Combine first chunk with remaining stream
                 let combined_stream =
                     futures::stream::once(
@@ -1208,19 +2226,50 @@ pub async fn handle_chat_completions(
                     .chain(openai_stream);
 
                 // [NEW] 针对 OpenAI 流增加 300 秒空闲超时保护
+                let image_permit_for_stream = image_permit.take();
+                let track_image_success = config.request_type == "image_gen";
+                let image_success_manager = token_manager.clone();
+                let image_success_account = account_id.clone();
+                let image_success_model = mapped_model.clone();
                 let combined_stream = async_stream::stream! {
+                    let _image_permit = image_permit_for_stream;
                     let mut s = Box::pin(combined_stream);
+                    let mut saw_image_data = false;
+                    let mut stream_failed = false;
 
                     loop {
                         match tokio::time::timeout(std::time::Duration::from_secs(300), s.next()).await {
-                            Ok(Some(item)) => yield item,
+                            Ok(Some(Ok(bytes))) => {
+                                if stream_chunk_has_error_event(&bytes) {
+                                    stream_failed = true;
+                                }
+                                if track_image_success && stream_chunk_has_image_data(&bytes) {
+                                    saw_image_data = true;
+                                }
+                                yield Ok::<Bytes, String>(bytes);
+                            }
+                            Ok(Some(Err(error))) => {
+                                stream_failed = true;
+                                yield Err::<Bytes, String>(error);
+                                break;
+                            }
                             Ok(None) => break,
                             Err(_) => {
                                 tracing::error!("[OpenAI-SSE] Idle timeout after 300s, terminating stream");
+                                stream_failed = true;
                                 yield Ok::<Bytes, String>(Bytes::from("data: [DONE]\n\n"));
                                 break;
                             }
                         }
+                    }
+
+                    if track_image_success && saw_image_data && !stream_failed {
+                        image_success_manager.mark_account_success(&image_success_account);
+                        image_success_manager
+                            .clear_persisted_live_limit(
+                                &image_success_account,
+                                Some(&image_success_model),
+                            );
                     }
                 };
                 let converted_meta = json!({
@@ -1300,8 +2349,8 @@ pub async fn handle_chat_completions(
                                     "kind": "exchange_summary",
                                     "protocol": "openai",
                                     "trace_id": trace_id,
-                                    "original_codex_request": original_body,
-                                    "gemini_request": gemini_body_for_debug,
+                                    "original_codex_request": original_body.as_ref(),
+                                    "gemini_request": gemini_body_for_debug.as_ref(),
                                     "converted_codex_response": converted_response,
                                     "gemini_raw_response_ref": "see upstream_response file with the same trace_id",
                                 });
@@ -1377,8 +2426,8 @@ pub async fn handle_chat_completions(
                     "kind": "exchange_summary",
                     "protocol": "openai",
                     "trace_id": trace_id,
-                    "original_codex_request": original_body,
-                    "gemini_request": gemini_body_for_debug,
+                    "original_codex_request": original_body.as_ref(),
+                    "gemini_request": gemini_body_for_debug.as_ref(),
                     "gemini_raw_response": gemini_resp,
                     "converted_codex_response": converted_response,
                 });
@@ -1402,8 +2451,9 @@ pub async fn handle_chat_completions(
         }
 
         // 处理特定错误并重试
+        failure_statuses.record(status);
         let status_code = status.as_u16();
-        let _retry_after = response
+        let retry_after = response
             .headers()
             .get("Retry-After")
             .and_then(|h| h.to_str().ok())
@@ -1444,16 +2494,45 @@ pub async fn handle_chat_completions(
         }
 
         // 确定重试策略
-        let strategy = determine_retry_strategy(status_code, &error_text, false);
+        let strategy = retry_state.determine_strategy(
+            &account_id,
+            status_code,
+            &error_text,
+            retry_after.as_deref(),
+            false,
+        );
+        let should_mark_limited =
+            status_code == 429 || status_code == 529 || status_code == 503 || status_code == 500;
+        let needs_quota_refresh = if config.request_type == "image_gen" && should_mark_limited {
+            token_manager
+                .mark_rate_limited_fast(
+                    &email,
+                    status_code,
+                    retry_after.as_deref(),
+                    &error_text,
+                    Some(&mapped_model),
+                )
+                .await
+        } else {
+            false
+        };
+        if !matches!(&strategy, RetryStrategy::GraceRetry(_)) {
+            drop(image_permit.take());
+        }
+        if needs_quota_refresh {
+            token_manager
+                .refresh_quota_lock_after_fast_mark(&email, Some(&mapped_model))
+                .await;
+        }
 
         // 3. 标记限流状态(用于 UI 显示)
-        if status_code == 429 || status_code == 529 || status_code == 503 || status_code == 500 {
+        if config.request_type != "image_gen" && should_mark_limited {
             // [FIX] Use async version with model parameter for fine-grained rate limiting
             token_manager
                 .mark_rate_limited_async(
                     &email,
                     status_code,
-                    _retry_after.as_deref(),
+                    retry_after.as_deref(),
                     &error_text,
                     Some(&mapped_model),
                 )
@@ -1500,6 +2579,15 @@ pub async fn handle_chat_completions(
         )
         .await
         {
+            if matches!(strategy, RetryStrategy::GraceRetry(_)) {
+                retry_credentials = Some((
+                    access_token.clone(),
+                    project_id.clone(),
+                    email.clone(),
+                    account_id.clone(),
+                    0,
+                ));
+            }
             // [NEW] Apply Client Adapter "let_it_crash" strategy
             if let Some(adapter) = &client_adapter {
                 if adapter.let_it_crash() && attempt > 0 {
@@ -1592,14 +2680,8 @@ pub async fn handle_chat_completions(
             .into_response());
     }
 
-    // 所有尝试均失败：根据最后的错误类型决定状态码
-    let final_status = if last_error.contains("403") || last_error.contains("PERMISSION_DENIED") || last_error.contains("VALIDATION_REQUIRED") {
-        StatusCode::FORBIDDEN
-    } else if last_error.contains("401") || last_error.contains("UNAUTHENTICATED") {
-        StatusCode::UNAUTHORIZED
-    } else {
-        StatusCode::TOO_MANY_REQUESTS
-    };
+    // 所有尝试均失败：仅当全部结构化失败状态均为 429 时返回 429
+    let final_status = failure_statuses.final_status();
 
     if let Some(email) = last_email {
         Ok((
@@ -1728,11 +2810,13 @@ pub async fn handle_completions(
     Json(mut body): Json<Value>,
 ) -> Response {
     debug!(
-        "Received /v1/completions or /v1/responses payload: {:?}",
-        body
+        "Received /v1/completions or /v1/responses payload: {} bytes",
+        serialized_json_len(&body)
     );
-    let original_body = body.clone();
     let debug_cfg = state.debug_logging.read().await.clone();
+    let original_body =
+        debug_logger::is_enabled(&debug_cfg).then(|| debug_value_without_inline_data(&body));
+    let is_codex_style = body.get("input").is_some() || body.get("instructions").is_some();
 
     // [MULTI-TURN] 支持 previous_response_id 链式历史恢复
     // 当客户端通过 HTTP POST /v1/responses 传入 previous_response_id 时，
@@ -1744,50 +2828,89 @@ pub async fn handle_completions(
     let response_id_for_save = format!("resp-{}", uuid::Uuid::new_v4());
     let http_tool_call_cache: std::collections::HashMap<String, serde_json::Value> =
         std::collections::HashMap::new();
-    if let Some(ref prev_id) = previous_response_id {
-        if let Some(session) = crate::proxy::http_session_store::get_session(prev_id).await {
-            // 把历史 input items 合并进来
-            let existing_input = body
-                .get("input")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default();
-            let merged = crate::proxy::http_session_store::merge_history_with_new_input(
-                session.input_items,
-                &[],
-                &existing_input,
-                &http_tool_call_cache,
-            );
-            let merged_len = merged.len();
-            if let Some(obj) = body.as_object_mut() {
-                obj.insert("input".to_string(), json!(merged));
-                // 从历史 session 继承 instructions（如果本轮没带）
-                if !obj.contains_key("instructions") && !session.instructions.is_empty() {
-                    obj.insert("instructions".to_string(), json!(session.instructions));
+    let mut session_parent = None;
+    let mut session_delta_input = Vec::new();
+    if is_codex_style {
+        let mut existing_input = body
+            .as_object_mut()
+            .and_then(|obj| obj.remove("input"))
+            .and_then(|value| match value {
+                Value::Array(items) => Some(items),
+                _ => None,
+            })
+            .unwrap_or_default();
+        // 完整回放先裁掉最新用户轮次之前的内联媒体，再执行硬限制校验。
+        omit_media_before_latest_user_turn(&mut existing_input);
+
+        let merged = if let Some(ref prev_id) = previous_response_id {
+            if let Some((session, parent)) =
+                crate::proxy::http_session_store::get_session_with_parent(prev_id).await
+            {
+                let prepared = crate::proxy::http_session_store::prepare_session_input(
+                    session.input_items,
+                    existing_input,
+                    &http_tool_call_cache,
+                );
+                session_delta_input = prepared.delta;
+                if !prepared.reset_parent {
+                    session_parent = Some(parent);
                 }
-                // 继承 model（如果本轮没带）
-                if !obj.contains_key("model") && !session.model.is_empty() {
-                    obj.insert("model".to_string(), json!(session.model));
+                if let Some(obj) = body.as_object_mut() {
+                    if !obj.contains_key("instructions") && !session.instructions.is_empty() {
+                        obj.insert("instructions".to_string(), json!(session.instructions));
+                    }
+                    if !obj.contains_key("model") && !session.model.is_empty() {
+                        obj.insert("model".to_string(), json!(session.model));
+                    }
                 }
+                tracing::debug!(
+                    "[MultiTurn] Restored session from prev_id={}, {} items in history",
+                    prev_id,
+                    prepared.merged.len()
+                );
+                prepared.merged
+            } else {
+                session_delta_input = existing_input.clone();
+                existing_input
             }
-            tracing::debug!(
-                "[MultiTurn] Restored session from prev_id={}, {} items in history",
-                prev_id,
-                merged_len
-            );
+        } else {
+            session_delta_input = existing_input.clone();
+            existing_input
+        };
+
+        if let Some(obj) = body.as_object_mut() {
+            obj.insert("input".to_string(), Value::Array(merged));
+        }
+        if let Err(message) = validate_responses_input_image_limits(body.get("input")) {
+            return (StatusCode::BAD_REQUEST, message).into_response();
         }
     }
 
-    let is_codex_style = body.get("input").is_some() || body.get("instructions").is_some();
+    let mut bounded_session_input = None;
 
     // 1. Convert Payload to Messages (Shared Chat Format)
     if is_codex_style {
         let instructions = body
             .get("instructions")
             .and_then(|v| v.as_str())
-            .unwrap_or_default();
-        let input_items = body.get("input").and_then(|v| v.as_array());
+            .unwrap_or_default()
+            .to_string();
         let (interaction_ledger, mut step_markers) = codex_ledger_from_body(&body);
+        let input_items = body
+            .as_object_mut()
+            .and_then(|obj| obj.remove("input"))
+            .and_then(|value| match value {
+                Value::Array(items) => Some(items),
+                _ => None,
+            })
+            .unwrap_or_default();
+        bounded_session_input = Some(
+            session_delta_input
+                .drain(..)
+                .filter_map(into_history_without_inline_media)
+                .filter(|item| !item.is_null())
+                .collect(),
+        );
 
         let mut messages = Vec::new();
 
@@ -1800,9 +2923,9 @@ pub async fn handle_completions(
         let mut skipped_incomplete_custom_call_ids = std::collections::HashSet::new();
 
         // Pass 1: Build Call ID to Name Map
-        if let Some(items) = input_items {
-            for item in items {
-                let item_type = responses_input_item_type(item);
+        {
+            for item in &input_items {
+                let item_type = responses_input_item_type(&item).to_string();
                 if item_type == "custom_tool_call"
                     && item.get("status").and_then(|v| v.as_str()) == Some("incomplete")
                 {
@@ -1815,7 +2938,7 @@ pub async fn handle_completions(
                     }
                     continue;
                 }
-                match item_type {
+                match item_type.as_str() {
                     "function_call" | "custom_tool_call" | "local_shell_call"
                     | "web_search_call" => {
                         let call_id = item
@@ -1848,22 +2971,30 @@ pub async fn handle_completions(
         // Pass 2: Map durable conversation items to Gemini messages. Visible
         // assistant commentary stays in Codex's local transcript and must not
         // be replayed as model history.
-        if let Some(items) = input_items {
-            for item in items {
-                let item_type = responses_input_item_type(item);
+        {
+            for mut item in input_items {
+                let item_type = responses_input_item_type(&item).to_string();
                 let step_marker = step_markers.pop_front();
                 if item_type == "custom_tool_call"
                     && item.get("status").and_then(|v| v.as_str()) == Some("incomplete")
                 {
                     continue;
                 }
-                match item_type {
+                match item_type.as_str() {
                     "message" => {
-                        let role = item.get("role").and_then(|v| v.as_str()).unwrap_or("user");
-                        let (text_parts, image_parts) = responses_message_parts(item);
+                        let role = item
+                            .get("role")
+                            .and_then(Value::as_str)
+                            .unwrap_or("user")
+                            .to_string();
+                        let transcript_only_metadata =
+                            is_codex_transcript_only_assistant_message(&item, "");
+                        let (text_parts, image_parts) = responses_message_parts(&mut item);
 
                         let joined_text = text_parts.join("\n");
-                        if is_codex_transcript_only_assistant_message(item, &joined_text) {
+                        if transcript_only_metadata
+                            || joined_text.trim_start().starts_with("**Thinking**")
+                        {
                             continue;
                         }
 
@@ -1973,9 +3104,10 @@ pub async fn handle_completions(
                         let call_id = item
                             .get("call_id")
                             .and_then(|v| v.as_str())
-                            .unwrap_or("unknown");
+                            .unwrap_or("unknown")
+                            .to_string();
                         if item_type == "custom_tool_call_output"
-                            && skipped_incomplete_custom_call_ids.contains(call_id)
+                            && skipped_incomplete_custom_call_ids.contains(&call_id)
                         {
                             tracing::warn!(
                                 "Skipping output for incomplete custom tool call {}",
@@ -1983,21 +3115,9 @@ pub async fn handle_completions(
                             );
                             continue;
                         }
-                        let output = item.get("output");
-                        let mut output_str = if let Some(o) = output {
-                            if o.is_string() {
-                                o.as_str().unwrap().to_string()
-                            } else if let Some(content) = o.get("content").and_then(|v| v.as_str())
-                            {
-                                content.to_string()
-                            } else {
-                                o.to_string()
-                            }
-                        } else {
-                            "".to_string()
-                        };
+                        let (mut output_str, output_media) = responses_tool_output_parts(&mut item);
 
-                        let name = if let Some(name) = call_id_to_name.get(call_id).cloned() {
+                        let name = if let Some(name) = call_id_to_name.get(&call_id).cloned() {
                             name
                         } else if item_type == "custom_tool_call_output" {
                             tracing::warn!(
@@ -2021,12 +3141,14 @@ pub async fn handle_completions(
                             );
                         }
                         output_str = prefix_with_step_marker(step_marker, output_str);
+                        let output_content =
+                            build_responses_tool_output_content(output_str, output_media);
 
                         messages.push(json!({
                             "role": "tool",
                             "tool_call_id": call_id,
                             "name": name,
-                            "content": output_str
+                            "content": output_content
                         }));
                     }
                     _ => {}
@@ -2034,7 +3156,7 @@ pub async fn handle_completions(
             }
         }
         if let Some(obj) = body.as_object_mut() {
-            obj.insert("messages".to_string(), json!(messages));
+            obj.insert("messages".to_string(), Value::Array(messages));
             if let Some(ledger) = interaction_ledger {
                 obj.insert("_interaction_ledger".to_string(), json!(ledger));
             }
@@ -2221,7 +3343,7 @@ pub async fn handle_completions(
                 "[Codex] Injecting normalized messages: {} messages",
                 messages.len()
             );
-            obj.insert("messages".to_string(), json!(messages));
+            obj.insert("messages".to_string(), Value::Array(messages));
         }
     } else if already_normalized {
         tracing::debug!(
@@ -2248,23 +3370,23 @@ pub async fn handle_completions(
 
     // [FIX] 在 openai_req 反序列化之前，从 body 中捕获原始 input 和 instructions
     // 用于后续 session 保存时，保留完整的工具调用历史（而非从 openai_req.messages 重建丢失信息）
-    let session_save_input: Vec<serde_json::Value> = body
-        .get("input")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-    let session_save_instructions: String = body
-        .get("instructions")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
     let normalized_interaction_ledger = body.get("_interaction_ledger").cloned();
+    let (session_save_input, session_save_instructions) = if let Some(obj) = body.as_object_mut() {
+        let input = bounded_session_input.take().unwrap_or_default();
+        obj.remove("input");
+        let instructions = obj
+            .remove("instructions")
+            .and_then(|value| match value {
+                Value::String(text) => Some(text),
+                _ => None,
+            })
+            .unwrap_or_default();
+        (input, instructions)
+    } else {
+        (Vec::new(), String::new())
+    };
 
-    if let Some(obj) = body.as_object_mut() {
-        obj.remove("instructions");
-    }
-
-    let mut openai_req: OpenAIRequest = match serde_json::from_value(body.clone()) {
+    let mut openai_req: OpenAIRequest = match serde_json::from_value(body) {
         Ok(req) => req,
         Err(e) => {
             return (StatusCode::BAD_REQUEST, format!("Invalid request: {}", e)).into_response();
@@ -2500,11 +3622,14 @@ pub async fn handle_completions(
 
     let upstream = state.upstream.clone();
     let pool_size = token_manager.len();
-    // [FIX] Ensure max_attempts is at least 2 to allow for internal retries
-    let max_attempts = MAX_RETRY_ATTEMPTS.min(pool_size.saturating_add(1)).max(2);
+    let max_attempts = MAX_RETRY_ATTEMPTS.min(pool_size).max(1);
 
     let mut last_error = String::new();
     let mut last_email: Option<String> = None;
+    let mut retry_state = RequestRetryState::default();
+    let mut retry_credentials: Option<(String, String, String, String, u64)> = None;
+    let mut failure_statuses = FailureStatusTracker::default();
+    let mut used_attempts = 0;
 
     if debug_logger::is_enabled(&debug_cfg) {
         let payload = json!({
@@ -2512,7 +3637,7 @@ pub async fn handle_completions(
             "protocol": "openai",
             "trace_id": trace_id,
             "request_path": uri.path(),
-            "request": original_body,
+            "request": original_body.as_ref(),
         });
         debug_logger::write_exchange_payload(
             &debug_cfg,
@@ -2525,7 +3650,11 @@ pub async fn handle_completions(
 
     let mut force_rotate = false;
 
-    for attempt in 0..max_attempts {
+    while let Some(attempt) = next_rotation_attempt(
+        &mut used_attempts,
+        max_attempts,
+        retry_credentials.is_some(),
+    ) {
         // 3. 模型配置解析
         // 将 OpenAI 工具转为 Value 数组以便探测联网
         let tools_val: Option<Vec<Value>> = openai_req
@@ -2547,25 +3676,30 @@ pub async fn handle_completions(
         let session_id_str = SessionManager::extract_openai_session_id(&openai_req);
         let session_id = Some(session_id_str.as_str());
 
-        let (access_token, project_id, email, account_id, _wait_ms) = match token_manager
-            .get_token(
-                &config.request_type,
-                force_rotate,
-                session_id,
-                &mapped_model,
-            )
-            .await
-        {
-            Ok(t) => t,
-            Err(e) => {
-                return (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    [("X-Mapped-Model", mapped_model)],
-                    format!("Token error: {}", e),
-                )
-                    .into_response()
-            }
-        };
+        let (access_token, project_id, email, account_id, _wait_ms) =
+            if let Some(credentials) = retry_credentials.take() {
+                credentials
+            } else {
+                match token_manager
+                    .get_token(
+                        &config.request_type,
+                        force_rotate,
+                        session_id,
+                        &mapped_model,
+                    )
+                    .await
+                {
+                    Ok(t) => t,
+                    Err(e) => {
+                        return (
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            [("X-Mapped-Model", mapped_model)],
+                            format!("Token error: {}", e),
+                        )
+                            .into_response()
+                    }
+                }
+            };
 
         let mapped_model = token_manager
             .resolve_dynamic_model_for_account(&account_id, &mapped_model)
@@ -2582,7 +3716,8 @@ pub async fn handle_completions(
             &mapped_model,
             proxy_token.as_ref(),
         );
-        let gemini_body_for_debug = gemini_body.clone();
+        let gemini_body_for_debug = debug_logger::is_enabled(&debug_cfg)
+            .then(|| debug_value_without_inline_data(&gemini_body));
         if debug_logger::is_enabled(&debug_cfg) {
             let payload = json!({
                 "kind": "v1internal_request",
@@ -2593,7 +3728,7 @@ pub async fn handle_completions(
                 "mapped_model": mapped_model,
                 "request_type": config.request_type,
                 "attempt": attempt,
-                "v1internal_request": gemini_body_for_debug.clone(),
+                "v1internal_request": gemini_body_for_debug.as_ref(),
             });
             debug_logger::write_exchange_payload(
                 &debug_cfg,
@@ -2612,20 +3747,24 @@ pub async fn handle_completions(
                     .get("role")
                     .and_then(|r| r.as_str())
                     .unwrap_or("unknown");
-                let msg_str = serde_json::to_string(msg).unwrap_or_default();
-                sizes.push(format!("msg_{}[{}]: {} chars", idx, role, msg_str.len()));
+                sizes.push(format!(
+                    "msg_{}[{}]: {} chars",
+                    idx,
+                    role,
+                    serialized_json_len(msg)
+                ));
             }
 
             let system_instruction_len = gemini_body
                 .get("request")
                 .and_then(|r| r.get("systemInstruction"))
-                .map(|s| serde_json::to_string(s).unwrap_or_default().len())
+                .map(serialized_json_len)
                 .unwrap_or(0);
 
             let tools_len = gemini_body
                 .get("request")
                 .and_then(|r| r.get("tools"))
-                .map(|t| serde_json::to_string(t).unwrap_or_default().len())
+                .map(serialized_json_len)
                 .unwrap_or(0);
 
             tracing::info!(
@@ -2661,6 +3800,7 @@ pub async fn handle_completions(
             Ok(r) => r,
             Err(e) => {
                 last_error = e.clone();
+                failure_statuses.record(StatusCode::BAD_GATEWAY);
                 debug!(
                     "Codex Request failed on attempt {}/{}: {}",
                     attempt + 1,
@@ -2708,14 +3848,19 @@ pub async fn handle_completions(
                 // and we already have logic to convert Chat JSON -> Legacy JSON.
 
                 if client_wants_stream {
+                    let mut session_completion_rx = None;
                     let mut openai_stream = if is_codex_style {
                         use crate::proxy::mappers::openai::streaming::create_codex_sse_stream;
+                        let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
+                        session_completion_rx = Some(completion_rx);
                         create_codex_sse_stream(
                             gemini_stream,
                             openai_req.model.clone(),
                             session_id,
                             message_count,
                             assistant_turn_index,
+                            response_id_for_save.clone(),
+                            Some(completion_tx),
                         )
                     } else {
                         use crate::proxy::mappers::openai::streaming::create_legacy_sse_stream;
@@ -2775,6 +3920,7 @@ pub async fn handle_completions(
                     }
 
                     if retry_this_account {
+                        failure_statuses.record(StatusCode::BAD_GATEWAY);
                         continue;
                     }
 
@@ -2802,22 +3948,32 @@ pub async fn handle_completions(
                         converted_meta,
                     );
 
-                    // [MULTI-TURN][FIX] 保存本次完整 input_items 到 session store
-                    // 使用从 body 中提取的原始 input（含文本/工具调用/工具结果全量历史），
-                    // 而非从 openai_req.messages 重建（会丢失 tool_calls/tool 角色等信息）
-                    {
-                        let save_input = session_save_input.clone();
-                        let save_instructions = session_save_instructions.clone();
+                    // 仅当转换器产生 response.completed 时保存本轮增量及必要输出。
+                    if let Some(completion_rx) = session_completion_rx {
+                        let save_parent = session_parent;
+                        let save_input = session_save_input;
+                        let save_instructions = session_save_instructions;
                         let save_model = openai_req.model.clone();
-                        let entry = crate::proxy::http_session_store::HttpSessionEntry {
-                            input_items: save_input,
-                            instructions: save_instructions,
-                            model: save_model,
-                            last_accessed: std::time::Instant::now(),
-                        };
                         let rid = response_id_for_save.clone();
                         tokio::spawn(async move {
-                            crate::proxy::http_session_store::save_session(rid, entry).await;
+                            if let Ok((outputs, ack_tx)) = completion_rx.await {
+                                let outputs = outputs
+                                    .into_iter()
+                                    .filter_map(into_history_without_inline_media)
+                                    .collect();
+                                save_session_unless_response_cancelled(
+                                    ack_tx,
+                                    crate::proxy::http_session_store::save_session_delta(
+                                        rid,
+                                        save_parent,
+                                        save_input,
+                                        outputs,
+                                        save_instructions,
+                                        save_model,
+                                    ),
+                                )
+                                .await;
+                            }
                         });
                     }
                     return Response::builder()
@@ -2889,6 +4045,7 @@ pub async fn handle_completions(
                         }
                     }
                     if retry_this_account {
+                        failure_statuses.record(StatusCode::BAD_GATEWAY);
                         continue;
                     }
 
@@ -2930,8 +4087,8 @@ pub async fn handle_completions(
                                         "protocol": "openai",
                                         "trace_id": trace_id,
                                         "request_path": uri.path(),
-                                        "original_codex_request": original_body.clone(),
-                                        "gemini_request": gemini_body_for_debug.clone(),
+                                        "original_codex_request": original_body.as_ref(),
+                                        "gemini_request": gemini_body_for_debug.as_ref(),
                                         "converted_codex_response": resp.clone(),
                                         "gemini_raw_response_ref": "see upstream_response file with the same trace_id",
                                     });
@@ -2994,8 +4151,8 @@ pub async fn handle_completions(
                                     "protocol": "openai",
                                     "trace_id": trace_id,
                                     "request_path": uri.path(),
-                                    "original_codex_request": original_body.clone(),
-                                    "gemini_request": gemini_body_for_debug.clone(),
+                                    "original_codex_request": original_body.as_ref(),
+                                    "gemini_request": gemini_body_for_debug.as_ref(),
                                     "converted_codex_response": legacy_resp.clone(),
                                     "gemini_raw_response_ref": "see upstream_response file with the same trace_id",
                                 });
@@ -3058,8 +4215,8 @@ pub async fn handle_completions(
                         "protocol": "openai",
                         "trace_id": trace_id,
                         "request_path": uri.path(),
-                        "original_codex_request": original_body.clone(),
-                        "gemini_request": gemini_body_for_debug.clone(),
+                        "original_codex_request": original_body.as_ref(),
+                        "gemini_request": gemini_body_for_debug.as_ref(),
                         "gemini_raw_response": gemini_resp.clone(),
                         "converted_codex_response": resp.clone(),
                     });
@@ -3110,8 +4267,8 @@ pub async fn handle_completions(
                     "protocol": "openai",
                     "trace_id": trace_id,
                     "request_path": uri.path(),
-                    "original_codex_request": original_body.clone(),
-                    "gemini_request": gemini_body_for_debug.clone(),
+                    "original_codex_request": original_body.as_ref(),
+                    "gemini_request": gemini_body_for_debug.as_ref(),
                     "gemini_raw_response": gemini_resp.clone(),
                     "converted_codex_response": legacy_resp.clone(),
                 });
@@ -3136,6 +4293,7 @@ pub async fn handle_completions(
         }
 
         // Handle errors and retry
+        failure_statuses.record(status);
         let status_code = status.as_u16();
         let retry_after = response
             .headers()
@@ -3167,9 +4325,13 @@ pub async fn handle_completions(
                 .await;
         }
 
-        // 确定重试策略
-        // 确定重试策略 (对齐官方 1.5s Grace Window)
-        let strategy = determine_retry_strategy(status_code, &error_text, false);
+        let strategy = retry_state.determine_strategy(
+            &account_id,
+            status_code,
+            &error_text,
+            retry_after.as_deref(),
+            false,
+        );
 
         // 执行退备
         if apply_retry_strategy(
@@ -3181,7 +4343,16 @@ pub async fn handle_completions(
         )
         .await
         {
-            // 继续重试 (loop 会增加 attempt, 导致 force_rotate=true)
+            if matches!(strategy, RetryStrategy::GraceRetry(_)) {
+                retry_credentials = Some((
+                    access_token.clone(),
+                    project_id.clone(),
+                    email.clone(),
+                    account_id.clone(),
+                    0,
+                ));
+            }
+            force_rotate = should_rotate_account(status_code, Some(&strategy));
             continue;
         } else {
             // 不可重试
@@ -3198,16 +4369,17 @@ pub async fn handle_completions(
     }
 
     // 所有尝试均失败
+    let final_status = failure_statuses.final_status();
     if let Some(email) = last_email {
         (
-            StatusCode::TOO_MANY_REQUESTS,
+            final_status,
             [("X-Account-Email", email), ("X-Mapped-Model", mapped_model)],
             format!("All accounts exhausted. Last error: {}", last_error),
         )
             .into_response()
     } else {
         (
-            StatusCode::TOO_MANY_REQUESTS,
+            final_status,
             [("X-Mapped-Model", mapped_model)],
             format!("All accounts exhausted. Last error: {}", last_error),
         )
@@ -3430,31 +4602,35 @@ pub async fn handle_images_generations_internal(
 
     let quality = body.get("quality").and_then(|v| v.as_str());
 
-    let image_size = body
-        .get("image_size")
-        .or(body.get("imageSize"))
-        .and_then(|v| v.as_str());
+    let image_size = generation_image_size_param(&body)
+        .map_err(|message| (StatusCode::BAD_REQUEST, message, None))?;
 
     let style = body
         .get("style")
         .and_then(|v| v.as_str())
         .unwrap_or("vivid");
 
+    // Canvas compatibility extension: OpenAI's standard generations endpoint does not define
+    // this top-level field. Accept only inline data:image URLs and never fetch remote URLs.
+    let input_images = parse_generation_input_images(body.get("image"))
+        .map_err(|message| (StatusCode::BAD_REQUEST, message, None))?;
+
     info!(
-        "[Images] Received request: model={}, prompt={:.50}..., n={}, size={}, quality={}, style={}",
-        model,
-        prompt,
-        n,
-        size.unwrap_or("auto"),
-        quality.unwrap_or("auto"),
-        style
+        model = model,
+        image_count = input_images.len(),
+        n = n,
+        size = size.unwrap_or("auto"),
+        quality = quality.unwrap_or("auto"),
+        style = style,
+        "[Images] Received generation request"
     );
 
     // 2. 使用 common_utils 解析图片配置（统一逻辑，支持动态计算宽高比和 quality 映射）
     let (image_config, clean_model_name) =
-        crate::proxy::mappers::common_utils::parse_image_config_with_params(
+        crate::proxy::mappers::common_utils::try_parse_image_config_with_params(
             model, size, quality, image_size,
-        );
+        )
+        .map_err(|message| (StatusCode::BAD_REQUEST, message, None))?;
 
     // 3. Prompt Enhancement（保留原有逻辑）
     let mut final_prompt = prompt.to_string();
@@ -3466,17 +4642,18 @@ pub async fn handle_images_generations_internal(
         "natural" => final_prompt.push_str(", (natural lighting, realistic, photorealistic)"),
         _ => {}
     }
+    let contents_parts = build_image_contents(final_prompt, &input_images, None);
 
     // 4. 并发发送请求
     // 注意：不再在外部获取 Token，而是移入 Task 内部并在重试时获取
     let upstream = state.upstream.clone();
     let token_manager = state.token_manager.clone();
+    let image_scheduler = state.image_scheduler.clone();
+    let request_timeout = state.request_timeout;
     let max_pool_size = token_manager.len();
-    let max_attempts = MAX_RETRY_ATTEMPTS
-        .min(max_pool_size.saturating_add(1))
-        .max(2);
+    let max_attempts = MAX_RETRY_ATTEMPTS.min(max_pool_size).max(1);
 
-    let mut tasks = Vec::new();
+    let mut tasks = JoinSet::new();
 
     // Track the last account actually attempted, so error responses (502/503) can be
     // attributed to an account in the traffic log instead of showing "(none)".
@@ -3485,32 +4662,68 @@ pub async fn handle_images_generations_internal(
     for _ in 0..n {
         let upstream = upstream.clone();
         let token_manager = token_manager.clone();
-        let final_prompt = final_prompt.clone();
+        let contents_parts = contents_parts.clone();
         let image_config = image_config.clone(); // 使用解析后的完整配置
         let _response_format = response_format.to_string();
 
         let model_to_use = clean_model_name.clone();
         let attempted_account = attempted_account.clone();
+        let image_scheduler = image_scheduler.clone();
 
-        tasks.push(tokio::spawn(async move {
+        tasks.spawn(async move {
+            let mut image_permit = None;
             let mut last_error = String::new();
             let mut force_rotate = false;
+            let mut retry_state = RequestRetryState::default();
+            let mut retry_credentials: Option<(String, String, String, String, u64)> = None;
+            let mut failure_statuses = FailureStatusTracker::default();
+            let mut used_attempts = 0;
 
-            for attempt in 0..max_attempts {
-                let (access_token, project_id, email, account_id, _wait_ms) = match token_manager
-                    .get_token("image_gen", force_rotate, None, &model_to_use)
-                    .await
-                {
-                    Ok(t) => t,
-                    Err(e) => {
-                        last_error = format!("Token error: {}", e);
-                        if attempt < max_attempts - 1 {
-                            tokio::time::sleep(Duration::from_millis(500)).await;
-                            continue;
+            while let Some(attempt) = next_rotation_attempt(
+                &mut used_attempts,
+                max_attempts,
+                retry_credentials.is_some(),
+            ) {
+                let (access_token, project_id, email, account_id, _wait_ms) =
+                    if let Some(credentials) = retry_credentials.take() {
+                        credentials
+                    } else {
+                        drop(image_permit.take());
+                        match token_manager
+                            .get_image_token(
+                                force_rotate,
+                                None,
+                                &model_to_use,
+                                &image_scheduler,
+                                request_timeout,
+                            )
+                            .await
+                        {
+                            Ok((
+                                access_token,
+                                project_id,
+                                email,
+                                account_id,
+                                wait_ms,
+                                permit,
+                            )) => {
+                                image_permit = Some(permit);
+                                (access_token, project_id, email, account_id, wait_ms)
+                            }
+                            Err((status, e)) => {
+                                last_error = format!("Token error: {}", e);
+                                failure_statuses.record(status);
+                                if status == StatusCode::TOO_MANY_REQUESTS {
+                                    return Err((status, e));
+                                }
+                                if attempt < max_attempts - 1 {
+                                    tokio::time::sleep(Duration::from_millis(500)).await;
+                                    continue;
+                                }
+                                break;
+                            }
                         }
-                        break;
-                    }
-                };
+                    };
                 if let Ok(mut g) = attempted_account.lock() {
                     *g = Some(email.clone());
                 }
@@ -3532,7 +4745,7 @@ pub async fn handle_images_generations_internal(
                     "request": {
                         "contents": [{
                             "role": "user",
-                            "parts": [{"text": final_prompt}]
+                            "parts": contents_parts
                         }],
                         "generationConfig": {
                             "candidateCount": 1, // 强制单张
@@ -3561,26 +4774,83 @@ pub async fn handle_images_generations_internal(
                         let response = call_result.response;
                         let status = response.status();
                         if !status.is_success() {
+                            failure_statuses.record(status);
+                            let retry_after = response
+                                .headers()
+                                .get("Retry-After")
+                                .and_then(|header| header.to_str().ok())
+                                .map(str::to_string);
                             let err_text = response.text().await.unwrap_or_default();
                             let status_code = status.as_u16();
                             last_error = format!("Upstream error {}: {}", status, err_text);
-
-                            // 429/500/503: mark limited and rotate to another account
-                            if status_code == 429 || status_code == 503 || status_code == 500 {
+                            let strategy = (status_code == 429).then(|| {
+                                retry_state.determine_strategy(
+                                    &account_id,
+                                    status_code,
+                                    &err_text,
+                                    retry_after.as_deref(),
+                                    false,
+                                )
+                            });
+                            // 429/500/503: mark limited before retry/rotation
+                            let should_mark_limited =
+                                status_code == 429 || status_code == 503 || status_code == 500;
+                            let needs_quota_refresh = if should_mark_limited {
                                 tracing::warn!(
                                     "[Images] Account {} rate limited/error ({}), rotating...",
                                     email,
                                     status_code
                                 );
                                 token_manager
-                                    .mark_rate_limited_async(
+                                    .mark_rate_limited_fast(
                                         &email,
                                         status_code,
-                                        None,
+                                        retry_after.as_deref(),
                                         &err_text,
-                                        Some(model_to_use.as_str()),
+                                        Some(&resolved_model),
+                                    )
+                                    .await
+                            } else {
+                                false
+                            };
+                            if !matches!(strategy.as_ref(), Some(RetryStrategy::GraceRetry(_))) {
+                                drop(image_permit.take());
+                            }
+                            if needs_quota_refresh {
+                                token_manager
+                                    .refresh_quota_lock_after_fast_mark(
+                                        &email,
+                                        Some(&resolved_model),
                                     )
                                     .await;
+                            }
+
+                            if let Some(strategy) = strategy {
+                                if apply_retry_strategy(
+                                    strategy.clone(),
+                                    attempt,
+                                    max_attempts,
+                                    status_code,
+                                    "image_generation",
+                                )
+                                .await
+                                {
+                                    if matches!(strategy, RetryStrategy::GraceRetry(_)) {
+                                        retry_credentials = Some((
+                                            access_token.clone(),
+                                            project_id.clone(),
+                                            email.clone(),
+                                            account_id.clone(),
+                                            0,
+                                        ));
+                                    }
+                                    force_rotate =
+                                        should_rotate_account(status_code, Some(&strategy));
+                                    continue;
+                                }
+                            }
+
+                            if status_code == 503 || status_code == 500 {
                                 force_rotate = true;
                                 continue; // Retry loop
                             }
@@ -3601,37 +4871,53 @@ pub async fn handle_images_generations_internal(
                             }
 
                             // Other errors: return
-                            return Err(last_error);
+                            return Err((failure_statuses.final_status(), last_error));
                         }
-                        token_manager.mark_account_success(&account_id);
-                        token_manager
-                            .clear_persisted_live_limit(&account_id, Some(&model_to_use))
-                            .await;
-
                         match response.json::<Value>().await {
-                            Ok(json) => return Ok((json, email)),
-                            Err(e) => return Err(format!("Parse error: {}", e)),
+                            Ok(json) => {
+                                if response_has_inline_image_data(&json) {
+                                    token_manager.mark_account_success(&account_id);
+                                    token_manager
+                                        .clear_persisted_live_limit(
+                                            &account_id,
+                                            Some(&model_to_use),
+                                        );
+                                }
+                                return Ok((json, email));
+                            }
+                            Err(e) => {
+                                return Err((
+                                    StatusCode::BAD_GATEWAY,
+                                    format!("Parse error: {}", e),
+                                ))
+                            }
                         }
                     }
                     Err(e) => {
                         last_error = format!("Network error: {}", e);
+                        failure_statuses.record(StatusCode::BAD_GATEWAY);
+                        drop(image_permit.take());
                         continue;
                     }
                 }
             }
 
             // All attempts failed
-            Err(format!("Max retries exhausted. Last error: {}", last_error))
-        }));
+            Err((
+                failure_statuses.final_status(),
+                format!("Max retries exhausted. Last error: {}", last_error),
+            ))
+        });
     }
 
     // 5. 收集结果
     let mut images: Vec<Value> = Vec::new();
     let mut errors: Vec<String> = Vec::new();
     let mut used_email: Option<String> = None;
+    let mut failure_statuses = FailureStatusTracker::default();
 
-    for (idx, task) in tasks.into_iter().enumerate() {
-        match task.await {
+    while let Some(task) = tasks.join_next().await {
+        match task {
             Ok(result) => match result {
                 Ok((gemini_resp, email_used)) => {
                     // Capture the email from the first successful task for logging
@@ -3663,20 +4949,22 @@ pub async fn handle_images_generations_internal(
                                             "b64_json": data
                                         }));
                                     }
-                                    tracing::debug!("[Images] Task {} succeeded", idx);
+                                    tracing::debug!("[Images] Task succeeded");
                                 }
                             }
                         }
                     }
                 }
-                Err(e) => {
-                    tracing::error!("[Images] Task {} failed: {}", idx, e);
+                Err((status, e)) => {
+                    tracing::error!("[Images] Task failed: {}", e);
+                    failure_statuses.record(status);
                     errors.push(e);
                 }
             },
             Err(e) => {
                 let err_msg = format!("Task join error: {}", e);
-                tracing::error!("[Images] Task {} join error: {}", idx, e);
+                tracing::error!("[Images] Task join error: {}", e);
+                failure_statuses.record(StatusCode::BAD_GATEWAY);
                 errors.push(err_msg);
             }
         }
@@ -3690,14 +4978,7 @@ pub async fn handle_images_generations_internal(
         };
         tracing::error!("[Images] All {} requests failed. Errors: {}", n, error_msg);
 
-        // [FIX] Map upstream status codes correctly instead of forcing 502
-        let status = if error_msg.contains("429") || error_msg.contains("Quota exhausted") {
-            StatusCode::TOO_MANY_REQUESTS
-        } else if error_msg.contains("503") || error_msg.contains("Service Unavailable") {
-            StatusCode::SERVICE_UNAVAILABLE
-        } else {
-            StatusCode::BAD_GATEWAY
-        };
+        let status = failure_statuses.final_status();
 
         let attempted = used_email
             .clone()
@@ -3742,16 +5023,17 @@ pub async fn handle_images_edits(
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     tracing::info!("[Images] Received edit request");
 
-    let mut image_data: Option<(String, String)> = None;
-    let mut mask_data: Option<(String, String)> = None;
-    let mut reference_images: Vec<(String, String)> = Vec::new(); // Store (base64 data, mime type) reference images
+    let mut input_images: Vec<NormalizedInputImage> = Vec::new();
+    let mut mask_data: Option<NormalizedInputImage> = None;
+    let mut total_input_image_bytes = 0;
     let mut prompt = String::new();
     let mut n = 1;
-    let mut size = "1024x1024".to_string();
+    let mut size: Option<String> = None;
     let mut response_format = "b64_json".to_string();
     let mut model = "gemini-3.1-flash-image".to_string();
     let mut aspect_ratio: Option<String> = None;
     let mut image_size_param: Option<String> = None;
+    let mut quality: Option<String> = None;
     let mut style: Option<String> = None;
 
     while let Some(field) = multipart
@@ -3761,7 +5043,7 @@ pub async fn handle_images_edits(
     {
         let name = field.name().unwrap_or("").to_string();
 
-        if name == "image" {
+        if is_edit_image_field(&name) {
             let mime_type = field
                 .content_type()
                 .map(|content_type| content_type.to_string())
@@ -3770,10 +5052,15 @@ pub async fn handle_images_edits(
                 .bytes()
                 .await
                 .map_err(|e| (StatusCode::BAD_REQUEST, format!("Image read error: {}", e)))?;
-            image_data = Some((
-                base64::engine::general_purpose::STANDARD.encode(data),
-                mime_type,
-            ));
+            let image = normalized_image_from_bytes(
+                &data,
+                &mime_type,
+                input_images.len() + 1,
+                total_input_image_bytes,
+            )
+            .map_err(|message| (StatusCode::BAD_REQUEST, message))?;
+            total_input_image_bytes = total_input_image_bytes.saturating_add(image.decoded_len);
+            input_images.push(image);
         } else if name == "mask" {
             let mime_type = field
                 .content_type()
@@ -3783,26 +5070,15 @@ pub async fn handle_images_edits(
                 .bytes()
                 .await
                 .map_err(|e| (StatusCode::BAD_REQUEST, format!("Mask read error: {}", e)))?;
-            mask_data = Some((
-                base64::engine::general_purpose::STANDARD.encode(data),
-                mime_type,
-            ));
-        } else if name.starts_with("image") && name != "image_size" {
-            // Support image1, image2, etc.
-            let mime_type = field
-                .content_type()
-                .map(|content_type| content_type.to_string())
-                .unwrap_or_else(|| "image/jpeg".to_string());
-            let data = field.bytes().await.map_err(|e| {
-                (
-                    StatusCode::BAD_REQUEST,
-                    format!("Reference image read error: {}", e),
-                )
-            })?;
-            reference_images.push((
-                base64::engine::general_purpose::STANDARD.encode(data),
-                mime_type,
-            ));
+            let mask = normalized_image_from_bytes(
+                &data,
+                &mime_type,
+                input_images.len(),
+                total_input_image_bytes,
+            )
+            .map_err(|message| (StatusCode::BAD_REQUEST, message))?;
+            total_input_image_bytes = total_input_image_bytes.saturating_add(mask.decoded_len);
+            mask_data = Some(mask);
         } else if name == "prompt" {
             prompt = field
                 .text()
@@ -3813,12 +5089,18 @@ pub async fn handle_images_edits(
                 n = val.parse().unwrap_or(1);
             }
         } else if name == "size" {
-            if let Ok(val) = field.text().await {
-                size = val;
-            }
-        } else if name == "image_size" {
+            let val = field
+                .text()
+                .await
+                .map_err(|e| (StatusCode::BAD_REQUEST, format!("Size read error: {}", e)))?;
+            size = Some(val);
+        } else if name == "image_size" || name == "imageSize" {
             if let Ok(val) = field.text().await {
                 image_size_param = Some(val);
+            }
+        } else if name == "quality" {
+            if let Ok(val) = field.text().await {
+                quality = Some(val);
             }
         } else if name == "aspect_ratio" {
             if let Ok(val) = field.text().await {
@@ -3848,16 +5130,16 @@ pub async fn handle_images_edits(
     }
 
     tracing::info!(
-        "[Images] Edit/Ref Request: model={}, prompt={}, n={}, size={}, aspect_ratio={:?}, image_size={:?}, style={:?}, refs={}, has_main_image={}",
-        model,
-        prompt,
-        n,
-        size,
-        aspect_ratio,
-        image_size_param,
-        style,
-        reference_images.len(),
-        image_data.is_some()
+        model = model,
+        n = n,
+        size = size.as_deref().unwrap_or("auto"),
+        aspect_ratio = aspect_ratio.as_deref().unwrap_or("auto"),
+        image_size = image_size_param.as_deref().unwrap_or("auto"),
+        quality = quality.as_deref().unwrap_or("auto"),
+        style = style.as_deref().unwrap_or("auto"),
+        image_count = input_images.len(),
+        has_mask = mask_data.is_some(),
+        "[Images] Received edit request metadata"
     );
 
     // 2. Prepare Config (Aspect Ratio / Size)
@@ -3865,76 +5147,34 @@ pub async fn handle_images_edits(
     // Priority: image_size param > quality param (derived from model suffix or default)
 
     // We reuse parse_image_config_with_params but need to adapt the inputs
-    let size_input = aspect_ratio.as_deref().or(Some(&size)); // If aspect_ratio is "16:9", it works. If it's just "1:1", it also works.
-
-    // Map 'image_size' (2K) to 'quality' semantics if needed, or pass directly if logic supports
-    // common_utils logic: 'hd' -> 4K, 'medium' -> 2K.
-    let quality_input = match image_size_param.as_deref() {
-        Some("4K") => Some("hd"),
-        Some("2K") => Some("medium"),
-        _ => None, // Fallback to standard
-    };
+    let size_input = edit_size_input(aspect_ratio.as_deref(), size.as_deref());
 
     let (image_config, clean_model_name) =
-        crate::proxy::mappers::common_utils::parse_image_config_with_params(
+        crate::proxy::mappers::common_utils::try_parse_image_config_with_params(
             &model,
             size_input,
-            quality_input,
-            image_size_param.as_deref(), // [NEW] Pass direct image_size param
-        );
+            quality.as_deref(),
+            image_size_param.as_deref(),
+        )
+        .map_err(|message| (StatusCode::BAD_REQUEST, message))?;
 
     // 3. Construct Contents
-    let mut contents_parts = Vec::new();
-
-    // Add Prompt
     let mut final_prompt = prompt.clone();
     if let Some(s) = style {
         final_prompt.push_str(&format!(", style: {}", s));
     }
-    contents_parts.push(json!({
-        "text": final_prompt
-    }));
-
-    // Add Main Image (if standard edit)
-    if let Some((data, mime_type)) = image_data {
-        contents_parts.push(json!({
-            "inlineData": {
-                "mimeType": mime_type,
-                "data": data
-            }
-        }));
-    }
-
-    // Add Mask (if standard edit)
-    if let Some((data, mime_type)) = mask_data {
-        contents_parts.push(json!({
-            "inlineData": {
-                "mimeType": mime_type,
-                "data": data
-            }
-        }));
-    }
-
-    // Add Reference Images (Image-to-Image)
-    for (ref_data, mime_type) in reference_images {
-        contents_parts.push(json!({
-            "inlineData": {
-                "mimeType": mime_type,
-                "data": ref_data
-            }
-        }));
-    }
+    let contents_parts = build_image_contents(final_prompt, &input_images, mask_data.as_ref());
 
     // 4. 并发发送请求
     // 注意：不再在外部获取 Token，而是移入 Task 内部
     let upstream = state.upstream.clone();
     let token_manager = state.token_manager.clone();
+    let image_scheduler = state.image_scheduler.clone();
+    let request_timeout = state.request_timeout;
     let max_pool_size = token_manager.len();
-    let max_attempts = MAX_RETRY_ATTEMPTS
-        .min(max_pool_size.saturating_add(1))
-        .max(2);
+    let max_attempts = MAX_RETRY_ATTEMPTS.min(max_pool_size).max(1);
 
-    let mut tasks = Vec::new();
+    let mut tasks = JoinSet::new();
     for _ in 0..n {
         let upstream = upstream.clone();
         let token_manager = token_manager.clone();
@@ -3942,58 +5182,68 @@ pub async fn handle_images_edits(
         let image_config = image_config.clone();
         let response_format = response_format.clone();
         let model_to_use = clean_model_name.clone();
+        let image_scheduler = image_scheduler.clone();
 
-        tasks.push(tokio::spawn(async move {
+        tasks.spawn(async move {
+            let mut image_permit = None;
             let mut last_error = String::new();
-
             let mut force_rotate = false;
+            let mut retry_state = RequestRetryState::default();
+            let mut retry_credentials: Option<(String, String, String, String, u64)> = None;
+            let mut failure_statuses = FailureStatusTracker::default();
+            let mut used_attempts = 0;
 
-            for attempt in 0..max_attempts {
+            while let Some(attempt) = next_rotation_attempt(
+                &mut used_attempts,
+                max_attempts,
+                retry_credentials.is_some(),
+            ) {
                 // 4.1 获取 Token
-                let (access_token, project_id, email, account_id, _wait_ms) = match token_manager
-                    .get_token("image_gen", force_rotate, None, "gemini-3-pro-image")
-                    .await
-                {
-                    Ok(t) => t,
-                    Err(e) => {
-                        last_error = format!("Token error: {}", e);
-                        if attempt < max_attempts - 1 {
-                            tokio::time::sleep(Duration::from_millis(500)).await;
-                            continue;
+                let (access_token, project_id, email, account_id, _wait_ms) =
+                    if let Some(credentials) = retry_credentials.take() {
+                        credentials
+                    } else {
+                        drop(image_permit.take());
+                        match token_manager
+                            .get_image_token(
+                                force_rotate,
+                                None,
+                                image_account_selection_target(&model_to_use),
+                                &image_scheduler,
+                                request_timeout,
+                            )
+                            .await
+                        {
+                            Ok((access_token, project_id, email, account_id, wait_ms, permit)) => {
+                                image_permit = Some(permit);
+                                (access_token, project_id, email, account_id, wait_ms)
+                            }
+                            Err((status, e)) => {
+                                last_error = format!("Token error: {}", e);
+                                failure_statuses.record(status);
+                                if status == StatusCode::TOO_MANY_REQUESTS {
+                                    return Err((status, e));
+                                }
+                                if attempt < max_attempts - 1 {
+                                    tokio::time::sleep(Duration::from_millis(500)).await;
+                                    continue;
+                                }
+                                break;
+                            }
                         }
-                        break;
-                    }
-                };
+                    };
 
-                // 4.2 Construct Request Body (Need project_id)
-                let gemini_body = json!({
-                    "project": project_id,
-                    "requestId": format!("img-edit-{}", uuid::Uuid::new_v4()),
-                    "model": model_to_use,
-                    "userAgent": "antigravity",
-                    "requestType": "image_gen",
-                    "request": {
-                        "contents": [{
-                            "role": "user",
-                            "parts": contents_parts
-                        }],
-                        "generationConfig": {
-                            "candidateCount": 1,
-                            "imageConfig": image_config,
-                            "maxOutputTokens": 8192,
-                            "stopSequences": [],
-                            "temperature": 1.0,
-                            "topP": 0.95,
-                            "topK": 40
-                        },
-                        "safetySettings": [
-                            { "category": "HARM_CATEGORY_HARASSMENT", "threshold": "OFF" },
-                            { "category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "OFF" },
-                            { "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "OFF" },
-                            { "category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "OFF" },
-                        ]
-                    }
-                });
+                let resolved_model = token_manager
+                    .resolve_dynamic_model_for_account(&account_id, &model_to_use)
+                    .await;
+
+                // 4.2 Construct Request Body (Need project_id and account-resolved model)
+                let gemini_body = build_image_edit_body(
+                    project_id.clone(),
+                    &resolved_model,
+                    contents_parts.clone(),
+                    image_config.clone(),
+                );
 
                 match upstream
                     .call_v1_internal(
@@ -4009,57 +5259,129 @@ pub async fn handle_images_edits(
                         let response = call_result.response;
                         let status = response.status();
                         if !status.is_success() {
+                            failure_statuses.record(status);
+                            let retry_after = response
+                                .headers()
+                                .get("Retry-After")
+                                .and_then(|header| header.to_str().ok())
+                                .map(str::to_string);
                             let err_text = response.text().await.unwrap_or_default();
                             let status_code = status.as_u16();
                             last_error = format!("Upstream error {}: {}", status, err_text);
-
+                            let strategy = (status_code == 429).then(|| {
+                                retry_state.determine_strategy(
+                                    &account_id,
+                                    status_code,
+                                    &err_text,
+                                    retry_after.as_deref(),
+                                    false,
+                                )
+                            });
                             // 429/500/503 等错误进行标记和重试
-                            if status_code == 429 || status_code == 503 || status_code == 500 {
+                            let should_mark_limited =
+                                status_code == 429 || status_code == 503 || status_code == 500;
+                            let needs_quota_refresh = if should_mark_limited {
                                 tracing::warn!(
                                     "[Images] Account {} rate limited/error ({}), rotating...",
                                     email,
                                     status_code
                                 );
                                 token_manager
-                                    .mark_rate_limited_async(
+                                    .mark_rate_limited_fast(
                                         &email,
                                         status_code,
-                                        None,
+                                        retry_after.as_deref(),
                                         &err_text,
-                                        Some(&model_to_use),
+                                        Some(&resolved_model),
+                                    )
+                                    .await
+                            } else {
+                                false
+                            };
+                            if !matches!(strategy.as_ref(), Some(RetryStrategy::GraceRetry(_))) {
+                                drop(image_permit.take());
+                            }
+                            if needs_quota_refresh {
+                                token_manager
+                                    .refresh_quota_lock_after_fast_mark(
+                                        &email,
+                                        Some(&resolved_model),
                                     )
                                     .await;
+                            }
+
+                            if let Some(strategy) = strategy {
+                                if apply_retry_strategy(
+                                    strategy.clone(),
+                                    attempt,
+                                    max_attempts,
+                                    status_code,
+                                    "image_edit",
+                                )
+                                .await
+                                {
+                                    if matches!(strategy, RetryStrategy::GraceRetry(_)) {
+                                        retry_credentials = Some((
+                                            access_token.clone(),
+                                            project_id.clone(),
+                                            email.clone(),
+                                            account_id.clone(),
+                                            0,
+                                        ));
+                                    }
+                                    force_rotate =
+                                        should_rotate_account(status_code, Some(&strategy));
+                                    continue;
+                                }
+                            }
+
+                            if status_code == 503 || status_code == 500 {
                                 continue; // Retry loop
                             }
-                            return Err(last_error);
+                            return Err((failure_statuses.final_status(), last_error));
                         }
-                        token_manager.mark_account_success(&account_id);
-                        token_manager
-                            .clear_persisted_live_limit(&account_id, Some(&model_to_use))
-                            .await;
-
                         match response.json::<Value>().await {
-                            Ok(json) => return Ok((json, response_format.clone(), email)),
-                            Err(e) => return Err(format!("Parse error: {}", e)),
+                            Ok(json) => {
+                                if response_has_inline_image_data(&json) {
+                                    token_manager.mark_account_success(&account_id);
+                                    token_manager.clear_persisted_live_limit(
+                                        &account_id,
+                                        Some(&model_to_use),
+                                    );
+                                }
+                                return Ok((json, response_format.clone(), email));
+                            }
+                            Err(e) => {
+                                return Err((
+                                    StatusCode::BAD_GATEWAY,
+                                    format!("Parse error: {}", e),
+                                ))
+                            }
                         }
                     }
                     Err(e) => {
                         last_error = format!("Network error: {}", e);
+                        failure_statuses.record(StatusCode::BAD_GATEWAY);
+                        drop(image_permit.take());
                         continue;
                     }
                 }
             }
-            Err(format!("Max retries exhausted. Last error: {}", last_error))
-        }));
+            Err((
+                failure_statuses.final_status(),
+                format!("Max retries exhausted. Last error: {}", last_error),
+            ))
+        });
     }
 
     // 5. Collect Results
     let mut images: Vec<Value> = Vec::new();
     let mut errors: Vec<String> = Vec::new();
     let mut used_email: Option<String> = None;
+    let mut failure_statuses = FailureStatusTracker::default();
 
-    for (idx, task) in tasks.into_iter().enumerate() {
-        match task.await {
+    while let Some(task) = tasks.join_next().await {
+        match task {
             Ok(result) => match result {
                 Ok((gemini_resp, response_format, email_used)) => {
                     if used_email.is_none() {
@@ -4090,20 +5412,22 @@ pub async fn handle_images_edits(
                                             "b64_json": data
                                         }));
                                     }
-                                    tracing::debug!("[Images] Task {} succeeded", idx);
+                                    tracing::debug!("[Images] Task succeeded");
                                 }
                             }
                         }
                     }
                 }
-                Err(e) => {
-                    tracing::error!("[Images] Task {} failed: {}", idx, e);
+                Err((status, e)) => {
+                    tracing::error!("[Images] Task failed: {}", e);
+                    failure_statuses.record(status);
                     errors.push(e);
                 }
             },
             Err(e) => {
                 let err_msg = format!("Task join error: {}", e);
-                tracing::error!("[Images] Task {} join error: {}", idx, e);
+                tracing::error!("[Images] Task join error: {}", e);
+                failure_statuses.record(StatusCode::BAD_GATEWAY);
                 errors.push(err_msg);
             }
         }
@@ -4120,13 +5444,7 @@ pub async fn handle_images_edits(
             n,
             error_msg
         );
-        let status = if error_msg.contains("429") || error_msg.contains("Quota exhausted") {
-            StatusCode::TOO_MANY_REQUESTS
-        } else if error_msg.contains("503") || error_msg.contains("Service Unavailable") {
-            StatusCode::SERVICE_UNAVAILABLE
-        } else {
-            StatusCode::BAD_GATEWAY
-        };
+        let status = failure_statuses.final_status();
 
         return Err((status, error_msg));
     }
@@ -4275,6 +5593,7 @@ async fn handle_websocket_session(mut socket: WebSocket, headers: HeaderMap, sta
                 continue;
             }
         };
+        drop(text);
         let ws_trace_id = format!("ws_{}", chrono::Utc::now().timestamp_subsec_millis());
         let debug_cfg = state.debug_logging.read().await.clone();
         if debug_logger::is_enabled(&debug_cfg) {
@@ -4282,8 +5601,7 @@ async fn handle_websocket_session(mut socket: WebSocket, headers: HeaderMap, sta
                 "kind": "codex_websocket_raw_request",
                 "protocol": "codex_websocket",
                 "trace_id": ws_trace_id,
-                "raw_text": text.clone(),
-                "payload": payload.clone(),
+                "payload": debug_value_without_inline_data(&payload),
             });
             debug_logger::write_exchange_payload(
                 &debug_cfg,
@@ -4316,7 +5634,7 @@ async fn handle_websocket_session(mut socket: WebSocket, headers: HeaderMap, sta
             continue;
         }
 
-        let normalized = match normalize_responses_websocket_request(&payload, &mut session_state) {
+        let normalized = match normalize_responses_websocket_request(payload, &mut session_state) {
             Ok(n) => n,
             Err(e) => {
                 let error_ev = json!({
@@ -4457,8 +5775,8 @@ async fn handle_websocket_session(mut socket: WebSocket, headers: HeaderMap, sta
                 "kind": "codex_websocket_converted_response",
                 "protocol": "codex_websocket",
                 "trace_id": ws_trace_id,
-                "events": outgoing_ws_events,
-                "completed_output": completed_output.clone(),
+                "events": debug_value_without_inline_data(&Value::Array(outgoing_ws_events)),
+                "completed_output": debug_value_without_inline_data(&completed_output),
             });
             debug_logger::write_exchange_payload(
                 &debug_cfg,
@@ -4469,7 +5787,8 @@ async fn handle_websocket_session(mut socket: WebSocket, headers: HeaderMap, sta
             .await;
         }
 
-        session_state.last_response_output = completed_output;
+        session_state.last_response_output =
+            into_history_without_inline_media(completed_output).unwrap_or_else(|| json!([]));
         session_state.last_response_id = translation_state.response_id.clone();
         session_state.last_response_pending_tool_call_ids = translation_state
             .tool_calls
@@ -4544,7 +5863,7 @@ fn handle_prewarm_locally(payload: &Value, state: &mut WebsocketSessionState) ->
         }
     });
 
-    let mut normalized = payload.clone();
+    let mut normalized = history_without_inline_media(payload);
     if let Some(obj) = normalized.as_object_mut() {
         obj.remove("type");
         obj.remove("generate");
@@ -4558,30 +5877,31 @@ fn handle_prewarm_locally(payload: &Value, state: &mut WebsocketSessionState) ->
 }
 
 fn normalize_responses_websocket_request(
-    payload: &Value,
+    mut payload: Value,
     state: &mut WebsocketSessionState,
 ) -> Result<Value, String> {
-    let event_type = payload.get("type").and_then(|v| v.as_str()).unwrap_or("");
-    match event_type {
+    let event_type = payload
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    match event_type.as_str() {
         "response.create" => {
             if state.last_request.is_none() {
-                let mut normalized = payload.clone();
-                if let Some(obj) = normalized.as_object_mut() {
+                if let Some(obj) = payload.as_object_mut() {
                     obj.remove("type");
                     obj.insert("stream".to_string(), Value::Bool(true));
                     if !obj.contains_key("input") {
                         obj.insert("input".to_string(), json!([]));
                     }
                 }
-                let model_name = normalized
-                    .get("model")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let model_name = payload.get("model").and_then(|v| v.as_str()).unwrap_or("");
                 if model_name.is_empty() {
                     return Err("missing model in response.create request".to_string());
                 }
-                state.last_request = Some(normalized.clone());
-                Ok(normalized)
+                validate_responses_input_image_limits(payload.get("input"))?;
+                state.last_request = Some(history_without_inline_media(&payload));
+                Ok(payload)
             } else {
                 normalize_response_subsequent_request(payload, state)
             }
@@ -4595,101 +5915,100 @@ fn normalize_responses_websocket_request(
 }
 
 fn normalize_response_subsequent_request(
-    payload: &Value,
+    mut payload: Value,
     state: &mut WebsocketSessionState,
 ) -> Result<Value, String> {
     if state.last_request.is_none() {
         return Err("websocket request received before response.create".to_string());
     }
+    validate_responses_input_image_limits(payload.get("input"))?;
 
     // [FIX] 拦截 compaction 和完整历史替换事件
-    if should_replace_websocket_transcript(payload) {
-        let mut normalized = payload.clone();
-        if let Some(obj) = normalized.as_object_mut() {
+    if should_replace_websocket_transcript(&payload) {
+        if let Some(obj) = payload.as_object_mut() {
             obj.remove("type");
             obj.remove("previous_response_id");
             obj.insert("stream".to_string(), Value::Bool(true));
         }
-        state.last_request = Some(normalized.clone());
-        return Ok(normalized);
+        state.last_request = Some(history_without_inline_media(&payload));
+        return Ok(payload);
     }
 
     // [FIX] 始终走完整的 merge 逻辑，废弃 transcript replacement 分支
     // 旧逻辑在检测到 function_call/assistant 时直接替换整个历史，导致多轮对话历史丢失
     // 正确做法：last_request.input + last_response_output + new payload.input 全部合并
-    let mut merged_input = Vec::new();
+    let mut last_request = state.last_request.take().expect("checked above");
+    let mut merged_input = last_request
+        .as_object_mut()
+        .and_then(|obj| obj.remove("input"))
+        .and_then(|value| match value {
+            Value::Array(items) => Some(items),
+            _ => None,
+        })
+        .unwrap_or_default();
 
-    // 1. 上一轮请求的 input（已含此前所有历史）
-    if let Some(last_req) = &state.last_request {
-        if let Some(arr) = last_req.get("input").and_then(|v| v.as_array()) {
-            merged_input.extend(arr.clone());
-        }
-    }
-
+    // 上一轮请求的 input 已按所有权移入 merged_input。
     // 2. 上一轮 response 的 output items（assistant 回复、工具调用等）
-    if let Some(arr) = state.last_response_output.as_array() {
-        merged_input.extend(arr.clone());
+    if let Value::Array(items) = std::mem::take(&mut state.last_response_output) {
+        merged_input.extend(items);
     }
 
     // 3. 本轮新的 input items（用户消息、工具调用结果等）
-    if let Some(arr) = payload.get("input").and_then(|v| v.as_array()) {
-        for item in arr {
-            let t = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
-            if t == "compaction" || t == "compaction_summary" {
-                continue;
-            }
-            if t == "function_call_output" || t == "custom_tool_call_output" {
-                if let Some(call_id) = item.get("call_id").and_then(|v| v.as_str()) {
-                    state
-                        .last_response_pending_tool_call_ids
-                        .retain(|x| x != call_id);
-                }
-            }
-            merged_input.push(item.clone());
+    let current_input = payload
+        .as_object_mut()
+        .and_then(|obj| obj.remove("input"))
+        .and_then(|value| match value {
+            Value::Array(items) => Some(items),
+            _ => None,
+        })
+        .unwrap_or_default();
+    for item in current_input {
+        let t = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        if t == "compaction" || t == "compaction_summary" {
+            continue;
         }
+        if t == "function_call_output" || t == "custom_tool_call_output" {
+            if let Some(call_id) = item.get("call_id").and_then(|v| v.as_str()) {
+                state
+                    .last_response_pending_tool_call_ids
+                    .retain(|x| x != call_id);
+            }
+        }
+        merged_input.push(item);
     }
 
     repair_tool_calls(&mut merged_input, &state.tool_call_cache);
 
     let deduped = dedupe_function_calls_by_call_id(dedupe_input_items_by_id(merged_input));
 
-    let mut normalized = payload.clone();
-    if let Some(obj) = normalized.as_object_mut() {
+    if let Some(obj) = payload.as_object_mut() {
         obj.remove("type");
         obj.remove("previous_response_id");
-        obj.insert("input".to_string(), json!(deduped));
+        obj.insert("input".to_string(), Value::Array(deduped));
         if !obj.contains_key("model") {
-            if let Some(last_req) = &state.last_request {
-                if let Some(model) = last_req.get("model") {
-                    obj.insert("model".to_string(), model.clone());
-                }
+            if let Some(model) = last_request.get_mut("model").map(Value::take) {
+                obj.insert("model".to_string(), model);
             }
         }
         if !obj.contains_key("instructions") {
-            if let Some(last_req) = &state.last_request {
-                if let Some(instructions) = last_req.get("instructions") {
-                    obj.insert("instructions".to_string(), instructions.clone());
-                }
+            if let Some(instructions) = last_request.get_mut("instructions").map(Value::take) {
+                obj.insert("instructions".to_string(), instructions);
             }
         }
         if !obj.contains_key("tools") {
-            if let Some(last_req) = &state.last_request {
-                if let Some(tools) = last_req.get("tools") {
-                    obj.insert("tools".to_string(), tools.clone());
-                }
+            if let Some(tools) = last_request.get_mut("tools").map(Value::take) {
+                obj.insert("tools".to_string(), tools);
             }
         }
         if !obj.contains_key("tool_choice") {
-            if let Some(last_req) = &state.last_request {
-                if let Some(tool_choice) = last_req.get("tool_choice") {
-                    obj.insert("tool_choice".to_string(), tool_choice.clone());
-                }
+            if let Some(tool_choice) = last_request.get_mut("tool_choice").map(Value::take) {
+                obj.insert("tool_choice".to_string(), tool_choice);
             }
         }
         obj.insert("stream".to_string(), Value::Bool(true));
     }
-    state.last_request = Some(normalized.clone());
-    Ok(normalized)
+    state.last_request = Some(history_without_inline_media(&payload));
+    Ok(payload)
 }
 #[allow(dead_code)]
 fn should_replace_websocket_transcript(payload: &Value) -> bool {
@@ -4702,7 +6021,7 @@ fn should_replace_websocket_transcript(payload: &Value) -> bool {
     }
     if let Some(input_array) = payload.get("input").and_then(|v| v.as_array()) {
         for item in input_array {
-            let item_type = responses_input_item_type(item);
+            let item_type = responses_input_item_type(&item).to_string();
             if item_type == "function_call" || item_type == "custom_tool_call" {
                 return true;
             }
@@ -4715,27 +6034,6 @@ fn should_replace_websocket_transcript(payload: &Value) -> bool {
         }
     }
     false
-}
-
-#[allow(dead_code)]
-fn normalize_response_transcript_replacement(payload: &Value, last_request: &Value) -> Value {
-    let mut normalized = payload.clone();
-    if let Some(obj) = normalized.as_object_mut() {
-        obj.remove("type");
-        obj.remove("previous_response_id");
-        obj.insert("stream".to_string(), Value::Bool(true));
-        if !obj.contains_key("model") {
-            if let Some(model) = last_request.get("model") {
-                obj.insert("model".to_string(), model.clone());
-            }
-        }
-        if !obj.contains_key("instructions") {
-            if let Some(instructions) = last_request.get("instructions") {
-                obj.insert("instructions".to_string(), instructions.clone());
-            }
-        }
-    }
-    normalized
 }
 
 fn dedupe_input_items_by_id(items: Vec<Value>) -> Vec<Value> {
@@ -4848,9 +6146,17 @@ fn convert_codex_to_openai_request(mut body: Value) -> Value {
     let instructions = body
         .get("instructions")
         .and_then(|v| v.as_str())
-        .unwrap_or_default();
-    let input_items = body.get("input").and_then(|v| v.as_array());
+        .unwrap_or_default()
+        .to_string();
     let (interaction_ledger, mut step_markers) = codex_ledger_from_body(&body);
+    let input_items = body
+        .as_object_mut()
+        .and_then(|obj| obj.remove("input"))
+        .and_then(|value| match value {
+            Value::Array(items) => Some(items),
+            _ => None,
+        })
+        .unwrap_or_default();
 
     let mut messages = Vec::new();
     if !instructions.is_empty() {
@@ -4860,8 +6166,8 @@ fn convert_codex_to_openai_request(mut body: Value) -> Value {
     let mut call_id_to_name = std::collections::HashMap::new();
     let mut skipped_incomplete_custom_call_ids = std::collections::HashSet::new();
 
-    if let Some(items) = input_items {
-        for item in items {
+    {
+        for item in &input_items {
             let item_type = responses_input_item_type(item);
             if item_type == "custom_tool_call"
                 && item.get("status").and_then(|v| v.as_str()) == Some("incomplete")
@@ -4899,21 +6205,25 @@ fn convert_codex_to_openai_request(mut body: Value) -> Value {
         }
     }
 
-    if let Some(items) = input_items {
+    {
         let mut seen_apply_patch_failures = std::collections::HashSet::new();
         let mut apply_patch_failure_distinct_count = 0usize;
-        for item in items {
-            let item_type = responses_input_item_type(item);
+        for mut item in input_items {
+            let item_type = responses_input_item_type(&item).to_string();
             let step_marker = step_markers.pop_front();
             if item_type == "custom_tool_call"
                 && item.get("status").and_then(|v| v.as_str()) == Some("incomplete")
             {
                 continue;
             }
-            match item_type {
+            match item_type.as_str() {
                 "message" => {
-                    let role = item.get("role").and_then(|v| v.as_str()).unwrap_or("user");
-                    let (text_parts, image_parts) = responses_message_parts(item);
+                    let role = item
+                        .get("role")
+                        .and_then(Value::as_str)
+                        .unwrap_or("user")
+                        .to_string();
+                    let (text_parts, image_parts) = responses_message_parts(&mut item);
 
                     if image_parts.is_empty() {
                         let content = prefix_with_step_marker(step_marker, text_parts.join("\n"));
@@ -4998,9 +6308,10 @@ fn convert_codex_to_openai_request(mut body: Value) -> Value {
                     let call_id = item
                         .get("call_id")
                         .and_then(|v| v.as_str())
-                        .unwrap_or("unknown");
+                        .unwrap_or("unknown")
+                        .to_string();
                     if item_type == "custom_tool_call_output"
-                        && skipped_incomplete_custom_call_ids.contains(call_id)
+                        && skipped_incomplete_custom_call_ids.contains(&call_id)
                     {
                         tracing::warn!(
                             "Skipping output for incomplete custom tool call {}",
@@ -5008,21 +6319,10 @@ fn convert_codex_to_openai_request(mut body: Value) -> Value {
                         );
                         continue;
                     }
-                    let output = item.get("output");
-                    let mut output_str = if let Some(o) = output {
-                        if o.is_string() {
-                            o.as_str().unwrap().to_string()
-                        } else if let Some(content) = o.get("content").and_then(|v| v.as_str()) {
-                            content.to_string()
-                        } else {
-                            o.to_string()
-                        }
-                    } else {
-                        "".to_string()
-                    };
+                    let (mut output_str, output_media) = responses_tool_output_parts(&mut item);
 
-                    let name = match call_id_to_name.get(call_id).cloned().or_else(|| {
-                        get_cached_tool_call(call_id).and_then(|v| {
+                    let name = match call_id_to_name.get(&call_id).cloned().or_else(|| {
+                        get_cached_tool_call(&call_id).and_then(|v| {
                             v.get("name")
                                 .and_then(|n| n.as_str())
                                 .map(|s| s.to_string())
@@ -5047,12 +6347,14 @@ fn convert_codex_to_openai_request(mut body: Value) -> Value {
                         );
                     }
                     output_str = prefix_with_step_marker(step_marker, output_str);
+                    let output_content =
+                        build_responses_tool_output_content(output_str, output_media);
 
                     messages.push(json!({
                         "role": "tool",
                         "tool_call_id": call_id,
                         "name": name,
-                        "content": output_str
+                        "content": output_content
                     }));
                 }
                 _ => {}
@@ -5074,10 +6376,11 @@ fn convert_codex_to_openai_request(mut body: Value) -> Value {
     }
 
     if let Some(obj) = body.as_object_mut() {
-        obj.insert("messages".to_string(), json!(messages));
+        obj.insert("messages".to_string(), Value::Array(messages));
         if let Some(ledger) = interaction_ledger {
             obj.insert("_interaction_ledger".to_string(), json!(ledger));
         }
+        obj.remove("input");
         obj.remove("instructions");
     }
     body

@@ -6,6 +6,7 @@ use axum::{
     Json,
 };
 use serde_json::{json, Value};
+use std::collections::HashSet;
 use tokio::time::{sleep, Duration};
 use tracing::{debug, info};
 
@@ -26,14 +27,117 @@ pub enum RetryStrategy {
     GraceRetry(Duration),
 }
 
+#[derive(Debug, Default)]
+pub struct RequestRetryState {
+    grace_retried_accounts: HashSet<String>,
+}
+
+impl RequestRetryState {
+    pub fn determine_strategy(
+        &mut self,
+        account_id: &str,
+        status_code: u16,
+        error_text: &str,
+        retry_after: Option<&str>,
+        retried_without_thinking: bool,
+    ) -> RetryStrategy {
+        let allow_grace_retry = !self.grace_retried_accounts.contains(account_id);
+        let strategy = determine_retry_strategy_inner(
+            status_code,
+            error_text,
+            retry_after,
+            retried_without_thinking,
+            allow_grace_retry,
+        );
+        if matches!(strategy, RetryStrategy::GraceRetry(_)) {
+            self.grace_retried_accounts.insert(account_id.to_string());
+        }
+        strategy
+    }
+}
+
+pub fn next_rotation_attempt(
+    used_attempts: &mut usize,
+    max_attempts: usize,
+    retry_same_account: bool,
+) -> Option<usize> {
+    if retry_same_account {
+        return used_attempts.checked_sub(1);
+    }
+    if *used_attempts >= max_attempts {
+        return None;
+    }
+
+    let attempt = *used_attempts;
+    *used_attempts += 1;
+    Some(attempt)
+}
+
+#[derive(Debug, Default)]
+pub struct FailureStatusTracker {
+    saw_failure: bool,
+    last_non_rate_limit: Option<StatusCode>,
+}
+
+impl FailureStatusTracker {
+    pub fn record(&mut self, status: StatusCode) {
+        self.saw_failure = true;
+        if status != StatusCode::TOO_MANY_REQUESTS {
+            self.last_non_rate_limit = Some(status);
+        }
+    }
+
+    pub fn final_status(&self) -> StatusCode {
+        self.last_non_rate_limit.unwrap_or_else(|| {
+            if self.saw_failure {
+                StatusCode::TOO_MANY_REQUESTS
+            } else {
+                StatusCode::BAD_GATEWAY
+            }
+        })
+    }
+}
+
 /// 根据错误状态码和错误信息确定重试策略
 pub fn determine_retry_strategy(
     status_code: u16,
     error_text: &str,
     retried_without_thinking: bool,
 ) -> RetryStrategy {
-    // [FIX] 400 signature errors must be case-insensitive and cover all Google variants:
-    // "Invalid thought signature", "thoughtSignature", "thought_signature", "Invalid signature"
+    if status_code == 429 {
+        return match crate::proxy::upstream::retry::parse_legacy_retry_delay(error_text) {
+            Some(delay_ms) if delay_ms > 0 && delay_ms <= 2000 => {
+                let actual_delay = delay_ms.saturating_add(100);
+                tracing::info!(
+                    "Grace Retry Triggered: Delay {}ms is within window, using same account",
+                    actual_delay
+                );
+                RetryStrategy::GraceRetry(Duration::from_millis(actual_delay))
+            }
+            Some(delay_ms) => RetryStrategy::FixedDelay(Duration::from_millis(
+                delay_ms.saturating_add(200).min(30_000),
+            )),
+            None => RetryStrategy::LinearBackoff { base_ms: 5000 },
+        };
+    }
+
+    determine_retry_strategy_inner(
+        status_code,
+        error_text,
+        None,
+        retried_without_thinking,
+        true,
+    )
+}
+
+fn determine_retry_strategy_inner(
+    status_code: u16,
+    error_text: &str,
+    retry_after: Option<&str>,
+    retried_without_thinking: bool,
+    allow_grace_retry: bool,
+) -> RetryStrategy {
+    // 400 signature errors must be case-insensitive and cover all Google variants.
     let lower = error_text.to_lowercase();
     match status_code {
         // 400 错误：仅在特定 Thinking 签名失败时重试一次
@@ -53,17 +157,25 @@ pub fn determine_retry_strategy(
         // 429 限流错误
         429 => {
             // 优先使用服务端返回的 Retry-After / quotaResetDelay
-            if let Some(delay_ms) = crate::proxy::upstream::retry::parse_retry_delay(error_text) {
-                // [NEW] 如果延迟在 2s 内，执行 Grace Retry (原地重试)
+            if let Some(parsed_delay) = crate::proxy::upstream::retry::parse_retry_delay_with_source(
+                error_text,
+                retry_after,
+            ) {
+                let delay_ms = parsed_delay.raw_ms;
+                // 短期原账号重试已使用时，立即回到现有换号逻辑
                 if crate::proxy::upstream::retry::should_grace_retry(delay_ms) {
-                    let actual_delay = delay_ms.saturating_add(100); // 增加 100ms 安全缓冲
-                    tracing::info!(
-                        "Grace Retry Triggered: Delay {}ms is within window, using same account",
-                        actual_delay
-                    );
-                    RetryStrategy::GraceRetry(Duration::from_millis(actual_delay))
+                    if allow_grace_retry {
+                        let actual_delay = parsed_delay.actual_wait_ms();
+                        tracing::info!(
+                            "Grace Retry Triggered: Delay {}ms is within window, using same account",
+                            actual_delay
+                        );
+                        RetryStrategy::GraceRetry(Duration::from_millis(actual_delay))
+                    } else {
+                        RetryStrategy::FixedDelay(Duration::ZERO)
+                    }
                 } else {
-                    let actual_delay = delay_ms.saturating_add(200).min(30_000);
+                    let actual_delay = parsed_delay.actual_wait_ms().min(30_000);
                     RetryStrategy::FixedDelay(Duration::from_millis(actual_delay))
                 }
             } else {
@@ -96,6 +208,61 @@ pub fn determine_retry_strategy(
 
         // 其他错误：不重试
         _ => RetryStrategy::NoRetry,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn task_short_429_preserves_rotation_budget_and_structured_status() {
+        let body = r#"{"error":{"details":[{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"1s"}]}}"#;
+
+        let drive_failures = |account_count| {
+            let mut state = RequestRetryState::default();
+            let mut used_attempts = 0;
+            let mut retry_same_account = false;
+            let mut sends = Vec::new();
+
+            while let Some(attempt) = next_rotation_attempt(
+                &mut used_attempts,
+                account_count,
+                retry_same_account,
+            ) {
+                retry_same_account = false;
+                sends.push(attempt);
+                let account_id = format!("account-{}", attempt);
+                let strategy =
+                    state.determine_strategy(&account_id, 429, body, None, false);
+                if matches!(strategy, RetryStrategy::GraceRetry(_)) {
+                    assert!(!should_rotate_account(429, Some(&strategy)));
+                    retry_same_account = true;
+                } else {
+                    assert!(should_rotate_account(429, Some(&strategy)));
+                }
+            }
+            sends
+        };
+
+        assert_eq!(drive_failures(1), vec![0, 0]);
+        assert_eq!(drive_failures(2), vec![0, 0, 1, 1]);
+
+        let mut all_429 = FailureStatusTracker::default();
+        all_429.record(StatusCode::TOO_MANY_REQUESTS);
+        all_429.record(StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(all_429.final_status(), StatusCode::TOO_MANY_REQUESTS);
+
+        for non_429 in [StatusCode::FORBIDDEN, StatusCode::SERVICE_UNAVAILABLE] {
+            let mut mixed = FailureStatusTracker::default();
+            mixed.record(non_429);
+            mixed.record(StatusCode::TOO_MANY_REQUESTS);
+            assert_eq!(mixed.final_status(), non_429);
+        }
+
+        let mut all_503 = FailureStatusTracker::default();
+        all_503.record(StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(all_503.final_status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 }
 

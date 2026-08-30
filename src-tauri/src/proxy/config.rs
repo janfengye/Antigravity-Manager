@@ -563,6 +563,25 @@ impl Default for SecurityMonitorConfig {
     }
 }
 
+/// 图片任务调度配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageSchedulerConfig {
+    #[serde(default = "default_image_per_account_concurrency")]
+    pub per_account_concurrency: usize,
+}
+
+impl Default for ImageSchedulerConfig {
+    fn default() -> Self {
+        Self {
+            per_account_concurrency: default_image_per_account_concurrency(),
+        }
+    }
+}
+
+fn default_image_per_account_concurrency() -> usize {
+    4
+}
+
 /// 反代服务配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProxyConfig {
@@ -665,6 +684,10 @@ pub struct ProxyConfig {
     #[serde(default)]
     pub image_thinking_mode: Option<String>,
 
+    /// 图片上游任务的单账号并发数（重启后生效）
+    #[serde(default)]
+    pub image_scheduler: ImageSchedulerConfig,
+
     /// 代理池配置
     #[serde(default)]
     pub proxy_pool: ProxyPoolConfig,
@@ -706,6 +729,7 @@ impl Default for ProxyConfig {
             global_system_prompt: GlobalSystemPromptConfig::default(),
             proxy_pool: ProxyPoolConfig::default(),
             image_thinking_mode: None,
+            image_scheduler: ImageSchedulerConfig::default(),
         }
     }
 }

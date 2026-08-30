@@ -11,7 +11,8 @@ use tracing::{debug, error, info};
 use crate::proxy::common::client_adapter::CLIENT_ADAPTERS;
 use crate::proxy::debug_logger;
 use crate::proxy::handlers::common::{
-    apply_retry_strategy, determine_retry_strategy, should_rotate_account,
+    apply_retry_strategy, next_rotation_attempt, should_rotate_account, FailureStatusTracker,
+    RequestRetryState, RetryStrategy,
 };
 use crate::proxy::mappers::gemini::{unwrap_response, wrap_request, wrap_request_v2};
 use crate::proxy::server::AppState;
@@ -20,6 +21,48 @@ use crate::proxy::upstream::client::mask_email;
 use axum::http::HeaderMap;
 
 const MAX_RETRY_ATTEMPTS: usize = 3;
+
+fn response_has_inline_image_data(value: &Value) -> bool {
+    let response = value.get("response").unwrap_or(value);
+    response
+        .get("candidates")
+        .and_then(Value::as_array)
+        .is_some_and(|candidates| {
+            candidates.iter().any(|candidate| {
+                candidate
+                    .get("content")
+                    .and_then(|content| content.get("parts"))
+                    .and_then(Value::as_array)
+                    .is_some_and(|parts| {
+                        parts.iter().any(|part| {
+                            part.get("inlineData")
+                                .or_else(|| part.get("inline_data"))
+                                .and_then(|image| image.get("data"))
+                                .and_then(Value::as_str)
+                                .is_some_and(|data| !data.is_empty())
+                        })
+                    })
+            })
+        })
+}
+
+#[cfg(test)]
+mod image_success_tests {
+    use super::response_has_inline_image_data;
+    use serde_json::json;
+
+    #[test]
+    fn task_gemini_image_success_requires_nonempty_payload() {
+        let empty = json!({
+            "response": {"candidates": [{"content": {"parts": [{"inlineData": {"data": ""}}]}}]}
+        });
+        let image = json!({
+            "response": {"candidates": [{"content": {"parts": [{"inlineData": {"data": "AQ=="}}]}}]}
+        });
+        assert!(!response_has_inline_image_data(&empty));
+        assert!(response_has_inline_image_data(&image));
+    }
+}
 
 /// 处理 generateContent 和 streamGenerateContent
 /// 路径参数: model_name, method (e.g. "gemini-pro", "generateContent")
@@ -92,6 +135,8 @@ pub async fn handle_generate(
 
     // 2. 获取 UpstreamClient 和 TokenManager
     let upstream = state.upstream.clone();
+    let image_scheduler = state.image_scheduler.clone();
+    let request_timeout = state.request_timeout;
     let token_manager = state.token_manager;
     let pool_size = token_manager.len();
     let max_attempts = MAX_RETRY_ATTEMPTS.min(pool_size).max(1);
@@ -99,8 +144,17 @@ pub async fn handle_generate(
     let mut last_error = String::new();
     let mut last_email: Option<String> = None;
     let mut force_rotate = false;
+    let mut retry_state = RequestRetryState::default();
+    let mut retry_credentials: Option<(String, String, String, String, u64)> = None;
+    let mut image_permit = None;
+    let mut failure_statuses = FailureStatusTracker::default();
+    let mut used_attempts = 0;
 
-    for attempt in 0..max_attempts {
+    while let Some(attempt) = next_rotation_attempt(
+        &mut used_attempts,
+        max_attempts,
+        retry_credentials.is_some(),
+    ) {
         // 3. 模型路由解析
         let mapped_model = crate::proxy::common::model_mapping::resolve_model_route(
             &model_name,
@@ -138,23 +192,50 @@ pub async fn handle_generate(
         let session_id = SessionManager::extract_gemini_session_id(&body, &model_name);
 
         // 关键：根据 force_rotate 标志决定是否轮换账号（支持 Grace Retry 原地重试）
-        let (access_token, project_id, email, account_id, _wait_ms) = match token_manager
-            .get_token(
-                &config.request_type,
-                force_rotate,
-                Some(&session_id),
-                &config.final_model,
-            )
-            .await
-        {
-            Ok(t) => t,
-            Err(e) => {
-                return Err((
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    format!("Token error: {}", e),
-                ));
-            }
-        };
+        let (access_token, project_id, email, account_id, _wait_ms) =
+            if let Some(credentials) = retry_credentials.take() {
+                credentials
+            } else if config.request_type == "image_gen" {
+                drop(image_permit.take());
+                match token_manager
+                    .get_image_token(
+                        force_rotate,
+                        Some(&session_id),
+                        &config.final_model,
+                        &image_scheduler,
+                        request_timeout,
+                    )
+                    .await
+                {
+                    Ok((access_token, project_id, email, account_id, wait_ms, permit)) => {
+                        image_permit = Some(permit);
+                        (access_token, project_id, email, account_id, wait_ms)
+                    }
+                    Err((status, message)) => {
+                        failure_statuses.record(status);
+                        last_error = message;
+                        break;
+                    }
+                }
+            } else {
+                match token_manager
+                    .get_token(
+                        &config.request_type,
+                        force_rotate,
+                        Some(&session_id),
+                        &config.final_model,
+                    )
+                    .await
+                {
+                    Ok(t) => t,
+                    Err(e) => {
+                        return Err((
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            format!("Token error: {}", e),
+                        ));
+                    }
+                }
+            };
 
         let mapped_model = token_manager
             .resolve_dynamic_model_for_account(&account_id, &mapped_model)
@@ -229,6 +310,8 @@ pub async fn handle_generate(
             Ok(r) => r,
             Err(e) => {
                 last_error = e.clone();
+                failure_statuses.record(StatusCode::BAD_GATEWAY);
+                drop(image_permit.take());
                 debug!(
                     "Gemini Request failed on attempt {}/{}: {}",
                     attempt + 1,
@@ -349,14 +432,22 @@ pub async fn handle_generate(
                 }
 
                 if retry_gemini {
+                    failure_statuses.record(StatusCode::BAD_GATEWAY);
                     continue;
                 }
-
                 let s_id_for_stream = s_id.clone();
                 let model_name_for_stream = mapped_model.clone();
+                let image_permit_for_stream = image_permit.take();
+                let track_image_success = config.request_type == "image_gen";
+                let image_success_manager = token_manager.clone();
+                let image_success_account = account_id.clone();
+                let image_success_model = mapped_model.clone();
                 let stream = async_stream::stream! {
+                    let _image_permit = image_permit_for_stream;
                     let mut first_data = first_chunk;
                     let mut meta_sent = false;
+                    let mut saw_image_data = false;
+                    let mut stream_failed = false;
 
                     loop {
                         // [NEW] 阶段 6.2: 补全 __cloudCodeMeta 响应元数据透传
@@ -381,6 +472,7 @@ pub async fn handle_generate(
                                 Ok(next_item) => next_item,
                                 Err(_) => {
                                     error!("[Gemini-SSE] Idle timeout after 300s, terminating stream");
+                                    stream_failed = true;
                                     None
                                 }
                             }
@@ -390,6 +482,7 @@ pub async fn handle_generate(
                             Some(Ok(b)) => b,
                             Some(Err(e)) => {
                                 error!("[Gemini-SSE] Stream error: {}", e);
+                                stream_failed = true;
                                 let error_json = serde_json::json!({
                                     "id": &s_id_for_stream,
                                     "object": "chat.completion.chunk",
@@ -428,6 +521,9 @@ pub async fn handle_generate(
 
                                     match serde_json::from_str::<Value>(json_part) {
                                         Ok(mut json) => {
+                                            if track_image_success && response_has_inline_image_data(&json) {
+                                                saw_image_data = true;
+                                            }
                                             // [FIX #765] Extract thoughtSignature from stream
                                             let inner_val = if json.get("response").is_some() {
                                                 json.get("response")
@@ -464,6 +560,7 @@ pub async fn handle_generate(
                                         }
                                         Err(e) => {
                                             debug!("[Gemini-SSE] JSON parse error: {}, passing raw line", e);
+                                            stream_failed = true;
                                             yield Ok::<Bytes, String>(Bytes::from(format!("{}\n\n", line)));
                                         }
                                     }
@@ -477,6 +574,15 @@ pub async fn handle_generate(
                                 yield Ok::<Bytes, String>(line_raw.freeze());
                             }
                         }
+                    }
+
+                    if track_image_success && saw_image_data && !stream_failed {
+                        image_success_manager.mark_account_success(&image_success_account);
+                        image_success_manager
+                            .clear_persisted_live_limit(
+                                &image_success_account,
+                                Some(&image_success_model),
+                            );
                     }
                 };
 
@@ -580,7 +686,13 @@ pub async fn handle_generate(
         }
 
         // 处理错误并重试
+        failure_statuses.record(status);
         let status_code = status.as_u16();
+        let retry_after = response
+            .headers()
+            .get("Retry-After")
+            .and_then(|header| header.to_str().ok())
+            .map(str::to_string);
         let error_text = response
             .text()
             .await
@@ -640,7 +752,34 @@ pub async fn handle_generate(
         }
 
         // 确定重试策略
-        let strategy = determine_retry_strategy(status_code, &error_text, false);
+        let strategy = retry_state.determine_strategy(
+            &account_id,
+            status_code,
+            &error_text,
+            retry_after.as_deref(),
+            false,
+        );
+        let needs_quota_refresh = if config.request_type == "image_gen" && status_code == 429 {
+            token_manager
+                .mark_rate_limited_fast(
+                    &email,
+                    status_code,
+                    retry_after.as_deref(),
+                    &error_text,
+                    Some(&mapped_model),
+                )
+                .await
+        } else {
+            false
+        };
+        if !matches!(&strategy, RetryStrategy::GraceRetry(_)) {
+            drop(image_permit.take());
+        }
+        if needs_quota_refresh {
+            token_manager
+                .refresh_quota_lock_after_fast_mark(&email, Some(&mapped_model))
+                .await;
+        }
         let trace_id = format!("gemini_{}", session_id);
 
         // 执行退避
@@ -653,6 +792,15 @@ pub async fn handle_generate(
         )
         .await
         {
+            if matches!(strategy, RetryStrategy::GraceRetry(_)) {
+                retry_credentials = Some((
+                    access_token.clone(),
+                    project_id.clone(),
+                    email.clone(),
+                    account_id.clone(),
+                    0,
+                ));
+            }
             // [NEW] Apply Client Adapter "let_it_crash" strategy
             if let Some(adapter) = &client_adapter {
                 if adapter.let_it_crash() && attempt > 0 {
@@ -730,14 +878,8 @@ pub async fn handle_generate(
             .into_response());
     }
 
-    // 所有尝试均失败：根据最后的错误类型决定状态码
-    let final_status = if last_error.contains("403") || last_error.contains("PERMISSION_DENIED") || last_error.contains("VALIDATION_REQUIRED") {
-        StatusCode::FORBIDDEN
-    } else if last_error.contains("401") || last_error.contains("UNAUTHENTICATED") {
-        StatusCode::UNAUTHORIZED
-    } else {
-        StatusCode::TOO_MANY_REQUESTS
-    };
+    // 所有尝试均失败：仅当全部结构化失败状态均为 429 时返回 429
+    let final_status = failure_statuses.final_status();
 
     if let Some(email) = last_email {
         Ok((

@@ -552,26 +552,23 @@ pub fn create_codex_sse_stream<S, E>(
     session_id: String,
     message_count: usize,
     _assistant_turn_index: usize,
+    response_id: String,
+    completion_tx: Option<
+        tokio::sync::oneshot::Sender<(Vec<Value>, tokio::sync::oneshot::Sender<()>)>,
+    >,
 ) -> Pin<Box<dyn Stream<Item = Result<Bytes, String>> + Send>>
 where
     S: Stream<Item = Result<Bytes, E>> + Send + ?Sized + 'static,
     E: std::fmt::Display + Send + 'static,
 {
     let mut buffer = BytesMut::new();
-    let charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    let mut rng = rand::thread_rng();
-    let random_str: String = (0..24)
-        .map(|_| {
-            let idx = rng.gen_range(0..charset.len());
-            charset.chars().nth(idx).unwrap()
-        })
-        .collect();
-    let response_id = format!("resp-{}", random_str);
-    let message_item_id = format!("msg_{}_0", &random_str[..16]);
+    let item_id_prefix = uuid::Uuid::new_v4().simple().to_string();
+    let message_item_id = format!("msg_{}_0", &item_id_prefix[..16]);
     let created_at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
+    let mut completion_tx = completion_tx;
     let stream = async_stream::stream! {
         let mut sequence_number: u64 = 0;
 
@@ -715,7 +712,11 @@ where
                                                                     if !reasoning_open {
                                                                         reasoning_output_index = next_output_index;
                                                                         next_output_index += 1;
-                                                                        active_reasoning_item_id = format!("msg_thought_{}_{}", &random_str[..16], reasoning_item_seq);
+                                                                        active_reasoning_item_id = format!(
+                                                                            "msg_thought_{}_{}",
+                                                                            &item_id_prefix[..16],
+                                                                            reasoning_item_seq
+                                                                        );
                                                                         reasoning_item_seq += 1;
                                                                         accumulated_thinking.clear();
 
@@ -1179,6 +1180,15 @@ where
             .unwrap_or_default()
             .as_secs();
 
+        if terminal_status == "completed" {
+            if let Some(tx) = completion_tx.take() {
+                let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+                if tx.send((final_outputs.clone(), ack_tx)).is_err() || ack_rx.await.is_err() {
+                    return;
+                }
+            }
+        }
+
         let mut completed_ev = json!({
             "type": terminal_type,
             "response": {
@@ -1238,6 +1248,8 @@ mod tests {
             "test-codex-session".to_string(),
             0,
             0,
+            "resp-test-codex-session".to_string(),
+            None,
         );
 
         let mut raw = String::new();
@@ -1250,6 +1262,62 @@ mod tests {
             .filter_map(|data| serde_json::from_str::<Value>(data).ok())
             .collect();
         (raw, events)
+    }
+
+    #[tokio::test]
+    async fn codex_response_id_matches_saved_session_key() {
+        let response_id = format!("resp-test-{}", uuid::Uuid::new_v4());
+        let upstream = vec![Ok::<Bytes, String>(Bytes::from(
+            "data: {\"response\":{\"candidates\":[{\"finishReason\":\"STOP\",\"content\":{\"parts\":[{\"text\":\"done\"}]}}]}}\n\n",
+        ))];
+        let (completion_tx, completion_rx) =
+            tokio::sync::oneshot::channel::<(Vec<Value>, tokio::sync::oneshot::Sender<()>)>();
+        let save_response_id = response_id.clone();
+        let save_task = tokio::spawn(async move {
+            let (outputs, ack_tx) = completion_rx.await.expect("completed output");
+            crate::proxy::http_session_store::save_session_delta(
+                save_response_id,
+                None,
+                vec![json!({"id": "user-1", "role": "user", "content": "hello"})],
+                outputs,
+                String::new(),
+                "gemini-pro-agent".to_string(),
+            )
+            .await;
+            ack_tx.send(()).expect("acknowledge session save");
+        });
+        let mut stream = create_codex_sse_stream(
+            Box::pin(stream::iter(upstream)),
+            "gemini-pro-agent".to_string(),
+            "test-session".to_string(),
+            1,
+            0,
+            response_id.clone(),
+            Some(completion_tx),
+        );
+
+        let mut raw = String::new();
+        let mut saw_completed = false;
+        while let Some(item) = stream.next().await {
+            let item = item.expect("stream item");
+            let text = String::from_utf8_lossy(&item);
+            if text.contains("event: response.completed") {
+                saw_completed = true;
+                let restored = crate::proxy::http_session_store::get_session(&response_id)
+                    .await
+                    .expect("session exists when response.completed is visible");
+                assert_eq!(restored.input_items[0]["id"], "user-1");
+                assert!(restored
+                    .input_items
+                    .iter()
+                    .any(|item| item["role"] == "assistant"));
+            }
+            raw.push_str(&text);
+        }
+        save_task.await.expect("session save task");
+
+        assert!(saw_completed);
+        assert!(raw.contains(&format!("\"id\":\"{response_id}\"")));
     }
 
     #[tokio::test]

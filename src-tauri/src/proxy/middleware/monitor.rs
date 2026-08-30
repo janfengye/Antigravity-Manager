@@ -8,13 +8,27 @@ use axum::{
     response::Response,
 };
 use base64::Engine as _;
-use futures::StreamExt;
+use futures::{Stream, StreamExt};
 use serde_json::Value;
 use std::time::Instant;
 
 const MAX_REQUEST_LOG_SIZE: usize = 100 * 1024 * 1024; // 100MB
 const MAX_RESPONSE_LOG_SIZE: usize = 100 * 1024 * 1024; // 100MB for image responses
 const MAX_LOGGED_FIELD_CHARS: usize = 500;
+
+async fn next_chunk_while_receiver_open<S, T>(
+    stream: &mut S,
+    tx: &tokio::sync::mpsc::Sender<T>,
+) -> Option<S::Item>
+where
+    S: Stream + Unpin,
+{
+    tokio::select! {
+        biased;
+        _ = tx.closed() => None,
+        chunk = stream.next() => chunk,
+    }
+}
 
 fn truncate_for_log(value: &str, max_chars: usize) -> String {
     let mut out = String::new();
@@ -522,7 +536,7 @@ pub async fn monitor_middleware(
             let mut all_stream_data = Vec::new();
             let mut last_few_bytes = Vec::new();
 
-            while let Some(chunk_res) = stream.next().await {
+            while let Some(chunk_res) = next_chunk_while_receiver_open(&mut stream, &tx).await {
                 if let Ok(chunk) = chunk_res {
                     all_stream_data.extend_from_slice(&chunk);
 
@@ -534,11 +548,16 @@ pub async fn monitor_middleware(
                             last_few_bytes.drain(0..last_few_bytes.len() - 8192);
                         }
                     }
-                    let _ = tx.send(Ok::<_, axum::Error>(chunk)).await;
+                    if tx.send(Ok::<_, axum::Error>(chunk)).await.is_err() {
+                        break;
+                    }
                 } else if let Err(e) = chunk_res {
-                    let _ = tx.send(Err(axum::Error::new(e))).await;
+                    if tx.send(Err(axum::Error::new(e))).await.is_err() {
+                        break;
+                    }
                 }
             }
+            drop(stream);
 
             // Parse and consolidate stream data into readable format
             if let Ok(full_response) = std::str::from_utf8(&all_stream_data) {
@@ -1020,5 +1039,55 @@ pub async fn monitor_middleware(
 
         monitor.log_request(log).await;
         response
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::next_chunk_while_receiver_open;
+    use futures::stream;
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+    use std::task::Poll;
+
+    struct DropFlag(Arc<AtomicBool>);
+
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[tokio::test]
+    async fn receiver_close_stops_waiting_and_drops_source_stream() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let drop_flag = DropFlag(dropped.clone());
+        let (polled_tx, polled_rx) = tokio::sync::oneshot::channel();
+        let (tx, rx) = tokio::sync::mpsc::channel::<()>(1);
+
+        let task = tokio::spawn(async move {
+            let mut polled_tx = Some(polled_tx);
+            let mut source = stream::poll_fn(move |_| {
+                let _ = &drop_flag;
+                if let Some(polled_tx) = polled_tx.take() {
+                    let _ = polled_tx.send(());
+                }
+                Poll::<Option<()>>::Pending
+            });
+
+            assert!(next_chunk_while_receiver_open(&mut source, &tx)
+                .await
+                .is_none());
+        });
+
+        polled_rx.await.expect("source stream was not polled");
+        drop(rx);
+        tokio::time::timeout(std::time::Duration::from_secs(1), task)
+            .await
+            .expect("forwarder did not stop after receiver closed")
+            .expect("forwarder task panicked");
+        assert!(dropped.load(Ordering::SeqCst));
     }
 }

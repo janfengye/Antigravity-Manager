@@ -2,6 +2,14 @@ use dashmap::DashMap;
 use regex::Regex;
 use std::time::{Duration, SystemTime};
 
+const MAX_LOCKOUT_SECONDS: u64 = 300;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RetryParserMode {
+    Current,
+    Baseline,
+}
+
 /// 限流原因类型
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum RateLimitReason {
@@ -15,6 +23,35 @@ pub enum RateLimitReason {
     ServerError,
     /// 未知原因
     Unknown,
+}
+
+pub(crate) fn normalize_image_model_id(model: &str) -> Option<String> {
+    let normalized = crate::proxy::common::model_mapping::normalize_to_standard_id(model)?;
+    matches!(
+        normalized.as_str(),
+        "gemini-3.1-flash-image" | "gemini-3-pro-image"
+    )
+    .then_some(normalized)
+}
+
+pub(crate) fn has_explicit_quota_exhausted(body: &str) -> bool {
+    body.to_ascii_uppercase().contains("QUOTA_EXHAUSTED")
+}
+
+pub(crate) fn is_active_persisted_long_image_limit(
+    model_key: &str,
+    status: &crate::models::account::LiveLimitStatus,
+    now: i64,
+) -> bool {
+    status.status == 429
+        && status.reason == "QuotaExhausted"
+        && status.until > now
+        && status.until.saturating_sub(status.detected_at) > MAX_LOCKOUT_SECONDS as i64
+        && normalize_image_model_id(model_key).is_some()
+        && status.message.as_deref().is_some_and(|message| {
+            has_explicit_quota_exhausted(message)
+                && crate::proxy::upstream::retry::parse_retry_delay(message, None).is_some()
+        })
 }
 
 /// 限流信息
@@ -129,24 +166,23 @@ impl RateLimitTracker {
         model: Option<String>,
     ) {
         let now = SystemTime::now();
-        let mut retry_sec = reset_time
+        let (mut retry_sec, mut effective_reset_time) = reset_time
             .duration_since(now)
-            .map(|d| d.as_secs())
-            .unwrap_or(60); // 如果时间已过,使用默认 60 秒
+            .map(|duration| (duration.as_secs(), reset_time))
+            .unwrap_or((60, now + Duration::from_secs(60)));
 
-        if retry_sec > 300 {
+        if retry_sec > MAX_LOCKOUT_SECONDS {
             tracing::info!(
                 "Capping lockout time for {} from {}s to 300s (5 minutes)",
                 account_id,
                 retry_sec
             );
-            retry_sec = 300;
+            retry_sec = MAX_LOCKOUT_SECONDS;
+            effective_reset_time = now + Duration::from_secs(retry_sec);
         }
 
-        let reset_time = now + Duration::from_secs(retry_sec);
-
         let info = RateLimitInfo {
-            reset_time,
+            reset_time: effective_reset_time,
             retry_after_sec: retry_sec,
             detected_at: now,
             reason,
@@ -170,6 +206,39 @@ impl RateLimitTracker {
                 retry_sec
             );
         }
+    }
+
+    pub fn restore_persisted_long_image_limit(
+        &self,
+        account_id: &str,
+        reset_time: SystemTime,
+        detected_at: SystemTime,
+        model: &str,
+    ) -> bool {
+        let Some(normalized_model) = normalize_image_model_id(model) else {
+            return false;
+        };
+        let now = SystemTime::now();
+        let Ok(original_duration) = reset_time.duration_since(detected_at) else {
+            return false;
+        };
+        let Ok(remaining) = reset_time.duration_since(now) else {
+            return false;
+        };
+        if original_duration <= Duration::from_secs(MAX_LOCKOUT_SECONDS) {
+            return false;
+        }
+
+        let info = RateLimitInfo {
+            reset_time,
+            retry_after_sec: remaining.as_secs(),
+            detected_at,
+            reason: RateLimitReason::QuotaExhausted,
+            model: Some(normalized_model.clone()),
+        };
+        let key = self.get_limit_key(account_id, Some(&normalized_model));
+        self.limits.insert(key, info);
+        true
     }
 
     /// 使用 ISO 8601 时间字符串精确锁定账号
@@ -220,6 +289,47 @@ impl RateLimitTracker {
         model: Option<String>,
         backoff_steps: &[u64], // [NEW] 传入退避配置
     ) -> Option<RateLimitInfo> {
+        self.parse_from_error_with_mode(
+            account_id,
+            status,
+            retry_after_header,
+            body,
+            model,
+            backoff_steps,
+            RetryParserMode::Current,
+        )
+    }
+
+    pub fn parse_from_error_baseline(
+        &self,
+        account_id: &str,
+        status: u16,
+        retry_after_header: Option<&str>,
+        body: &str,
+        model: Option<String>,
+        backoff_steps: &[u64],
+    ) -> Option<RateLimitInfo> {
+        self.parse_from_error_with_mode(
+            account_id,
+            status,
+            retry_after_header,
+            body,
+            model,
+            backoff_steps,
+            RetryParserMode::Baseline,
+        )
+    }
+
+    fn parse_from_error_with_mode(
+        &self,
+        account_id: &str,
+        status: u16,
+        retry_after_header: Option<&str>,
+        body: &str,
+        model: Option<String>,
+        backoff_steps: &[u64],
+        parser_mode: RetryParserMode,
+    ) -> Option<RateLimitInfo> {
         // 支持 429 (限流) 以及 500/503/529 (后端故障软避让)
         if status != 429 && status != 500 && status != 503 && status != 529 && status != 404 {
             return None;
@@ -238,19 +348,25 @@ impl RateLimitTracker {
             RateLimitReason::ServerError
         };
 
-        let mut retry_after_sec = None;
-
-        // 2. 从 Retry-After header 提取
-        if let Some(retry_after) = retry_after_header {
-            if let Ok(seconds) = retry_after.parse::<u64>() {
-                retry_after_sec = Some(seconds);
+        let retry_after_sec = match parser_mode {
+            RetryParserMode::Current => {
+                crate::proxy::upstream::retry::parse_retry_delay(body, retry_after_header)
+                    .map(|delay_ms| delay_ms.saturating_add(999) / 1000)
             }
-        }
-
-        // 3. 从错误消息提取 (优先尝试 JSON 解析，再试正则)
-        if retry_after_sec.is_none() {
-            retry_after_sec = self.parse_retry_time_from_body(body);
-        }
+            RetryParserMode::Baseline => retry_after_header
+                .and_then(|value| value.parse::<u64>().ok())
+                .or_else(|| self.parse_retry_time_from_body_baseline(body)),
+        };
+        let has_explicit_retry_time = retry_after_sec.is_some();
+        let preserve_long_image_quota = parser_mode == RetryParserMode::Current
+            && status == 429
+            && reason == RateLimitReason::QuotaExhausted
+            && has_explicit_quota_exhausted(body)
+            && has_explicit_retry_time
+            && model
+                .as_deref()
+                .and_then(normalize_image_model_id)
+                .is_some();
 
         // 4. 处理默认值与软避让逻辑（根据限流类型设置不同默认值）
         let retry_sec = match retry_after_sec {
@@ -359,13 +475,13 @@ impl RateLimitTracker {
         };
 
         let mut retry_sec = retry_sec;
-        if retry_sec > 300 {
+        if retry_sec > MAX_LOCKOUT_SECONDS && !preserve_long_image_quota {
             tracing::info!(
                 "Capping retry lockout time for {} from {}s to 300s (5 minutes)",
                 account_id,
                 retry_sec
             );
-            retry_sec = 300;
+            retry_sec = MAX_LOCKOUT_SECONDS;
         }
 
         let info = RateLimitInfo {
@@ -461,161 +577,110 @@ impl RateLimitTracker {
         }
     }
 
-    /// 通用时间解析函数：支持 "2h1m1s" 等所有格式组合
-    fn parse_duration_string(&self, s: &str) -> Option<u64> {
-        tracing::debug!("[时间解析] 尝试解析: '{}'", s);
+    /// 从错误消息 body 中解析重置时间
+    fn parse_retry_time_from_body(&self, body: &str) -> Option<u64> {
+        crate::proxy::upstream::retry::parse_retry_delay(body, None)
+            .map(|delay_ms| delay_ms.saturating_add(999) / 1000)
+    }
 
-        // 使用正则表达式提取小时、分钟、秒、毫秒
-        // 支持格式："2h1m1s", "1h30m", "5m", "30s", "500ms", "510.790006ms" 等
-        // 🔧 [FIX] 修改 ms 部分支持小数: (\d+)ms -> (\d+(?:\.\d+)?)ms
+    fn parse_duration_string_baseline(&self, value: &str) -> Option<u64> {
         let re = Regex::new(r"(?:(\d+)h)?(?:(\d+)m)?(?:(\d+(?:\.\d+)?)s)?(?:(\d+(?:\.\d+)?)ms)?")
             .ok()?;
-        let caps = match re.captures(s) {
-            Some(c) => c,
-            None => {
-                tracing::warn!("[时间解析] 正则未匹配: '{}'", s);
-                return None;
-            }
-        };
-
-        let hours = caps
+        let captures = re.captures(value)?;
+        let hours = captures
             .get(1)
-            .and_then(|m| m.as_str().parse::<u64>().ok())
+            .and_then(|value| value.as_str().parse::<u64>().ok())
             .unwrap_or(0);
-        let minutes = caps
+        let minutes = captures
             .get(2)
-            .and_then(|m| m.as_str().parse::<u64>().ok())
+            .and_then(|value| value.as_str().parse::<u64>().ok())
             .unwrap_or(0);
-        let seconds = caps
+        let seconds = captures
             .get(3)
-            .and_then(|m| m.as_str().parse::<f64>().ok())
+            .and_then(|value| value.as_str().parse::<f64>().ok())
             .unwrap_or(0.0);
-        // 🔧 [FIX] 毫秒也支持小数解析
-        let milliseconds = caps
+        let milliseconds = captures
             .get(4)
-            .and_then(|m| m.as_str().parse::<f64>().ok())
+            .and_then(|value| value.as_str().parse::<f64>().ok())
             .unwrap_or(0.0);
-
-        tracing::debug!(
-            "[时间解析] 提取结果: {}h {}m {:.3}s {:.3}ms",
-            hours,
-            minutes,
-            seconds,
-            milliseconds
-        );
-
-        // 🔧 [FIX] 计算总秒数，毫秒部分向上取整
         let total_seconds = hours * 3600
             + minutes * 60
             + seconds.ceil() as u64
             + (milliseconds / 1000.0).ceil() as u64;
-
-        // 如果总秒数为 0，说明解析失败
-        if total_seconds == 0 {
-            tracing::warn!("[时间解析] 失败: '{}' (总秒数为0)", s);
-            None
-        } else {
-            tracing::info!(
-                "[时间解析] ✓ 成功: '{}' => {}秒 ({}h {}m {:.1}s {:.1}ms)",
-                s,
-                total_seconds,
-                hours,
-                minutes,
-                seconds,
-                milliseconds
-            );
-            Some(total_seconds)
-        }
+        (total_seconds > 0).then_some(total_seconds)
     }
 
-    /// 从错误消息 body 中解析重置时间
-    fn parse_retry_time_from_body(&self, body: &str) -> Option<u64> {
-        // A. 优先尝试 JSON 精准解析
+    fn parse_retry_time_from_body_baseline(&self, body: &str) -> Option<u64> {
         let trimmed = body.trim();
         if trimmed.starts_with('{') || trimmed.starts_with('[') {
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(trimmed) {
-                // 1. Google 常见的 quotaResetDelay 格式 (支持所有格式："2h1m1s", "1h30m", "42s", "500ms" 等)
-                // 路径: error.details[0].metadata.quotaResetDelay
-                if let Some(delay_str) = json
+                if let Some(delay) = json
                     .get("error")
-                    .and_then(|e| e.get("details"))
-                    .and_then(|d| d.as_array())
-                    .and_then(|a| a.get(0))
-                    .and_then(|o| o.get("metadata")) // 添加 metadata 层级
-                    .and_then(|m| m.get("quotaResetDelay"))
-                    .and_then(|v| v.as_str())
+                    .and_then(|error| error.get("details"))
+                    .and_then(|details| details.as_array())
+                    .and_then(|details| details.first())
+                    .and_then(|detail| detail.get("metadata"))
+                    .and_then(|metadata| metadata.get("quotaResetDelay"))
+                    .and_then(|value| value.as_str())
+                    .and_then(|value| self.parse_duration_string_baseline(value))
                 {
-                    tracing::debug!("[JSON解析] 找到 quotaResetDelay: '{}'", delay_str);
-
-                    // 使用通用时间解析函数
-                    if let Some(seconds) = self.parse_duration_string(delay_str) {
-                        return Some(seconds);
-                    }
+                    return Some(delay);
                 }
-
-                // 2. OpenAI 常见的 retry_after 字段 (数字)
                 if let Some(retry) = json
                     .get("error")
-                    .and_then(|e| e.get("retry_after"))
-                    .and_then(|v| v.as_u64())
+                    .and_then(|error| error.get("retry_after"))
+                    .and_then(|value| value.as_u64())
                 {
                     return Some(retry);
                 }
             }
         }
 
-        // B. 正则匹配模式 (兜底)
-        // 模式 1: "Try again in 2m 30s"
-        if let Ok(re) = Regex::new(r"(?i)try again in (\d+)m\s*(\d+)s") {
-            if let Some(caps) = re.captures(body) {
-                if let (Ok(m), Ok(s)) = (caps[1].parse::<u64>(), caps[2].parse::<u64>()) {
-                    return Some(m * 60 + s);
-                }
+        for pattern in [
+            r"(?i)try again in (\d+)m\s*(\d+)s",
+            r"(?i)(?:try again in|backoff for|wait)\s*(\d+)s",
+            r"(?i)quota will reset in (\d+) second",
+            r"(?i)retry after (\d+) second",
+            r"\(wait (\d+)s\)",
+        ] {
+            let captures = Regex::new(pattern).ok()?.captures(body);
+            let Some(captures) = captures else {
+                continue;
+            };
+            if captures.len() == 3 {
+                let minutes = captures.get(1)?.as_str().parse::<u64>().ok()?;
+                let seconds = captures.get(2)?.as_str().parse::<u64>().ok()?;
+                return Some(minutes * 60 + seconds);
+            }
+            if let Some(seconds) = captures
+                .get(1)
+                .and_then(|value| value.as_str().parse::<u64>().ok())
+            {
+                return Some(seconds);
             }
         }
-
-        // 模式 2: "Try again in 30s" 或 "backoff for 42s"
-        if let Ok(re) = Regex::new(r"(?i)(?:try again in|backoff for|wait)\s*(\d+)s") {
-            if let Some(caps) = re.captures(body) {
-                if let Ok(s) = caps[1].parse::<u64>() {
-                    return Some(s);
-                }
-            }
-        }
-
-        // 模式 3: "quota will reset in X seconds"
-        if let Ok(re) = Regex::new(r"(?i)quota will reset in (\d+) second") {
-            if let Some(caps) = re.captures(body) {
-                if let Ok(s) = caps[1].parse::<u64>() {
-                    return Some(s);
-                }
-            }
-        }
-
-        // 模式 4: OpenAI 风格的 "Retry after (\d+) seconds"
-        if let Ok(re) = Regex::new(r"(?i)retry after (\d+) second") {
-            if let Some(caps) = re.captures(body) {
-                if let Ok(s) = caps[1].parse::<u64>() {
-                    return Some(s);
-                }
-            }
-        }
-
-        // 模式 5: 括号形式 "(wait (\d+)s)"
-        if let Ok(re) = Regex::new(r"\(wait (\d+)s\)") {
-            if let Some(caps) = re.captures(body) {
-                if let Ok(s) = caps[1].parse::<u64>() {
-                    return Some(s);
-                }
-            }
-        }
-
         None
     }
 
     /// 获取账号的限流信息
     pub fn get(&self, account_id: &str) -> Option<RateLimitInfo> {
         self.limits.get(account_id).map(|r| r.clone())
+    }
+
+    pub fn clear_model(&self, account_id: &str, model: &str) -> bool {
+        let normalized = crate::proxy::common::model_mapping::normalize_to_standard_id(model)
+            .unwrap_or_else(|| model.to_string());
+        let mut cleared = self
+            .limits
+            .remove(&self.get_limit_key(account_id, Some(&normalized)))
+            .is_some();
+        if normalized != model {
+            cleared |= self
+                .limits
+                .remove(&self.get_limit_key(account_id, Some(model)))
+                .is_some();
+        }
+        cleared
     }
 
     /// 检查账号是否仍在限流中
@@ -661,7 +726,29 @@ impl RateLimitTracker {
 
     /// 清除指定账号的限流记录
     pub fn clear(&self, account_id: &str) -> bool {
-        self.limits.remove(account_id).is_some()
+        let prefix = format!("{}:", account_id);
+        let before = self.limits.len();
+        self.limits
+            .retain(|key, _| key != account_id && !key.starts_with(&prefix));
+        self.failure_counts.remove(account_id);
+        self.limits.len() != before
+    }
+
+    pub fn clear_for_optimistic_reset(&self) {
+        let now = SystemTime::now();
+        self.limits.retain(|_, info| {
+            info.reason == RateLimitReason::QuotaExhausted
+                && info
+                    .model
+                    .as_deref()
+                    .and_then(normalize_image_model_id)
+                    .is_some()
+                && info
+                    .reset_time
+                    .duration_since(info.detected_at)
+                    .is_ok_and(|duration| duration > Duration::from_secs(MAX_LOCKOUT_SECONDS))
+                && info.reset_time.duration_since(now).is_ok()
+        });
     }
 
     /// 清除所有限流记录 (乐观重置策略)
@@ -738,6 +825,123 @@ mod tests {
         let wait = tracker.get_remaining_wait("acc1", None);
         // Due to time passing, it might be 1 or 2
         assert!(wait >= 1 && wait <= 2);
+    }
+
+    #[test]
+    fn task_preserves_explicit_long_image_quota_deadline() {
+        let tracker = RateLimitTracker::new();
+        let body = r#"{
+            "error": {
+                "details": [{
+                    "reason": "QUOTA_EXHAUSTED",
+                    "metadata": {"quotaResetDelay": "58h24m53s"}
+                }]
+            }
+        }"#;
+        let info = tracker
+            .parse_from_error(
+                "acc-long",
+                429,
+                None,
+                body,
+                Some("gemini-3-pro-image".to_string()),
+                &[60, 300],
+            )
+            .unwrap();
+        assert_eq!(info.retry_after_sec, 210_293);
+
+        tracker.clear_for_optimistic_reset();
+        assert!(tracker.is_rate_limited("acc-long", Some("gemini-3-pro-image")));
+
+        let now = SystemTime::now();
+        assert!(tracker.restore_persisted_long_image_limit(
+            "acc-expiring",
+            now + Duration::from_secs(30),
+            now - Duration::from_secs(301),
+            "gemini-3.1-flash-image",
+        ));
+        tracker.clear_for_optimistic_reset();
+        assert!(tracker.is_rate_limited("acc-expiring", Some("gemini-3.1-flash-image")));
+
+        let inferred = tracker
+            .parse_from_error(
+                "acc-inferred",
+                429,
+                None,
+                "Quota limit hit; reset after 72h",
+                Some("gemini-3-pro-image".to_string()),
+                &[60, 300],
+            )
+            .unwrap();
+        assert_eq!(inferred.retry_after_sec, 300);
+
+        let text_model = tracker
+            .parse_from_error(
+                "acc-text",
+                429,
+                Some("72h"),
+                r#"{"error":{"details":[{"reason":"QUOTA_EXHAUSTED"}]}}"#,
+                Some("gemini-2.5-pro".to_string()),
+                &[60, 300],
+            )
+            .unwrap();
+        assert_eq!(text_model.retry_after_sec, 300);
+
+        let broad_quota = tracker
+            .parse_from_error(
+                "acc-broad",
+                429,
+                None,
+                "Quota limit hit; reset after 72h",
+                Some("gemini-3.1-flash-image".to_string()),
+                &[60, 300],
+            )
+            .unwrap();
+        assert_eq!(broad_quota.retry_after_sec, 300);
+
+        let inferred_reset = SystemTime::now() + Duration::from_secs(72 * 3600);
+        tracker.set_lockout_until(
+            "acc-inferred-reset",
+            inferred_reset,
+            RateLimitReason::QuotaExhausted,
+            Some("gemini-3-pro-image".to_string()),
+        );
+        assert!(
+            tracker.get_remaining_wait("acc-inferred-reset", Some("gemini-3-pro-image")) <= 300
+        );
+    }
+
+    #[test]
+    fn task_claude_baseline_ignores_retry_info_delay() {
+        for (index, delay) in ["1s", "3s"].into_iter().enumerate() {
+            let body = format!(
+                r#"{{"error":{{"details":[{{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"{}"}}]}}}}"#,
+                delay
+            );
+            let current = RateLimitTracker::new()
+                .parse_from_error(
+                    &format!("current-{}", index),
+                    429,
+                    None,
+                    &body,
+                    None,
+                    &[60, 300],
+                )
+                .unwrap();
+            assert_eq!(current.retry_after_sec, if index == 0 { 2 } else { 3 });
+
+            let baseline = RateLimitTracker::new()
+                .parse_from_error_baseline(
+                    &format!("baseline-{}", index),
+                    429,
+                    None,
+                    &body,
+                    None,
+                    &[60, 300],
+                )
+                .unwrap();
+            assert_eq!(baseline.retry_after_sec, 60);
+        }
     }
 
     #[test]

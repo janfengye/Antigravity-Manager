@@ -795,7 +795,7 @@ pub async fn handle_messages(
     let max_attempts = MAX_RETRY_ATTEMPTS.min(pool_size.saturating_add(1)).max(2);
 
     let mut last_error = String::new();
-    let retried_without_thinking = false;
+    let mut retried_without_thinking = false;
     let mut last_email: Option<String> = None;
     let mut last_mapped_model: Option<String> = None;
     let mut last_status = StatusCode::SERVICE_UNAVAILABLE; // Default to 503 if no response reached
@@ -1612,7 +1612,7 @@ pub async fn handle_messages(
             || status_code == 404
         {
             token_manager
-                .mark_rate_limited_async(
+                .mark_rate_limited_async_baseline(
                     &email,
                     status_code,
                     retry_after.as_deref(),
@@ -1645,7 +1645,8 @@ pub async fn handle_messages(
                 || lower_err.contains("must be `thinking`")
                 || lower_err.contains("must be 'thinking'"))
         {
-            // Existing logic for thinking signature...\n            retried_without_thinking = true;
+            // Existing logic for thinking signature.
+            retried_without_thinking = true;
 
             // 使用 WARN 级别,因为这不应该经常发生(已经主动过滤过)
             tracing::warn!(

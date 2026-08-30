@@ -242,6 +242,13 @@ where
         }
     }
 
+    // [FIX #3359] Guarantee at least one content block if upstream returned empty
+    if response.content.is_empty() {
+        response.content.push(ContentBlock::Text {
+            text: ".".to_string(),
+        });
+    }
+
     Ok(response)
 }
 
@@ -320,6 +327,34 @@ mod tests {
             assert_eq!(signature.as_deref(), Some("sig_123456"));
         } else {
             panic!("Expected Thinking block");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_collect_empty_stream_fallback() {
+        // [FIX #3359] 模拟仅包含 message_start 和 message_stop 的空内容流（如单点探测请求）
+        let sse_data = vec![
+            "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_empty\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"gemini-3.7-flash\",\"content\":[],\"stop_reason\":null,\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n",
+            "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":0}}\n\n",
+            "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+        ];
+
+        let byte_stream = stream::iter(
+            sse_data
+                .into_iter()
+                .map(|s| Ok::<Bytes, io::Error>(Bytes::from(s))),
+        );
+
+        let result = collect_stream_to_json(byte_stream).await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        assert_eq!(response.id, "msg_empty");
+        assert_eq!(response.content.len(), 1);
+        if let ContentBlock::Text { text } = &response.content[0] {
+            assert_eq!(text, ".");
+        } else {
+            panic!("Expected fallback Text block");
         }
     }
 }

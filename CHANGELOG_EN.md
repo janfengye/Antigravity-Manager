@@ -3,6 +3,24 @@
 > Complete version history for Antigravity Tools. Return to project home at [README_EN.md](README_EN.md).
 
 *   **Version History**:
+    *   **v4.6.4 (2026-08-30)**:
+        -   **[Core Fix] Fix Token Acquisition Timeout (5s) / Deadlock Error Under High Concurrency & Tokio Runtime Starvation (Issue #3348)**:
+            -   **Async Disk I/O & Blocking Thread Pool Isolation**: Refactored `update_account_json` to an async function that dispatches synchronous disk I/O and global account locks to Tokio's blocking thread pool (`spawn_blocking`). This prevents disk serialization contention from blocking Tokio worker threads and causing runtime starvation under high concurrency.
+            -   **Fire-and-Forget Disk Persistence on Token Acquisition Hot Path**: On the primary `get_token` scheduling path, file persistence after OAuth token refreshes and `project_id` resolution is now offloaded to background tasks after updating memory caches immediately, preventing disk write overhead from consuming the 5-second timeout window.
+        -   **[Core Fix] Fix Indefinite Hang on Minimal/Single-Dot Prompts Causing Claude Desktop Gateway Health Check Timeout (Issue #3359)**:
+            -   **Empty SSE Event Fallback**: Added defensive fallback logic in the Claude SSE streaming conversion layer. When upstream models terminate empty responses on minimal/punctuation-only prompts without yielding content or thinking, the stream synthesizer automatically emits valid `message_start`, fallback text ContentBlock, and `message_stop` events, eliminating peek loop timeouts.
+            -   **Non-Streaming Collector Schema Guard**: Enforced that `collect_stream_to_json` always returns at least one valid text ContentBlock when parsing empty upstream streams, complying strictly with Anthropic client non-empty content constraints.
+        -   **[Streaming & Session Management] Upstream SSE Cancellation on Client Disconnect & Session Branching Graph (PR #3367, PR #3366)**:
+            -   **Proactive Upstream SSE Teardown**: Automatically stops polling and consuming upstream SSE streams as soon as the client disconnects or the downstream response body is dropped, preventing incomplete requests from saving invalid sessions.
+            -   **Parent-Linked Session Graph**: Fixed streaming HTTP Responses session addressing and replaced full-history deep copies with a persistent parent-linked session tree graph for efficient branch support.
+        -   **[Image Proxy & Account Scheduling] Account-Aware Image Scheduling & Rate Limit Lifecycle Hardening (PR #3364, PR #3363, PR #3362)**:
+            -   **Account-Aware Image Concurrency Scheduler**: Introduced a shared concurrency scheduler for OpenAI and Gemini image generation and edit requests, enforcing per-account concurrency caps and seamless queueing when all accounts are busy.
+            -   **Rate Limit Lifecycle & Grace Retry Optimization**: Corrected short 429 delay parsing, capped same-account retries to at most once, and preserved only explicit long-lived image quota deadlines.
+            -   **Image Request Semantics Hardening**: Fully hardened OpenAI-compatible image requests with robust model alias resolution, size mapping, ordering, and input boundary validation.
+        -   **[Network & Multimodal Improvements] Tool Image Retention, Bounded Debug SSE Capture & Quota Header Cleanup (PR #3365, PR #3361, PR #3360)**:
+            -   **Tool Image Retention & Inline Media Bounding**: Retains images returned from tool outputs as multimodal model inputs, bounds inline image memory, and strips historical inline media before replay or caching.
+            -   **Bounded Debug SSE Capture**: Implemented 256 KiB head + 256 KiB rolling tail buffer for debug response logging to eliminate memory bloat on large streams while preserving full downstream streaming.
+            -   **Quota Header Cleanup**: Omits redundant `x-goog-user-project` headers on content requests to ensure proper upstream PA service authentication.
     *   **v4.6.3 (2026-08-30)**:
         -   **[Core Fix] Account JSON Storage Self-Healing & Concurrent File Write Lock (Issue #3345)**:
             -   **Self-Healing Parser on Load**: Added streaming deserializer fallback when reading account files. If an account file has trailing characters or extra closing braces (e.g. `trailing characters at line ...`), the parser automatically recovers the valid full `Account` data and atomically rewrites a clean file back to disk, completely preventing accounts from silently disappearing from the UI and causing cascading 429 rate limit outages.

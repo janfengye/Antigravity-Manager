@@ -376,12 +376,14 @@ impl UpstreamClient {
         // This header belongs to the IDE's JS layer, not the official client's egress.
         // Sending it creates a contradictory "Electron + Node.js" fingerprint.
 
-        // [NEW] 深度解析 body 中的 project_id 并注入 Header
-        // 只有当 Body 包含 project 字段且非测试项目时，注入 x-goog-user-project
-        if let Some(proj) = body.get("project").and_then(|v| v.as_str()) {
-            if !proj.is_empty() && proj != "test-project" && proj != "project-id" {
-                if let Ok(hv) = header::HeaderValue::from_str(proj) {
-                    headers.insert("x-goog-user-project", hv);
+        // Keep body.project for content requests, but omit the quota-project header.
+        let is_content_request = matches!(method, "generateContent" | "streamGenerateContent");
+        if !is_content_request {
+            if let Some(proj) = body.get("project").and_then(|v| v.as_str()) {
+                if !proj.is_empty() && proj != "test-project" && proj != "project-id" {
+                    if let Ok(hv) = header::HeaderValue::from_str(proj) {
+                        headers.insert("x-goog-user-project", hv);
+                    }
                 }
             }
         }
@@ -393,6 +395,9 @@ impl UpstreamClient {
                     headers.insert(hk, hv);
                 }
             }
+        }
+        if is_content_request {
+            headers.remove("x-goog-user-project");
         }
 
         // [DEBUG] Log headers for verification
