@@ -144,7 +144,24 @@ fn get_version_windows(exe_path: &PathBuf) -> Result<AntigravityVersion, String>
 fn get_version_linux(exe_path: &PathBuf) -> Result<AntigravityVersion, String> {
     use std::process::Command;
 
-    // 方法1: 尝试执行 --version
+    // 方法1 (优先): 尝试从安装目录的 package.json 读取，避免执行可执行文件意外拉起 GUI
+    if let Some(parent) = exe_path.parent() {
+        let package_json = parent.join("resources/app/package.json");
+        if package_json.exists() {
+            if let Ok(content) = fs::read_to_string(&package_json) {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                    if let Some(version) = json.get("version").and_then(|v| v.as_str()) {
+                        return Ok(AntigravityVersion {
+                            short_version: version.to_string(),
+                            bundle_version: version.to_string(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // 方法2 (兜底): 尝试执行 --version (仅在无法从 package.json 获取时执行)
     let output = Command::new(exe_path).arg("--version").output();
 
     if let Ok(result) = output {
@@ -163,23 +180,6 @@ fn get_version_linux(exe_path: &PathBuf) -> Result<AntigravityVersion, String> {
                     short_version: version.clone(),
                     bundle_version: raw_version,
                 });
-            }
-        }
-    }
-
-    // 方法2: 尝试从安装目录的 package.json 读取
-    if let Some(parent) = exe_path.parent() {
-        let package_json = parent.join("resources/app/package.json");
-        if package_json.exists() {
-            if let Ok(content) = fs::read_to_string(&package_json) {
-                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
-                    if let Some(version) = json.get("version").and_then(|v| v.as_str()) {
-                        return Ok(AntigravityVersion {
-                            short_version: version.to_string(),
-                            bundle_version: version.to_string(),
-                        });
-                    }
-                }
             }
         }
     }

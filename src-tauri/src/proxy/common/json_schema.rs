@@ -326,6 +326,20 @@ fn clean_json_schema_recursive(value: &mut Value, is_schema_node: bool, depth: u
                 }
             }
 
+            // Gemini's Schema proto requires every ARRAY node to declare `items`,
+            // including nested arrays. JSON Schema permits an itemless array, so
+            // clients such as Claude Code may legitimately emit {"type":"array"}.
+            // Use a string item schema as a Gemini-compatible fallback for these
+            // otherwise unconstrained arrays.
+            let is_array = map
+                .get("type")
+                .and_then(Value::as_str)
+                .map(|t| t.eq_ignore_ascii_case("array"))
+                .unwrap_or(false);
+            if is_array && !map.contains_key("items") {
+                map.insert("items".to_string(), json!({ "type": "string" }));
+            }
+
             // Fallback: 对既没有 properties 也没有 items 的常规对象进行清理
             if !map.contains_key("properties") && !map.contains_key("items") {
                 for (k, v) in map.iter_mut() {
@@ -1790,5 +1804,29 @@ mod tests {
         // 验证没有非合法的 Schema 结构 (如 properties 嵌套了 "element" 标量字符串)
         assert!(target_props["type"].get("properties").is_none());
     }
-}
 
+    #[test]
+    fn test_nested_array_without_items_gets_gemini_fallback() {
+        let mut schema = json!({
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "object",
+                    "properties": {
+                        "where": {
+                            "type": "array",
+                            "items": { "type": "array" }
+                        }
+                    }
+                }
+            }
+        });
+
+        clean_json_schema(&mut schema);
+
+        assert_eq!(
+            schema["properties"]["query"]["properties"]["where"]["items"]["items"],
+            json!({ "type": "string" })
+        );
+    }
+}

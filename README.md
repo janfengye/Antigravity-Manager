@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> 专业级 AI 账号管理与协议代理系统 (v4.6.4)
+> 专业级 AI 账号管理与协议代理系统 (v4.6.5)
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
 
@@ -8,7 +8,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.6.4-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.6.5-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -146,7 +146,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **支持的格式**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **高级用法**: 安装指定版本 `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --version 4.6.4`，预览模式 `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --dry-run`
+> **高级用法**: 安装指定版本 `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --version 4.6.5`，预览模式 `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 如果您已安装 [Homebrew](https://brew.sh/)，也可以通过以下命令安装：
@@ -441,7 +441,7 @@ response = client.chat.completions.create(
 
 ## 📝 更新日志
 
-> 最新版本 **v4.6.4**（2026-08-30）包含客户端断开自动终止上游 SSE 流、父链接会话图结构重构、图片请求账号感知并发调度器、限流生命周期优化、工具图片多模态保留、Debug SSE 抓包内存限制以及请求头清理。
+> 最新版本 **v4.6.5**（2026-09-02）包含 Gemini 嵌套 Array 缺失 items 校验 400 修复、Claude 上游中断标准 SSE 错误事件输出、Claude Opus 4.5/4.6 Thinking 变体支持、Linux AppImage 环境变量隔离与静态版本读取优化，以及开机自启窗口可见性修复。
 
 👉 **[查看完整更新日志 CHANGELOG.md →](CHANGELOG.md)**
 

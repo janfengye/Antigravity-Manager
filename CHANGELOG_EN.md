@@ -3,6 +3,19 @@
 > Complete version history for Antigravity Tools. Return to project home at [README_EN.md](README_EN.md).
 
 *   **Version History**:
+    *   **v4.6.5 (2026-09-02)**:
+        -   **[Core Fix] Fix Gemini JSON Schema Validation 400 Errors for Nested Arrays Missing Items (PR #3375)**:
+            -   **Array Items Fallback Injection**: Resolved upstream Gemini 400 schema validation errors triggered by clients such as Claude Code when emitting itemless array schemas (e.g. `query.where: { type: "array", items: { type: "array" } }`). The recursive JSON schema sanitization now injects a Gemini-compatible `{"type": "string"}` fallback for itemless `array` nodes, backed by unit regression tests.
+        -   **[Streaming Proxy & Protocol Compliance] Standardize Claude Upstream Stream Interruption Error Events (PR #3371, PR #3373)**:
+            -   **Anthropic Standard SSE Error Output**: Fixed non-standard error payload formatting during upstream stream breaks or exceptions. Standardized on the Anthropic-compliant `type: "error"` structure with `error: { "type": "overloaded_error", "message": ... }` emitted via `state.emit("error", ...)`, ensuring Claude clients reliably catch and handle stream aborts.
+        -   **[OpenCode & Model Support] Add Thinking Variant Support to Base Claude Opus 4.5/4.6 Models (PR #3371, PR #3373)**:
+            -   **Opus Base Model Thinking Variants**: Added `VariantType::ClaudeThinking` support for `claude-opus-4-5` and `claude-opus-4-6` base model definitions. This resolves an issue where selecting base model IDs yielded no thinking tiers in dropdown selectors. Also aligned `Gemini3Pro` variant ordering.
+        -   **[Linux & AppImage] Fix GUI Popup on Version Detection & Child Process Environment Leaks under AppImage (Issue #3370)**:
+            -   **Static Package.json Priority Version Reading**: Optimized Linux Antigravity version detection to prioritize reading `resources/app/package.json` directly from the installation directory, preventing executing `--version` from inadvertently launching the Chromium/Electron GUI window.
+            -   **Child Process AppImage Environment Sanitization**: When spawning Antigravity on Linux, AppImage runtime environment variables (`APPIMAGE`, `APPDIR`, `ARGV0`, `LD_LIBRARY_PATH`, `GTK_PATH`, etc.) are stripped, and `/tmp/.mount_*` paths are filtered from `XDG_DATA_DIRS` to avoid inheriting conflicting runtime libraries.
+            -   **Hardened Process Detection & Self-Exclusion**: Enhanced Linux running process scanning and path resolution to ensure AppImage mount paths and parent/ancestor processes are not misidentified as target Antigravity instances.
+        -   **[System & Tray] Prevent Window-State Plugin from Restoring Window Visibility on Startup (PR #3373)**:
+            -   **Window Visibility State Filter**: Updated `tauri-plugin-window-state` configuration to exclude `StateFlags::VISIBLE`. This prevents the window from popping up on autostart or tray background launches when configured with `visible: false`.
     *   **v4.6.4 (2026-08-30)**:
         -   **[Core Fix] Fix Token Acquisition Timeout (5s) / Deadlock Error Under High Concurrency & Tokio Runtime Starvation (Issue #3348)**:
             -   **Async Disk I/O & Blocking Thread Pool Isolation**: Refactored `update_account_json` to an async function that dispatches synchronous disk I/O and global account locks to Tokio's blocking thread pool (`spawn_blocking`). This prevents disk serialization contention from blocking Tokio worker threads and causing runtime starvation under high concurrency.

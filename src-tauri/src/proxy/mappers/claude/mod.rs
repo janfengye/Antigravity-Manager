@@ -87,12 +87,13 @@ where
                         }
                         Err(e) => {
                             let error_json = serde_json::json!({
+                                "type": "error",
                                 "error": {
-                                    "message": format!("Stream error: {}", e),
-                                    "type": "stream_error"
+                                    "type": "overloaded_error",
+                                    "message": format!("Stream error: {}", e)
                                 }
                             });
-                            yield Ok(Bytes::from(format!("data: {}\n\n", error_json)));
+                            yield Ok(state.emit("error", error_json));
                             break;
                         }
                     }

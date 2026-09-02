@@ -745,6 +745,35 @@ pub fn close_antigravity(timeout_secs: u64, target_ide: Option<&str>) -> Result<
     Ok(())
 }
 
+/// Clean AppImage-specific environment variables before spawning external processes on Linux
+#[cfg(target_os = "linux")]
+pub fn clean_appimage_env(cmd: &mut Command) {
+    let appimage_vars = [
+        "APPIMAGE",
+        "APPDIR",
+        "ARGV0",
+        "OWD",
+        "LD_LIBRARY_PATH",
+        "LD_PRELOAD",
+        "GTK_PATH",
+        "GIO_EXTRA_MODULES",
+        "GI_TYPELIB_PATH",
+        "QT_PLUGIN_PATH",
+        "QT_QPA_PLATFORM_PLUGIN_PATH",
+    ];
+    for var in &appimage_vars {
+        cmd.env_remove(var);
+    }
+
+    if let Ok(xdg_data_dirs) = std::env::var("XDG_DATA_DIRS") {
+        let filtered_dirs: Vec<&str> = xdg_data_dirs
+            .split(':')
+            .filter(|dir| !dir.starts_with("/tmp/.mount_"))
+            .collect();
+        cmd.env("XDG_DATA_DIRS", filtered_dirs.join(":"));
+    }
+}
+
 /// Start Antigravity
 #[allow(unused_mut)]
 pub fn start_antigravity(target_ide: Option<&str>) -> Result<(), String> {
@@ -830,6 +859,9 @@ pub fn start_antigravity(target_ide: Option<&str>) -> Result<(), String> {
                     }
                 }
 
+                #[cfg(target_os = "linux")]
+                clean_appimage_env(&mut cmd);
+
                 #[cfg(target_os = "windows")]
                 cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
 
@@ -891,6 +923,9 @@ pub fn start_antigravity(target_ide: Option<&str>) -> Result<(), String> {
                     cmd.arg(arg);
                 }
             }
+
+            #[cfg(target_os = "linux")]
+            clean_appimage_env(&mut cmd);
 
             #[cfg(target_os = "windows")]
             cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW

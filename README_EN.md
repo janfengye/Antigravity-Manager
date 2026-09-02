@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> Professional AI Account Management & Protocol Proxy System (v4.6.4)
+> Professional AI Account Management & Protocol Proxy System (v4.6.5)
 
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
@@ -9,7 +9,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.6.4-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.6.5-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -144,7 +144,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **Supported formats**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **Advanced usage**: Install a specific version `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --version 4.6.4`, dry-run mode `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --dry-run`
+> **Advanced usage**: Install a specific version `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --version 4.6.5`, dry-run mode `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 If you have [Homebrew](https://brew.sh/) installed, you can also install via:
@@ -426,7 +426,7 @@ In clients that support OpenAI protocol (e.g., Cherry Studio), you can configure
 
 ## 📝 Changelog
 
-> Latest version **v4.6.4** (2026-08-30): Upstream SSE cancellation on client disconnect (#3367), parent-linked session branching graph (#3366), account-aware image concurrency scheduling (#3364), rate limit lifecycle & grace retry optimization (#3363), image request semantics hardening (#3362), tool image multimodal retention (#3365), bounded debug SSE capture (#3361), and quota-project header cleanup (#3360).
+> Latest version **v4.6.5** (2026-09-02): Gemini schema fallback for nested itemless arrays (#3375), Anthropic standard SSE error events on upstream failure (#3371, #3373), Claude Opus 4.5/4.6 thinking variants (#3371, #3373), Linux AppImage environment isolation & static version detection (#3370), and window visibility startup fix (#3373).
 
 👉 **[View Full Changelog → CHANGELOG_EN.md](CHANGELOG_EN.md)**
 
