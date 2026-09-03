@@ -3,6 +3,10 @@
 > Complete version history for Antigravity Tools. Return to project home at [README_EN.md](README_EN.md).
 
 *   **Version History**:
+    *   **v4.6.6 (2026-09-03)**:
+        -   **[Core Fix] Fix Gemini 3.7 Tool Call Text Leakage Causing Silent Agent Interruption in Long Contexts (Issue #3379)**:
+            -   **call:default_api Leakage Detection & Controlled Fail-Closed Recovery Bridge**: Resolved an issue where Gemini 3.7 Flash, following long-context compression, occasionally leaks internal pseudocode tool invocations (`call:default_api:ToolName{...}`) into plain text deltas instead of structured `functionCall` blocks, silently breaking Claude Desktop / Claude Code agent loops. Enforced a 7-point strict fail-closed guard sequence (registered tools required, no native tool use in current turn, strict prefix match, registered tool whitelist alignment, no surrounding prose, valid JSON args, no prior text deltas emitted) to securely recover leaked calls into standard `tool_use` blocks without prompt injection risks.
+            -   **Symmetric Streaming/Non-Streaming Parity & Diagnostics**: Symmetrically aligned recovery logic across SSE streaming (`streaming.rs`) and non-streaming responses (`response.rs`), added diagnostic warning logs (`tracing::warn`) when text patterns are detected, and reinforced stability with 9 unit test scenarios.
     *   **v4.6.5 (2026-09-02)**:
         -   **[Core Fix] Fix Gemini JSON Schema Validation 400 Errors for Nested Arrays Missing Items (PR #3375)**:
             -   **Array Items Fallback Injection**: Resolved upstream Gemini 400 schema validation errors triggered by clients such as Claude Code when emitting itemless array schemas (e.g. `query.where: { type: "array", items: { type: "array" } }`). The recursive JSON schema sanitization now injects a Gemini-compatible `{"type": "string"}` fallback for itemless `array` nodes, backed by unit regression tests.

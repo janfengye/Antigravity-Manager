@@ -158,6 +158,8 @@ pub struct NonStreamingProcessor {
     pub session_id: Option<String>,
     pub model_name: String,
     pub message_count: usize, // [NEW v4.0.0] Message count for rewind detection
+    // [FIX #3379] Registered tool names for call:default_api leakage detection
+    pub registered_tool_names: Vec<String>,
 }
 
 impl NonStreamingProcessor {
@@ -174,7 +176,13 @@ impl NonStreamingProcessor {
             session_id,
             model_name,
             message_count,
+            registered_tool_names: Vec::new(),
         }
+    }
+
+    // [FIX #3379] Set registered tool names for leakage detection
+    pub fn set_registered_tool_names(&mut self, names: Vec<String>) {
+        self.registered_tool_names = names;
     }
 
     /// 处理 Gemini 响应并转换为 Claude 响应
@@ -435,6 +443,87 @@ impl NonStreamingProcessor {
         let mut current_text = self.text_builder.clone();
         self.text_builder.clear();
 
+        // [FIX #3379] call:default_api:* leakage detection (non-streaming path)
+        // Symmetric to streaming.rs try_recover_call_default_api_text.
+        // Guards applied: G1 (tools registered), G3 (strict prefix), G4 (whitelist),
+        //                 G5 (no surrounding prose), G6 (valid JSON args).
+        // G2/G7 not needed in non-streaming path since we process the full response at once.
+        if !self.registered_tool_names.is_empty() {
+            let trimmed = current_text.trim();
+            if trimmed.starts_with("call:default_api:") {
+                const PREFIX: &str = "call:default_api:";
+                let rest = &trimmed[PREFIX.len()..];
+                let tool_end = rest.find(|c| c == '{' || c == '(').unwrap_or(rest.len());
+                let tool_name = rest[..tool_end].trim();
+                let args_str = rest[tool_end..].trim();
+
+                if !tool_name.is_empty() {
+                    // G5: no surrounding prose — text must be only the expression
+                    let after_name = trimmed[PREFIX.len() + tool_name.len()..].trim();
+                    let g5_ok = after_name.is_empty()
+                        || after_name.starts_with('{')
+                        || after_name.starts_with('(');
+
+                    if g5_ok {
+                        // G4: whitelist check
+                        let matched = self
+                            .registered_tool_names
+                            .iter()
+                            .find(|n| n.eq_ignore_ascii_case(tool_name))
+                            .cloned();
+
+                        if let Some(matched_name) = matched {
+                            // G6: parse args
+                            let parsed = if args_str.is_empty() {
+                                Some(serde_json::json!({}))
+                            } else {
+                                serde_json::from_str::<serde_json::Value>(args_str)
+                                    .ok()
+                                    .filter(|v| v.is_object())
+                            };
+
+                            if let Some(parsed_args) = parsed {
+                                tracing::warn!(
+                                    "[#3379-RECOVERY] Non-streaming: recovering call:default_api:{} as tool_use",
+                                    matched_name
+                                );
+                                let tool_id = format!(
+                                    "{}-3379-{}",
+                                    matched_name,
+                                    crate::proxy::common::utils::generate_random_id()
+                                );
+                                self.content_blocks.push(ContentBlock::ToolUse {
+                                    id: tool_id,
+                                    name: matched_name,
+                                    input: parsed_args,
+                                    signature: None,
+                                    cache_control: None,
+                                });
+                                self.has_tool_call = true;
+                                // current_text fully consumed as a tool_use — nothing else to emit
+                                return;
+                            } else {
+                                tracing::warn!(
+                                    "[#3379] Non-streaming: call:default_api:{} detected but args parse failed; emitting as text",
+                                    tool_name
+                                );
+                            }
+                        } else {
+                            tracing::warn!(
+                                "[#3379] Non-streaming: call:default_api:{} detected but tool not in whitelist; emitting as text",
+                                tool_name
+                            );
+                        }
+                    } else {
+                        tracing::warn!(
+                            "[#3379] Non-streaming: call:default_api:{} detected but G5 (no prose) failed; emitting as text",
+                            tool_name
+                        );
+                    }
+                }
+            }
+        }
+
         // [NEW] MCP XML Bridge: 循环解析文本中可能存在的 XML 标签
         while let Some(start_idx) = current_text.find("<mcp__") {
             if let Some(tag_end_idx) = current_text[start_idx..].find('>') {
@@ -547,8 +636,10 @@ pub fn transform_response(
     session_id: Option<String>,
     model_name: String,
     message_count: usize, // [NEW v4.0.0] Message count for rewind detection
+    registered_tool_names: Vec<String>, // [FIX #3379] For call:default_api leakage recovery
 ) -> Result<ClaudeResponse, String> {
     let mut processor = NonStreamingProcessor::new(session_id, model_name, message_count);
+    processor.set_registered_tool_names(registered_tool_names);
     Ok(processor.process(gemini_response, scaling_enabled, context_limit))
 }
 
@@ -592,6 +683,7 @@ mod tests {
             None,
             "gemini-2.5-flash".to_string(),
             1,
+            vec![], // registered_tool_names: not needed for this test
         );
         assert!(result.is_ok());
 
@@ -649,6 +741,7 @@ mod tests {
             None,
             "gemini-2.5-flash".to_string(),
             1,
+            vec![], // registered_tool_names: not needed for this test
         );
         assert!(result.is_ok());
 

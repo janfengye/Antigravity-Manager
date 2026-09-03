@@ -3,6 +3,10 @@
 > 完整版本历史记录。返回项目主页请查看 [README.md](README.md) | [English Changelog](CHANGELOG_EN.md)。
 
 *   **版本演进**:
+    *   **v4.6.6 (2026-09-03)**:
+        -   **[核心修复] 修复 Gemini 3.7 长上下文工具调用文本泄露导致 Agent 静默中断 (Issue #3379)**:
+            -   **call:default_api 泄露检测与受控恢复 (Fail-Closed Bridge)**: 解决 Gemini 3.7 Flash 在长上下文压缩后，偶发未在结构化 `functionCall` 字段返回工具调用，而是以内部伪代码文本（`call:default_api:ToolName{...}`）输出导致 Claude Desktop / Claude Code Agent 工具循环中断的问题。引入 7 项严格守卫条件（已注册工具、本回合无原生工具调用、严格前缀匹配、注册工具白名单精准对齐、无额外散文干扰、参数合法 JSON 解析、本回合未发出任何 text_delta），在确保绝不发生 Prompt Injection 或误执行普通文本的前提下，将泄露文本安全恢复为标准 `tool_use` 块。
+            -   **流式与非流式全链路对齐与诊断预警**: 在 SSE 流式通道（`streaming.rs`）与非流式响应转换（`response.rs`）中实现对称防御恢复逻辑，并在检测到未通过守卫条件的疑似泄露文本时输出诊断日志（`tracing::warn`），全面加固 9 组单元测试矩阵。
     *   **v4.6.5 (2026-09-02)**:
         -   **[核心修复] 修复 Gemini JSON Schema 校验 400 报错（嵌套 Array 缺失 items） (PR #3375)**:
             -   **Array 类型 items 兜底补全**: 解决 Claude Code 等客户端发送无 `items` 字段的 Array Schema（如 `query.where: { type: "array", items: { type: "array" } }`）时触发 Gemini 后端 400 校验失败的问题。在 Schema 递归清洗流程中自动为未声明 `items` 的 `array` 节点注入 `{"type": "string"}` 兼容项，并增加回归单测。

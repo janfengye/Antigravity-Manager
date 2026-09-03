@@ -1516,6 +1516,12 @@ pub async fn handle_messages(
                 // 转换
                 // [FIX #765] Pass session_id and model_name for signature caching
                 let s_id_owned = session_id.map(|s| s.to_string());
+                // [FIX #3379] Extract registered tool names for non-streaming leakage recovery
+                let ns_registered_tool_names: Vec<String> = request_with_mapped
+                    .tools
+                    .as_ref()
+                    .map(|tools| tools.iter().filter_map(|t| t.name.clone()).collect())
+                    .unwrap_or_default();
                 // 转换
                 let claude_response = match transform_response(
                     &gemini_response,
@@ -1524,6 +1530,7 @@ pub async fn handle_messages(
                     s_id_owned,
                     request_with_mapped.model.clone(),
                     request_with_mapped.messages.len(), // [NEW v4.0.0] Pass message count for rewind detection
+                    ns_registered_tool_names, // [FIX #3379] For call:default_api leakage recovery
                 ) {
                     Ok(r) => r,
                     Err(e) => {
