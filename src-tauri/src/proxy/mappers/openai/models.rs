@@ -99,6 +99,22 @@ pub enum OpenAIContentBlock {
     // [NEW] OpenAI 官方多模态音频入参: {"type":"input_audio","input_audio":{"data":"<base64>","format":"wav"}}
     #[serde(rename = "input_audio", alias = "audio")]
     InputAudio { input_audio: OpenAIInputAudio },
+    // [NEW] 视频多模态输入: {"type":"video_url","video_url":{"url":"..."}}
+    #[serde(rename = "video_url")]
+    VideoUrl { video_url: OpenAIVideoUrl },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OpenAIVideoUrl {
+    pub url: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "mimeType",
+        alias = "mime_type",
+        alias = "format"
+    )]
+    pub mime_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

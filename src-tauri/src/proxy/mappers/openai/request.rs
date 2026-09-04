@@ -472,6 +472,15 @@ pub fn transform_openai_request(
                             "thought": true,
                         });
                         parts.push(thought_part);
+                    } else {
+                        // [FIX #3382] For older turns, keep a minimal thought block placeholder
+                        // to satisfy the schema requirement (parts[0] must be thought if thinking enabled)
+                        // without repeating thousands of tokens. The tool call retains thoughtSignature.
+                        let thought_part = json!({
+                            "text": "...",
+                            "thought": true,
+                        });
+                        parts.push(thought_part);
                     }
                 }
             } else if actual_include_thinking && role == "model" {
@@ -593,6 +602,21 @@ pub fn transform_openai_request(
                                         }
                                         None => {
                                             tracing::warn!("[OpenAI-Request] Dropped empty input_audio part");
+                                        }
+                                    }
+                                }
+                                OpenAIContentBlock::VideoUrl { video_url } => {
+                                    // [NEW #3381] video_url -> Gemini inlineData / fileData
+                                    match crate::proxy::video::video_part_from_source(
+                                        &video_url.url,
+                                        video_url.mime_type.as_deref(),
+                                    ) {
+                                        Some(part) => {
+                                            tracing::debug!("[OpenAI-Request] Mapped video_url to Gemini part");
+                                            parts.push(part);
+                                        }
+                                        None => {
+                                            tracing::warn!("[OpenAI-Request] Dropped unreadable video_url part: {}", video_url.url);
                                         }
                                     }
                                 }
@@ -723,7 +747,15 @@ pub fn transform_openai_request(
                                         None => texts.push("[audio]".to_string()),
                                     }
                                 }
-                                _ => {}
+                                OpenAIContentBlock::VideoUrl { video_url } => {
+                                    match crate::proxy::video::video_part_from_source(
+                                        &video_url.url,
+                                        video_url.mime_type.as_deref(),
+                                    ) {
+                                        Some(part) => extra_parts.push(part),
+                                        None => texts.push("[video]".to_string()),
+                                    }
+                                }
                             }
                         }
                         texts.join("\n")
@@ -1513,6 +1545,44 @@ mod tests {
         assert_eq!(
             parts[1]["inlineData"]["mimeType"].as_str().unwrap(),
             "image/png"
+        );
+    }
+
+    #[test]
+    fn test_transform_openai_request_video_multimodal() {
+        use crate::proxy::mappers::openai::models::OpenAIVideoUrl;
+        let req = OpenAIRequest {
+            model: "gemini-2.5-flash".to_string(),
+            messages: vec![OpenAIMessage {
+                role: "user".to_string(),
+                refusal: None,
+                content: Some(OpenAIContent::Array(vec![
+                    OpenAIContentBlock::Text { text: "Describe this video".to_string() },
+                    OpenAIContentBlock::VideoUrl { video_url: OpenAIVideoUrl {
+                        url: "data:video/mp4;base64,AAAA".to_string(),
+                        mime_type: None,
+                    } }
+                ])),
+                reasoning_content: None,
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+            }],
+            ..Default::default()
+        };
+
+        let (result, _sid, _msg_count, _) =
+            transform_openai_request(&req, "test-v", "gemini-2.5-flash", None);
+        let parts = &result["request"]["contents"][0]["parts"];
+        assert_eq!(parts.as_array().unwrap().len(), 2);
+        assert_eq!(parts[0]["text"].as_str().unwrap(), "Describe this video");
+        assert_eq!(
+            parts[1]["inlineData"]["mimeType"].as_str().unwrap(),
+            "video/mp4"
+        );
+        assert_eq!(
+            parts[1]["inlineData"]["data"].as_str().unwrap(),
+            "AAAA"
         );
     }
 

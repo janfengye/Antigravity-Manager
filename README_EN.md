@@ -1,15 +1,15 @@
 # Antigravity Tools 🚀
-> Professional AI Account Management & Protocol Proxy System (v4.6.6)
+> Professional AI Account Management & Protocol Proxy System (v4.6.7)
 
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
 
   <h3>Your Personal High-Performance AI Gateway</h3>
-  <p>More than account management — the ultimate solution for AI API orchestration.</p>
+  <p>Not just account management, but the ultimate solution to break API barriers.</p>
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.6.6-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.6.7-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -144,7 +144,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **Supported formats**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **Advanced usage**: Install a specific version `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --version 4.6.6`, dry-run mode `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --dry-run`
+> **Advanced usage**: Install a specific version `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --version 4.6.7`, dry-run mode `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 If you have [Homebrew](https://brew.sh/) installed, you can also install via:
@@ -426,7 +426,7 @@ In clients that support OpenAI protocol (e.g., Cherry Studio), you can configure
 
 ## 📝 Changelog
 
-> Latest version **v4.6.6** (2026-09-03): Gemini 3.7 tool call text leakage (`call:default_api:*`) fail-closed recovery bridge (#3379) with symmetric streaming/non-streaming parity and diagnostic logging. Includes all features and fixes from v4.6.5.
+> Latest version **v4.6.7** (2026-09-04): Completely fixes multi-turn Agent context explosion and session history duplication bug (unblocks thinking compression on historical tool-call messages, preserves valid signatures, prevents exponential 2x/4x history duplication, #3382). Includes all features and fixes from v4.6.6.
 
 👉 **[View Full Changelog → CHANGELOG_EN.md](CHANGELOG_EN.md)**
 
