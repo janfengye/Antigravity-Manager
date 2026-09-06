@@ -1268,22 +1268,30 @@ impl<'a> PartProcessor<'a> {
         chunks.extend(self.state.start_block(BlockType::Function, tool_use));
 
         // 2. 发送 input_json_delta (完整的参数 JSON 字符串)
-        // [FIX] Remap args before serialization for Gemini → Claude compatibility
-        if let Some(args) = &fc.args {
-            let mut remapped_args = args.clone();
+        // [FIX #Bug2/#Bug4] ALWAYS emit input_json_delta, even for empty/null args.
+        // Claude protocol requires this delta before content_block_stop.
+        // Skipping it causes clients (Claude Code) to misinterpret tool calls as text.
+        {
+            let json_str = if let Some(args) = &fc.args {
+                let mut remapped_args = args.clone();
 
-            let tool_name_title = fc.name.clone();
-            // [OPTIMIZED] Only rename if it's "search" which is a known hallucination.
-            // Avoid renaming "grep" to "Grep" if possible to protect signature,
-            // unless we're sure Grep is the standard.
-            let mut final_tool_name = tool_name_title;
-            if final_tool_name.to_lowercase() == "search" {
-                final_tool_name = "Grep".to_string();
-            }
-            remap_function_call_args(&final_tool_name, &mut remapped_args);
+                let tool_name_title = fc.name.clone();
+                let mut final_tool_name = tool_name_title;
+                if final_tool_name.to_lowercase() == "search" {
+                    final_tool_name = "Grep".to_string();
+                }
+                remap_function_call_args(&final_tool_name, &mut remapped_args);
 
-            let json_str =
-                serde_json::to_string(&remapped_args).unwrap_or_else(|_| "{}".to_string());
+                serde_json::to_string(&remapped_args).unwrap_or_else(|_| "{}".to_string())
+            } else {
+                // [FIX #Bug4] No args provided (e.g. EnterPlanMode): emit empty JSON object
+                tracing::debug!(
+                    "[Streaming] Tool '{}' has no args, emitting empty input_json_delta",
+                    fc.name
+                );
+                "{}".to_string()
+            };
+
             chunks.push(
                 self.state
                     .emit_delta("input_json_delta", json!({ "partial_json": json_str })),
@@ -1478,6 +1486,91 @@ mod tests {
 
         // 3. content_block_stop
         assert!(output.contains(r#""type":"content_block_stop""#));
+    }
+
+    /// [FIX #Bug4] Tool with args=None MUST still emit input_json_delta with "{}"
+    #[test]
+    fn test_process_function_call_no_args_emits_empty_delta() {
+        let mut state = StreamingState::new();
+        let mut processor = PartProcessor::new(&mut state);
+
+        let fc = FunctionCall {
+            name: "EnterPlanMode".to_string(),
+            args: None, // No args at all
+            id: Some("call_no_args".to_string()),
+        };
+
+        let part = GeminiPart {
+            text: None,
+            function_call: Some(fc),
+            inline_data: None,
+            thought: None,
+            thought_signature: None,
+            function_response: None,
+        };
+
+        let chunks = processor.process(&part);
+        let output = chunks
+            .iter()
+            .map(|b| String::from_utf8(b.to_vec()).unwrap())
+            .collect::<Vec<_>>()
+            .join("");
+
+        // Must have tool_use block start
+        assert!(output.contains(r#""type":"content_block_start""#));
+        assert!(output.contains(r#""name":"EnterPlanMode""#));
+
+        // [FIX #Bug4] Must emit input_json_delta even for None args
+        assert!(
+            output.contains(r#""type":"input_json_delta""#),
+            "MUST emit input_json_delta even when args is None; output={}",
+            &output[..output.len().min(600)]
+        );
+        assert!(
+            output.contains(r#""partial_json":"{}""#),
+            "input_json_delta must be empty JSON object for None args"
+        );
+
+        // Must close block
+        assert!(output.contains(r#""type":"content_block_stop""#));
+        assert!(state.used_tool);
+    }
+
+    /// [FIX #Bug2] Tool with args=Some({}) (empty obj) MUST still emit input_json_delta
+    #[test]
+    fn test_process_function_call_empty_args_emits_delta() {
+        let mut state = StreamingState::new();
+        let mut processor = PartProcessor::new(&mut state);
+
+        let fc = FunctionCall {
+            name: "SomeTool".to_string(),
+            args: Some(json!({})), // Empty args object
+            id: Some("call_empty".to_string()),
+        };
+
+        let part = GeminiPart {
+            text: None,
+            function_call: Some(fc),
+            inline_data: None,
+            thought: None,
+            thought_signature: None,
+            function_response: None,
+        };
+
+        let chunks = processor.process(&part);
+        let output = chunks
+            .iter()
+            .map(|b| String::from_utf8(b.to_vec()).unwrap())
+            .collect::<Vec<_>>()
+            .join("");
+
+        // [FIX #Bug2] Must emit input_json_delta for empty object args
+        assert!(
+            output.contains(r#""type":"input_json_delta""#),
+            "Must emit input_json_delta for empty args object; output={}",
+            &output[..output.len().min(600)]
+        );
+        assert!(state.used_tool);
     }
 
     #[test]

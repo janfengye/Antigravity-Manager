@@ -333,7 +333,9 @@
       "quota": "Cota",
       "last_used": "Último Uso",
       "actions": "Ações",
-      "weekly_quota": "Cota Semanal"
+      "weekly_quota": "Cota semanal",
+      "sort_by_reset_time": "Clique para ordenar pelo tempo de redefinição da cota",
+      "sort_by_last_used": "Clique para ordenar pelo tempo de último uso"
     },
     "drag_to_reorder": "Arraste para reordenar",
     "empty": {
@@ -364,7 +366,8 @@
       "batch_warmup_msg": "Tem certeza de que deseja acionar o aquecimento para as {{count}} contas selecionadas imediatamente?"
     },
     "switch_to_agy": "Alternar para Antigravity CLI (agy)",
-    "warmup_all_triggered": "Tarefa de pré-aquecimento disparada para todas as contas"
+    "warmup_all_triggered": "Tarefa de pré-aquecimento disparada para todas as contas",
+    "drag_disabled_during_sort": "A ordenação por coluna está ativa; o arrasto está pausado"
   },
   "settings": {
     "save": "Salvar Configurações",

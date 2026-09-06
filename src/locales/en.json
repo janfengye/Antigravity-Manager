@@ -309,10 +309,14 @@
     "table": {
       "email": "Email",
       "quota": "Model Quota",
+      "weekly_quota": "Weekly Quota",
       "last_used": "Last Used",
-      "actions": "Actions"
+      "actions": "Actions",
+      "sort_by_reset_time": "Click to sort by quota reset time",
+      "sort_by_last_used": "Click to sort by last used time"
     },
     "drag_to_reorder": "Drag to reorder",
+    "drag_disabled_during_sort": "Column sorting is active; drag-to-reorder is paused",
     "empty": {
       "title": "No Accounts",
       "desc": "Click the \"Add Account\" button above to add your first account"

@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> Professional AI Account Management & Protocol Proxy System (v4.6.7)
+> Professional AI Account Management & Protocol Proxy System (v4.6.8)
 
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
@@ -9,7 +9,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.6.7-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.6.8-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -144,7 +144,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **Supported formats**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **Advanced usage**: Install a specific version `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --version 4.6.7`, dry-run mode `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --dry-run`
+> **Advanced usage**: Install a specific version `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --version 4.6.8`, dry-run mode `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 If you have [Homebrew](https://brew.sh/) installed, you can also install via:
@@ -238,6 +238,17 @@ Due to macOS security gatekeeper, non-App Store apps might show this. Run this i
 ```bash
 sudo xattr -rd com.apple.quarantine "/Applications/Antigravity Tools.app"
 ```
+
+#### Linux window is black or empty?
+On niri, Hyprland, Sway, and similar compositors, older builds forced `GDK_BACKEND=x11` whenever `DISPLAY` was set, and WebKit then drew a black window. Update to a build that includes this fix, or launch once with:
+
+```bash
+env WEBKIT_DISABLE_DMABUF_RENDERER=1 ANTIGRAVITY_FORCE_WAYLAND=1 antigravity-tools
+```
+
+- `ANTIGRAVITY_FORCE_WAYLAND=1`: keep native Wayland (do not force X11)
+- `ANTIGRAVITY_FORCE_X11=1`: force X11 if you still need it
+- `WEBKIT_DISABLE_DMABUF_RENDERER=1`: disable the WebKit DMA-BUF renderer
 
 ## 🔌 Quick Integration Examples
 
@@ -426,7 +437,7 @@ In clients that support OpenAI protocol (e.g., Cherry Studio), you can configure
 
 ## 📝 Changelog
 
-> Latest version **v4.6.7** (2026-09-04): Completely fixes multi-turn Agent context explosion and session history duplication bug (unblocks thinking compression on historical tool-call messages, preserves valid signatures, prevents exponential 2x/4x history duplication, #3382). Includes all features and fixes from v4.6.6.
+> Latest version **v4.6.8** (2026-09-06): Completely fixes cold startup unconditional VACUUM causing sustained 100% disk active time and retention timestamp seconds/milliseconds mismatch (threshold-gated compaction, millisecond-aligned log purging, #3386). Includes all features and fixes from v4.6.7.
 
 👉 **[View Full Changelog → CHANGELOG_EN.md](CHANGELOG_EN.md)**
 

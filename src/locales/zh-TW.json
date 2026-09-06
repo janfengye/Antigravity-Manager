@@ -277,7 +277,10 @@
       "email": "信箱",
       "quota": "模型配額",
       "last_used": "最後使用",
-      "actions": "操作"
+      "actions": "操作",
+      "weekly_quota": "週配額",
+      "sort_by_reset_time": "點擊按配額重置時間排序",
+      "sort_by_last_used": "點擊按最後使用時間排序"
     },
     "drag_to_reorder": "拖拽排序",
     "empty": {
@@ -307,7 +310,8 @@
       "batch_warmup_title": "批次手動預熱",
       "batch_warmup_msg": "確定要為選中的 {{count}} 個帳號立即觸發預熱嗎？"
     },
-    "switch_to_agy": "Switch to Antigravity CLI (agy)"
+    "switch_to_agy": "Switch to Antigravity CLI (agy)",
+    "drag_disabled_during_sort": "已啟用欄位排序，拖曳排序已暫停"
   },
   "settings": {
     "save": "儲存設定",

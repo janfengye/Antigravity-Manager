@@ -266,7 +266,10 @@
       "email": "E-posta",
       "quota": "Model Kotası",
       "last_used": "Son Kullanım",
-      "actions": "İşlemler"
+      "actions": "İşlemler",
+      "weekly_quota": "Haftalık Kota",
+      "sort_by_reset_time": "Kota sıfırlama süresine göre sıralamak için tıklayın",
+      "sort_by_last_used": "Son kullanım süresine göre sıralamak için tıklayın"
     },
     "drag_to_reorder": "Yeniden sıralamak için sürükleyin",
     "empty": {
@@ -292,7 +295,8 @@
       "enable_proxy_title": "Proxy'yi Etkinleştir",
       "enable_proxy_msg": "Bu hesap için proxy'yi yeniden etkinleştirmek istediğinizden emin misiniz?"
     },
-    "switch_to_agy": "Switch to Antigravity CLI (agy)"
+    "switch_to_agy": "Switch to Antigravity CLI (agy)",
+    "drag_disabled_during_sort": "Sütun sıralaması etkin; sürükleyerek sıralama duraklatıldı"
   },
   "settings": {
     "save": "Ayarları Kaydet",

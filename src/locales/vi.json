@@ -273,7 +273,10 @@
       "email": "Email",
       "quota": "Hạn mức Model",
       "last_used": "Dùng lần cuối",
-      "actions": "Thao tác"
+      "actions": "Thao tác",
+      "weekly_quota": "Hạn ngạch tuần",
+      "sort_by_reset_time": "Nhấp để sắp xếp theo thời gian đặt lại hạn ngạch",
+      "sort_by_last_used": "Nhấp để sắp xếp theo thời gian sử dụng gần nhất"
     },
     "drag_to_reorder": "Kéo để sắp xếp lại",
     "empty": {
@@ -303,7 +306,8 @@
       "batch_warmup_title": "Làm nóng Thủ công Hàng loạt",
       "batch_warmup_msg": "Bạn có chắc muốn chạy tác vụ làm nóng cho {{count}} tài khoản đã chọn ngay bây giờ?"
     },
-    "switch_to_agy": "Switch to Antigravity CLI (agy)"
+    "switch_to_agy": "Switch to Antigravity CLI (agy)",
+    "drag_disabled_during_sort": "Đang bật sắp xếp theo cột; tính năng kéo thả tạm dừng"
   },
   "settings": {
     "save": "Lưu Cài đặt",

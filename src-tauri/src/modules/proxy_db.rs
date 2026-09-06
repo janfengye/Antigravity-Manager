@@ -232,17 +232,22 @@ pub fn get_log_detail(log_id: &str) -> Result<ProxyRequestLog, String> {
 pub fn cleanup_old_logs(days: i64) -> Result<usize, String> {
     let conn = connect_db()?;
 
-    let cutoff_timestamp = chrono::Utc::now().timestamp() - (days * 24 * 3600);
+    // Note: Request log timestamp is stored in milliseconds (chrono::Utc::now().timestamp_millis())
+    let cutoff_timestamp_ms = chrono::Utc::now().timestamp_millis() - (days * 24 * 3600 * 1000);
 
     let deleted = conn
         .execute(
             "DELETE FROM request_logs WHERE timestamp < ?1",
-            [cutoff_timestamp],
+            [cutoff_timestamp_ms],
         )
         .map_err(|e| e.to_string())?;
 
-    // Execute VACUUM to reclaim disk space
-    conn.execute("VACUUM", []).map_err(|e| e.to_string())?;
+    // Only execute VACUUM when substantial rows were deleted to avoid saturating disk I/O on startup
+    if deleted >= 500 {
+        if let Err(e) = conn.execute("VACUUM", []) {
+            tracing::warn!("VACUUM failed after log cleanup: {}", e);
+        }
+    }
 
     Ok(deleted)
 }
@@ -261,7 +266,12 @@ pub fn limit_max_logs(max_count: usize) -> Result<usize, String> {
         )
         .map_err(|e| e.to_string())?;
 
-    conn.execute("VACUUM", []).map_err(|e| e.to_string())?;
+    // Only execute VACUUM when substantial rows were deleted
+    if deleted >= 500 {
+        if let Err(e) = conn.execute("VACUUM", []) {
+            tracing::warn!("VACUUM failed after limit_max_logs: {}", e);
+        }
+    }
 
     Ok(deleted)
 }

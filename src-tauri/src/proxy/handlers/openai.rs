@@ -2632,6 +2632,12 @@ pub async fn handle_chat_completions(
                 email
             );
 
+            // [FIX #3391] 彻底清除 thinking 配置并去除 -thinking 模型后缀，确保下一轮重试时完全关闭思考
+            openai_req.thinking = None;
+            if openai_req.model.ends_with("-thinking") {
+                openai_req.model = openai_req.model.trim_end_matches("-thinking").to_string();
+            }
+
             // 追加修复提示词到最后一条用户消息
             if let Some(last_msg) = openai_req.messages.last_mut() {
                 if last_msg.role == "user" {

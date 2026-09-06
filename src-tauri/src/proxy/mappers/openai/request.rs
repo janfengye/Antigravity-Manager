@@ -254,16 +254,17 @@ pub fn transform_openai_request(
             || mapped_model_lower.contains("-flash-")
             || mapped_model_lower.contains("-flash-agent"))
         && !mapped_model_lower.contains("claude");
-    let is_claude_thinking = mapped_model_lower.ends_with("-thinking");
-    let is_thinking_model = is_gemini_3_thinking || is_claude_thinking || is_gemini_flash_thinking;
-
-    // [NEW] 检查用户是否在请求中显式启用 thinking
     let user_enabled_thinking = request
         .thinking
         .as_ref()
         .map(|t| t.thinking_type.as_deref() == Some("enabled"))
         .unwrap_or(false);
     let user_thinking_budget = request.thinking.as_ref().and_then(|t| t.budget_tokens);
+
+    let is_claude_model = mapped_model_lower.contains("claude");
+    let is_claude_thinking = mapped_model_lower.ends_with("-thinking")
+        || (is_claude_model && user_enabled_thinking);
+    let is_thinking_model = is_gemini_3_thinking || is_claude_thinking || is_gemini_flash_thinking;
 
     // [NEW] 检查历史消息是否兼容思维模型 (是否有 Assistant 消息缺失 reasoning_content)
     let has_incompatible_assistant_history = request.messages.iter().any(|msg| {
@@ -282,15 +283,18 @@ pub fn transform_openai_request(
     // [NEW] 决定是否开启 Thinking 功能:
     // 1. 模型名包含 -thinking 时自动开启
     // 2. 用户在请求中显式设置 thinking.type = "enabled" 时开启
-    // 如果是 Claude 思考模型且历史不兼容且没有可用签名来占位, 则禁用 Thinking 以防 400
+    // [FIX #3391] 如果是 Claude 思考模型且存在缺失 reasoning_content 的 Assistant 历史，
+    // Claude 上游严格要求每个 thinking 块必须有真实签名且不支持哨兵签名，
+    // 注入无签名占位块必触发 400 thinking.signature: Field required。
+    // 因此对于带有不兼容历史的 Claude 思考请求，安全降级为不开启 thinking。
     let mut actual_include_thinking = is_thinking_model || user_enabled_thinking;
 
     // [REFACTORED] 使用 SignatureCache 获取 Session 级别的签名
     let session_thought_sig =
         crate::proxy::SignatureCache::global().get_session_signature(&session_id);
 
-    if is_claude_thinking && has_incompatible_assistant_history && session_thought_sig.is_none() {
-        tracing::warn!("[OpenAI-Thinking] Incompatible assistant history detected for Claude thinking model without session signature. Disabling thinking for this request to avoid 400 error. (sid: {})", session_id);
+    if is_claude_thinking && has_incompatible_assistant_history {
+        tracing::warn!("[OpenAI-Thinking] Incompatible assistant history detected for Claude thinking model (missing reasoning_content). Disabling thinking for this request to avoid 400 signature error. (sid: {})", session_id);
         actual_include_thinking = false;
     }
 
@@ -483,10 +487,10 @@ pub fn transform_openai_request(
                         parts.push(thought_part);
                     }
                 }
-            } else if actual_include_thinking && role == "model" {
-                // [FIX] 解决 Claude 4.6 Thinking 模型的强制性校验:
+            } else if actual_include_thinking && role == "model" && !is_claude_model {
+                // [FIX] 解决 Gemini 4.6 Thinking 等模型的强制性校验:
                 // "Expected thinking... but found tool_use/text"
-                // 如果是思维模型且缺失 reasoning_content, 则注入占位符
+                // 如果是思维模型且缺失 reasoning_content, 则注入占位符 (Claude 不支持无签名占位符)
                 tracing::debug!("[OpenAI-Thinking] Injecting placeholder thinking block for assistant message");
                 let mut thought_part = json!({
                     "text": "Applying tool decisions and generating response...",
@@ -1720,6 +1724,10 @@ mod tests {
 
     #[test]
     fn test_flash_thinking_budget_capping() {
+        crate::proxy::config::update_thinking_budget_config(
+            crate::proxy::config::ThinkingBudgetConfig::default(),
+        );
+
         let req = OpenAIRequest {
             model: "gpt-4".to_string(),
             messages: vec![OpenAIMessage {
@@ -2004,5 +2012,59 @@ mod tests {
         let resp_schema = &gen_config["responseSchema"];
         assert_eq!(resp_schema["type"], "object");
         assert_eq!(resp_schema["properties"]["summary"]["type"], "object");
+    }
+
+    #[test]
+    fn test_issue_3391_claude_without_thinking_suffix_incompatible_history() {
+        // [FIX #3391] 当客户端使用不带 -thinking 后缀的 Claude 模型（如 claude-sonnet-4-6）
+        // 且显式传入 thinking 配置，但在多轮对话中有纯文本 assistant 消息（缺少 reasoning_content）时，
+        // 系统应当安全禁用 thinking，并且不插入无签名的思考占位块，避免 Claude 上游报 400 thinking.signature 错误。
+        let req = OpenAIRequest {
+            model: "claude-sonnet-4-6".to_string(),
+            messages: vec![
+                OpenAIMessage {
+                    role: "user".to_string(),
+                    content: Some(OpenAIContent::String("Hello".to_string())),
+                    ..Default::default()
+                },
+                OpenAIMessage {
+                    role: "assistant".to_string(),
+                    content: Some(OpenAIContent::String("Hi there!".to_string())),
+                    reasoning_content: None, // 模拟 AstrBot/SillyTavern 等客户端历史消息缺失思考内容
+                    ..Default::default()
+                },
+                OpenAIMessage {
+                    role: "user".to_string(),
+                    content: Some(OpenAIContent::String("How are you?".to_string())),
+                    ..Default::default()
+                },
+            ],
+            thinking: Some(ThinkingConfig {
+                thinking_type: Some("enabled".to_string()),
+                budget_tokens: Some(1024),
+                effort: None,
+            }),
+            ..Default::default()
+        };
+
+        let (result, _sid, _msg_count, _) =
+            transform_openai_request(&req, "test-proj", "claude-sonnet-4-6", None);
+
+        let gen_config = &result["request"]["generationConfig"];
+        // 验证 thinkingConfig 未被启用（已安全降级）
+        assert!(
+            gen_config.get("thinkingConfig").is_none(),
+            "thinkingConfig must NOT be injected when Claude model has incompatible history"
+        );
+
+        // 验证 assistant 消息中没有注入非法且无签名的 thinking 占位块
+        let contents = result["request"]["contents"].as_array().unwrap();
+        let assistant_msg = contents
+            .iter()
+            .find(|m| m["role"] == "model")
+            .expect("Should have model message");
+        let parts = assistant_msg["parts"].as_array().unwrap();
+        let has_thought_part = parts.iter().any(|p| p.get("thought") == Some(&serde_json::json!(true)));
+        assert!(!has_thought_part, "Should not inject placeholder thinking block into assistant message for Claude");
     }
 }

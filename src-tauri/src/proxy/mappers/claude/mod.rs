@@ -56,16 +56,22 @@ where
         state.set_client_adapter(client_adapter); // [NEW] Set adapter
         state.set_registered_tool_names(registered_tool_names); // [FIX #MCP] Set tool names
         let mut buffer = BytesMut::new();
+        // [FIX #Bug1] Track consecutive ping timeouts to detect stuck streams
+        let mut consecutive_pings: u32 = 0;
+        const MAX_CONSECUTIVE_PINGS: u32 = 5; // 5 × 20s = 100s max idle before giving up
 
         loop {
-            // [NEW] 60秒心跳保活: 延长超时时间以增加网络抖动容错
+            // [FIX #Bug1] Reduced from 60s to 20s: faster fail-fast on idle streams.
+            // Gemini normally sends data within 5s; 20s is generous without causing 60s delays.
             let next_chunk = tokio::time::timeout(
-                std::time::Duration::from_secs(60),
+                std::time::Duration::from_secs(20),
                 gemini_stream.next()
             ).await;
 
             match next_chunk {
                 Ok(Some(chunk_result)) => {
+                    // Reset ping counter on any real data
+                    consecutive_pings = 0;
                     match chunk_result {
                         Ok(chunk) => {
                             buffer.extend_from_slice(&chunk);
@@ -100,7 +106,19 @@ where
                 }
                 Ok(None) => break, // Stream 正常结束
                 Err(_) => {
-                    // 超时，发送心跳包 (SSE Comment 格式)
+                    // [FIX #Bug1] Timeout - send keepalive ping but track consecutive count
+                    consecutive_pings += 1;
+                    if consecutive_pings >= MAX_CONSECUTIVE_PINGS {
+                        tracing::error!(
+                            "[{}] Stream idle for {}s ({}x 20s timeout), terminating",
+                            trace_id, consecutive_pings * 20, consecutive_pings
+                        );
+                        break;
+                    }
+                    tracing::debug!(
+                        "[{}] SSE idle ping #{}/{}",
+                        trace_id, consecutive_pings, MAX_CONSECUTIVE_PINGS
+                    );
                     yield Ok(Bytes::from(": ping\n\n"));
                 }
             }
@@ -123,9 +141,9 @@ where
              buffer.clear();
         }
 
-        // [FIX #859] Post-thinking interruption recovery
-        // If we have sent thinking but NO content (text/tool_use) and the stream ended (or timed out without DONE),
-        // we must provide a fallback to prevent 0-token errors on client side.
+        // [FIX #Bug3] Post-thinking interruption recovery
+        // If we have sent thinking but NO content (text/tool_use) and the stream ended,
+        // we must provide a fallback to prevent loop hang on client side.
         if state.has_thinking && !state.has_content {
             tracing::warn!("[{}] Stream interrupted after thinking (No Content). Triggering recovery...", trace_id);
 
@@ -137,38 +155,40 @@ where
                }
             }
 
-            // 2. Inject system message to inform user
-            // We use a new text block for this.
+            // 2. Inject recovery text block to inform user
             let recovery_msg = "\n\n[System] Upstream model interrupted after thinking. (Recovered by Antigravity)";
             let start_chunks = state.start_block(
                 crate::proxy::mappers::claude::streaming::BlockType::Text,
                 serde_json::json!({ "type": "text", "text": recovery_msg })
             );
             for chunk in start_chunks { yield Ok(chunk); }
-
             let stop_chunks = state.end_block();
             for chunk in stop_chunks { yield Ok(chunk); }
 
-            // 3. Mark as content received so we don't trigger this again (though loop is done)
+            // 3. Mark as content received
             state.has_content = true;
 
-            // 4. Send a simulated usage update to ensure we have > 0 output tokens
-            // Estimate based on some default if we didn't get any usage
-            let recovery_usage = crate::proxy::mappers::claude::models::Usage {
-                input_tokens: 0, // We don't know input, but output is critical
-                output_tokens: 100, // Arbitrary small number to satisfy client
-                cache_read_input_tokens: None,
-                cache_creation_input_tokens: None,
-                server_tool_use: None,
-            };
-
-            let delta = serde_json::json!({
-                "type": "message_delta",
-                "delta": { "stop_reason": "end_turn", "stop_sequence": null },
-                "usage": recovery_usage
-            });
-
-            yield Ok(state.emit("message_delta", delta));
+            // 4. [FIX #Bug3] Explicitly emit message_delta + message_stop.
+            // Previously, the recovery path relied on emit_force_stop() below,
+            // but if message_stop_sent was already true (e.g. from a partial finish),
+            // emit_force_stop() would be a no-op and the client would hang in loop.
+            if !state.message_stop_sent {
+                let recovery_usage = crate::proxy::mappers::claude::models::Usage {
+                    input_tokens: 0,
+                    output_tokens: 100, // Minimal non-zero to satisfy client
+                    cache_read_input_tokens: None,
+                    cache_creation_input_tokens: None,
+                    server_tool_use: None,
+                };
+                let delta = serde_json::json!({
+                    "type": "message_delta",
+                    "delta": { "stop_reason": "end_turn", "stop_sequence": null },
+                    "usage": recovery_usage
+                });
+                yield Ok(state.emit("message_delta", delta));
+                yield Ok(Bytes::from("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"));
+                state.message_stop_sent = true;
+            }
         } else if !state.has_content && !state.has_thinking {
             // [FIX #3359] Empty response recovery (e.g. single dot prompt health check)
             // If the upstream ended immediately without generating thinking or text content,

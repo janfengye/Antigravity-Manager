@@ -1317,7 +1317,10 @@ pub async fn handle_messages(
                 // Loop to skip heartbeats during peek
                 loop {
                     match tokio::time::timeout(
-                        std::time::Duration::from_secs(300),
+                        // [FIX #Bug1] Reduced from 300s to 30s.
+                        // Gemini sends first chunk within 5s normally; 30s allows for retries
+                        // without causing the 5-minute hang users observed.
+                        std::time::Duration::from_secs(30),
                         claude_stream.next(),
                     )
                     .await
@@ -1359,7 +1362,7 @@ pub async fn handle_messages(
                         }
                         Err(_) => {
                             tracing::warn!(
-                                "[{}] Timeout waiting for first data (60s), retrying...",
+                                "[{}] Timeout waiting for first data (30s), retrying...",
                                 trace_id
                             );
                             last_error = "Timeout waiting for first data".to_string();
@@ -1388,15 +1391,16 @@ pub async fn handle_messages(
                                 }
                             }));
 
-                        // [NEW] 针对 Claude 流增加 60 秒空闲超时保护
+                        // [FIX #Bug1] 针对 Claude 流增加空闲超时保护，从 300s 降至 120s
+                        // 300s 会导致客户端等待长达 5 分钟；120s 仍有足够容错余量
                         let combined_stream = async_stream::stream! {
                             let mut s = Box::pin(combined_stream);
                             loop {
-                                match tokio::time::timeout(std::time::Duration::from_secs(300), s.next()).await {
+                                match tokio::time::timeout(std::time::Duration::from_secs(120), s.next()).await {
                                     Ok(Some(item)) => yield item,
                                     Ok(None) => break,
                                     Err(_) => {
-                                        tracing::error!("[Claude-SSE] Idle timeout after 300s, terminating stream");
+                                        tracing::error!("[Claude-SSE] Idle timeout after 120s, terminating stream");
                                         yield Ok::<Bytes, std::io::Error>(Bytes::from("data: {\"type\": \"message_stop\"}\n\ndata: [DONE]\n\n"));
                                         break;
                                     }

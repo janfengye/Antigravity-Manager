@@ -310,7 +310,10 @@
       "email": "Correo",
       "quota": "Cuota del Modelo",
       "last_used": "Último Uso",
-      "actions": "Acciones"
+      "actions": "Acciones",
+      "weekly_quota": "Cuota semanal",
+      "sort_by_reset_time": "Haga clic para ordenar por tiempo de reinicio de cuota",
+      "sort_by_last_used": "Haga clic para ordenar por última fecha de uso"
     },
     "drag_to_reorder": "Arrastrar para reordenar",
     "empty": {
@@ -340,7 +343,8 @@
       "batch_warmup_title": "Calentamiento Manual en Lote",
       "batch_warmup_msg": "¿Está seguro de que desea activar el calentamiento para las {{count}} cuentas seleccionadas inmediatamente?"
     },
-    "switch_to_agy": "Cambiar a CLI de Antigravity (agy)"
+    "switch_to_agy": "Cambiar a CLI de Antigravity (agy)",
+    "drag_disabled_during_sort": "La ordenación por columnas está activa; el arrastre está en pausa"
   },
   "settings": {
     "save": "Guardar Configuración",

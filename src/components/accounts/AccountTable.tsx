@@ -45,6 +45,9 @@ import {
     Bot,
     Repeat2,
     Terminal,
+    ArrowUpDown,
+    ArrowUp,
+    ArrowDown,
 } from 'lucide-react';
 import type { Account, ModelQuota } from '../../types/account';
 import { useTranslation } from 'react-i18next';
@@ -103,6 +106,7 @@ interface SortableRowProps {
     onUpdateLabel?: (label: string) => void;
     onViewError: () => void;
     quotaWindow?: '5h' | 'weekly';
+    isDragDisabled?: boolean;
 }
 
 interface AccountRowContentProps {
@@ -154,6 +158,42 @@ function isModelProtected(protectedModels: string[] | undefined, modelName: stri
     return protectionKey ? protectedModels.includes(protectionKey) : false;
 }
 
+/**
+ * 提取账号的最快配额重置时间（毫秒时间戳）
+ * 用于表格排序
+ */
+function extractAccountResetTime(account: Account, quotaWindow?: '5h' | 'weekly'): number | null {
+    let earliestTime: number | null = null;
+
+    if (quotaWindow === 'weekly') {
+        const groups = account.quota?.quota_groups || [];
+        for (const group of groups) {
+            for (const bucket of group.buckets || []) {
+                const isWeekly = bucket.window.toLowerCase().includes('week') || bucket.bucket_id.toLowerCase().includes('week');
+                if (isWeekly && bucket.reset_time) {
+                    const t = new Date(bucket.reset_time).getTime();
+                    if (!isNaN(t) && (earliestTime === null || t < earliestTime)) {
+                        earliestTime = t;
+                    }
+                }
+            }
+        }
+    } else {
+        // 5h 或常规视图下，从 models 中获取最近的 reset_time
+        const models = account.quota?.models || [];
+        for (const model of models) {
+            if (model.reset_time) {
+                const t = new Date(model.reset_time).getTime();
+                if (!isNaN(t) && (earliestTime === null || t < earliestTime)) {
+                    earliestTime = t;
+                }
+            }
+        }
+    }
+
+    return earliestTime;
+}
+
 // ============================================================================
 // 子组件
 // ============================================================================
@@ -181,6 +221,7 @@ function SortableAccountRow({
     onUpdateLabel,
     onViewError,
     quotaWindow,
+    isDragDisabled = false,
 }: SortableRowProps) {
     const { t } = useTranslation();
     const {
@@ -190,7 +231,7 @@ function SortableAccountRow({
         transform,
         transition,
         isDragging: isSortableDragging,
-    } = useSortable({ id: account.id });
+    } = useSortable({ id: account.id, disabled: isDragDisabled });
 
     const style = {
         transform: CSS.Transform.toString(transform),
@@ -213,10 +254,15 @@ function SortableAccountRow({
             {/* 拖拽手柄 */}
             <td className="pl-2 py-1 w-8 align-middle">
                 <div
-                    {...attributes}
-                    {...listeners}
-                    className="flex items-center justify-center w-6 h-6 cursor-grab active:cursor-grabbing text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors rounded hover:bg-gray-100 dark:hover:bg-gray-700"
-                    title={t('accounts.drag_to_reorder')}
+                    {...(!isDragDisabled ? attributes : {})}
+                    {...(!isDragDisabled ? listeners : {})}
+                    className={cn(
+                        "flex items-center justify-center w-6 h-6 rounded transition-colors",
+                        isDragDisabled
+                            ? "text-gray-200 dark:text-gray-700 cursor-not-allowed opacity-40"
+                            : "cursor-grab active:cursor-grabbing text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
+                    )}
+                    title={isDragDisabled ? t('accounts.drag_disabled_during_sort', '已激活列排序，拖拽排序已暂停') : t('accounts.drag_to_reorder')}
                 >
                     <GripVertical className="w-4 h-4" />
                 </div>
@@ -730,7 +776,56 @@ function AccountTable({
     const { t } = useTranslation();
 
     const [activeId, setActiveId] = useState<string | null>(null);
-    // showAllQuotas 已经在 useConfigStore 中解构获取
+    // 排序状态配置: 支持按配额重置时间 (reset_time) 或最后使用时间 (last_used) 排序
+    const [sortConfig, setSortConfig] = useState<{
+        key: 'reset_time' | 'last_used' | null;
+        direction: 'asc' | 'desc' | null;
+    }>({
+        key: null,
+        direction: null,
+    });
+
+    const isSortingActive = sortConfig.key !== null && sortConfig.direction !== null;
+
+    const handleSortToggle = (key: 'reset_time' | 'last_used') => {
+        setSortConfig(prev => {
+            if (prev.key !== key) {
+                return { key, direction: 'asc' };
+            }
+            if (prev.direction === 'asc') {
+                return { key, direction: 'desc' };
+            }
+            return { key: null, direction: null };
+        });
+    };
+
+    // 根据排序状态对 accounts 进行拦截排序
+    const sortedAccounts = useMemo(() => {
+        if (!isSortingActive) return accounts;
+
+        return [...accounts].sort((a, b) => {
+            if (sortConfig.key === 'reset_time') {
+                const timeA = extractAccountResetTime(a, quotaWindow);
+                const timeB = extractAccountResetTime(b, quotaWindow);
+
+                // 没有 reset_time 的排到后面
+                if (timeA === null && timeB === null) return 0;
+                if (timeA === null) return 1;
+                if (timeB === null) return -1;
+
+                return sortConfig.direction === 'asc' ? timeA - timeB : timeB - timeA;
+            }
+
+            if (sortConfig.key === 'last_used') {
+                const timeA = a.last_used || 0;
+                const timeB = b.last_used || 0;
+
+                return sortConfig.direction === 'asc' ? timeA - timeB : timeB - timeA;
+            }
+
+            return 0;
+        });
+    }, [accounts, sortConfig, quotaWindow, isSortingActive]);
 
     // 配置拖拽传感器
     const sensors = useSensors(
@@ -742,16 +837,19 @@ function AccountTable({
         })
     );
 
-    const accountIds = useMemo(() => accounts.map(a => a.id), [accounts]);
-    const activeAccount = useMemo(() => accounts.find(a => a.id === activeId), [accounts, activeId]);
+    const accountIds = useMemo(() => sortedAccounts.map(a => a.id), [sortedAccounts]);
+    const activeAccount = useMemo(() => sortedAccounts.find(a => a.id === activeId), [sortedAccounts, activeId]);
 
     const handleDragStart = (event: DragStartEvent) => {
+        if (isSortingActive) return;
         setActiveId(event.active.id as string);
     };
 
     const handleDragEnd = (event: DragEndEvent) => {
         const { active, over } = event;
         setActiveId(null);
+
+        if (isSortingActive) return;
 
         if (over && active.id !== over.id) {
             const oldIndex = accountIds.indexOf(active.id as string);
@@ -796,15 +894,47 @@ function AccountTable({
                             </th>
                             <th className="px-2 py-1 text-left rtl:text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider w-[300px] whitespace-nowrap">{t('accounts.table.email')}</th>
                             <th className="px-2 py-1 text-left rtl:text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider min-w-[340px] whitespace-nowrap">
-                                {quotaWindow === 'weekly' ? t('accounts.table.weekly_quota', '周配额') : t('accounts.table.quota')}
+                                <button
+                                    type="button"
+                                    onClick={() => handleSortToggle('reset_time')}
+                                    className={cn(
+                                        "inline-flex items-center gap-1 hover:text-blue-600 dark:hover:text-blue-400 transition-colors uppercase font-medium",
+                                        sortConfig.key === 'reset_time' && "text-blue-600 dark:text-blue-400 font-semibold"
+                                    )}
+                                    title={t('accounts.table.sort_by_reset_time', '点击按配额重置时间排序')}
+                                >
+                                    <span>{quotaWindow === 'weekly' ? t('accounts.table.weekly_quota', '周配额') : t('accounts.table.quota')}</span>
+                                    {sortConfig.key === 'reset_time' ? (
+                                        sortConfig.direction === 'asc' ? <ArrowUp className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" /> : <ArrowDown className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+                                    ) : (
+                                        <ArrowUpDown className="w-3 h-3 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 opacity-60 hover:opacity-100" />
+                                    )}
+                                </button>
                             </th>
-                            <th className="px-2 py-1 text-left rtl:text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider w-[90px] whitespace-nowrap">{t('accounts.table.last_used')}</th>
+                            <th className="px-2 py-1 text-left rtl:text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider w-[90px] whitespace-nowrap">
+                                <button
+                                    type="button"
+                                    onClick={() => handleSortToggle('last_used')}
+                                    className={cn(
+                                        "inline-flex items-center gap-1 hover:text-blue-600 dark:hover:text-blue-400 transition-colors uppercase font-medium",
+                                        sortConfig.key === 'last_used' && "text-blue-600 dark:text-blue-400 font-semibold"
+                                    )}
+                                    title={t('accounts.table.sort_by_last_used', '点击按最后使用时间排序')}
+                                >
+                                    <span>{t('accounts.table.last_used')}</span>
+                                    {sortConfig.key === 'last_used' ? (
+                                        sortConfig.direction === 'asc' ? <ArrowUp className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" /> : <ArrowDown className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+                                    ) : (
+                                        <ArrowUpDown className="w-3 h-3 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 opacity-60 hover:opacity-100" />
+                                    )}
+                                </button>
+                            </th>
                             <th className="px-2 py-1 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider whitespace-nowrap sticky right-0 w-[220px] bg-gray-50 dark:bg-base-200 z-20 shadow-[-12px_0_12px_-12px_rgba(0,0,0,0.1)] dark:shadow-[-12px_0_12px_-12px_rgba(255,255,255,0.05)] text-center">{t('accounts.table.actions')}</th>
                         </tr >
                     </thead >
                     <SortableContext items={accountIds} strategy={verticalListSortingStrategy}>
                         <tbody className="divide-y divide-gray-100 dark:divide-base-200">
-                            {accounts.map((account) => (
+                            {sortedAccounts.map((account) => (
                                 <SortableAccountRow
                                     key={account.id}
                                     account={account}
@@ -825,6 +955,7 @@ function AccountTable({
                                     onUpdateLabel={onUpdateLabel ? (label: string) => onUpdateLabel(account.id, label) : undefined}
                                     onViewError={() => onViewError(account.id)}
                                     quotaWindow={quotaWindow}
+                                    isDragDisabled={isSortingActive}
                                 />
                             ))}
                         </tbody>
