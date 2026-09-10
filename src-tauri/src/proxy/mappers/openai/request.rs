@@ -1363,9 +1363,17 @@ pub fn transform_openai_request_with_session(
     }
 
     // [ADDED v4.1.24] 注入稳定 sessionId 对齐官方规范
+    // [FIX session-1M] sessionId 混入对话指纹与代数:
+    //   - 同一对话内保持稳定(保留上游服务端会话缓存收益)
+    //   - 不同对话使用不同 sessionId,避免共享同一服务端累计会话
+    //   - 检测到上游 1M 累计报错后 bump 代数,新 sessionId = 全新上游会话,对话无感恢复
     if let Some(t) = token {
-        inner_request["sessionId"] = json!(crate::proxy::common::session::derive_session_id(
-            &t.account_id
+        let generation =
+            crate::proxy::common::session::current_bump(&t.account_id, &session_id);
+        inner_request["sessionId"] = json!(crate::proxy::common::session::derive_session_scoped(
+            &t.account_id,
+            &session_id,
+            generation
         ));
     }
 

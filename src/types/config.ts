@@ -123,6 +123,7 @@ export interface ExperimentalConfig {
 export interface CircuitBreakerConfig {
     enabled: boolean;
     backoff_steps: number[];
+    lock_on_zero_quota?: boolean;
 }
 
 export interface AppConfig {

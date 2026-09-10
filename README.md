@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> 专业级 AI 账号管理与协议代理系统 (v4.6.9)
+> 专业级 AI 账号管理与协议代理系统 (v4.7.0)
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
 
@@ -8,7 +8,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.6.9-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.7.0-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -237,7 +237,8 @@ docker compose up -d
 
 Copyright © 2024-2026 [lbjlaq](https://github.com/lbjlaq)
 
-### 🛠️ 常见问题排查 (Troubleshooting)
+<details>
+<summary><b>🛠️ 常见问题排查 (Troubleshooting) - 点击展开</b></summary>
 
 #### macOS 提示“应用已损坏，无法打开”？
 由于 macOS 的安全机制，非 App Store 下载的应用可能会触发此提示。您可以按照以下步骤快速修复：
@@ -260,6 +261,8 @@ env WEBKIT_DISABLE_DMABUF_RENDERER=1 ANTIGRAVITY_FORCE_WAYLAND=1 antigravity-too
 - `ANTIGRAVITY_FORCE_WAYLAND=1`: 保持原生 Wayland（不强制切 X11）
 - `ANTIGRAVITY_FORCE_X11=1`: 仍需走 X11 时强制启用
 - `WEBKIT_DISABLE_DMABUF_RENDERER=1`: 禁用 WebKit DMA-BUF 渲染器
+
+</details>
 
 ## 🔌 快速接入示例
 
@@ -357,6 +360,9 @@ with open("output.png", "wb") as f:
 - **`n`**: 生成图片数量（1-10）
 - **`response_format`**: `"b64_json"` 或 `"url"`（Data URI）
 
+<details>
+<summary><b>🎨 展开查看更多图片调用方式与参数映射规则 (Chat API / 模型后缀 / Cherry Studio)</b></summary>
+
 #### 方式二：Chat API + 参数设置 (✨ 新增)
 
 **所有协议**（OpenAI、Claude）的 Chat API 现在都支持直接传递 `size` 和 `quality` 参数：
@@ -384,13 +390,11 @@ curl -X POST http://127.0.0.1:8045/v1/messages \
   }'
 ```
 
-```
-
 **参数优先级**: `imageSize` 参数 > `quality` 参数 > 模型后缀
 
 **✨ 新增 `imageSize` 参数支持**:
 
-除了 `quality` 参数外,现在还支持直接使用 Gemini 原生的 `imageSize` 参数:
+除了 `quality` 参数外，现在还支持直接使用 Gemini 原生的 `imageSize` 参数:
 
 ```python
 # 使用 imageSize 参数(最高优先级)
@@ -418,8 +422,7 @@ curl -X POST http://127.0.0.1:8045/v1/messages \
 **参数说明**:
 - **`imageSize`**: 直接指定分辨率 (`"1K"` / `"2K"` / `"4K"`)
 - **`quality`**: 通过质量等级推断分辨率 (`"standard"` → 1K, `"medium"` → 2K, `"hd"` → 4K)
-- **优先级**: 如果同时指定 `imageSize` 和 `quality`,系统会优先使用 `imageSize`
-
+- **优先级**: 如果同时指定 `imageSize` 和 `quality`, 系统会优先使用 `imageSize`
 
 #### 方式三：Chat 接口 + 模型后缀
 ```python
@@ -449,14 +452,16 @@ response = client.chat.completions.create(
 - `quality: "hd"` → 映射为 `4K` 分辨率
 - `quality: "medium"` → 映射为 `2K` 分辨率
 
+</details>
 
 ## 📝 更新日志
 
-> 最新版本 **v4.6.9**（2026-09-08）：全面增强多协议 Agent 稳定性，修复 Responses 会话路由与签名解耦、遵守 store:false 抑制内存泄漏、修复 429 故障转移死循环与熔断切号、增加 Gemini 首轮 User Primer 解决自主智能体 400 轮次报错、修复 /accounts/switch targetIde 免重启 IDE。
+> 最新版本 **v4.7.0**（2026-09-10）：修复会话级累计 Token 突破 100 万上限导致账号瘫痪与 400 报错、自适应熔断器新增零配额持续锁定与解除 300s 退避硬上限截断、新建配置自动感知操作系统语言、临时限流 503 响应暴露标准 Retry-After 标头。
 
 👉 **[查看完整更新日志 CHANGELOG.md →](CHANGELOG.md)**
 
-## 👥 核心贡献者 (Contributors)
+<details>
+<summary><b>👥 核心贡献者 (Contributors) - 点击展开</b></summary>
 
 <a href="https://github.com/lbjlaq"><img src="https://github.com/lbjlaq.png" width="50px" style="border-radius: 50%;" alt="lbjlaq"/></a>
 <a href="https://github.com/XinXin622"><img src="https://github.com/XinXin622.png" width="50px" style="border-radius: 50%;" alt="XinXin622"/></a>
@@ -489,7 +494,10 @@ response = client.chat.completions.create(
 
 感谢所有为本项目付出汗水与智慧的开发者。
 
-## 🤝 鸣谢项目 (Special Thanks)
+</details>
+
+<details>
+<summary><b>🤝 鸣谢项目 (Special Thanks) - 点击展开</b></summary>
 
 本项目在开发过程中参考或借鉴了以下优秀开源项目的思路或代码，排名不分先后：
 
@@ -501,6 +509,8 @@ response = client.chat.completions.create(
 *   [aistudio-gemini-proxy](https://github.com/zhongruichen/aistudio-gemini-proxy)
 *   [gcli2api](https://github.com/su-kaka/gcli2api)
 *   [agent-vibes](https://github.com/funny-vibes/agent-vibes)
+
+</details>
 
 *   **版权许可**: 基于 **CC BY-NC-SA 4.0** 许可，**严禁任何形式的商业行为**。
 *   **安全声明**: 本应用所有账号数据加密存储于本地 SQLite 数据库，除非开启同步功能，否则数据绝不离开您的设备。

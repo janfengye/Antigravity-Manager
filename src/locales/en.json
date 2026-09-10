@@ -812,6 +812,8 @@
       "circuit_breaker": {
         "title": "Adaptive Circuit Breaker",
         "tooltip": "Automatically increases lockout duration for accounts that repeatedly fail with quota exhaustion. This prevents wasting API calls on dead accounts while allowing transient errors to recover quickly.",
+        "lock_on_zero_quota": "Lock on Zero Quota (5h / Weekly)",
+        "lock_on_zero_quota_desc": "Automatically locks the account until its exact quota reset time whenever 5-hour rolling or weekly quota hits 0%, skipping short backoffs. Note: Quota state discovery and automatic recovery depend on 'Auto Refresh Quotas' in General Settings.",
         "backoff_levels": "Backoff Levels (Seconds)",
         "input_placeholder": "Enter backoff durations in seconds, separated by commas",
         "level": "Lv {{level}}",

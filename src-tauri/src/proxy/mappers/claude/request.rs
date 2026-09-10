@@ -697,9 +697,11 @@ pub fn transform_claude_request_in(
     }
 
     // [ADDED v4.1.24] 注入稳定 sessionId 对齐官方规范
+    // [FIX session-1M] 混入对话指纹与代数,不同对话隔离服务端会话,1M 累计报错后 bump 自愈
     if let Some(account_id) = account_id {
+        let generation = crate::proxy::common::session::current_bump(account_id, &session_id);
         inner_request["sessionId"] =
-            json!(crate::proxy::common::session::derive_session_id(account_id));
+            json!(crate::proxy::common::session::derive_session_scoped(account_id, &session_id, generation));
     }
 
     // 生成 requestId

@@ -3,6 +3,19 @@
 > Complete version history for Antigravity Tools. Return to project home at [README_EN.md](README_EN.md).
 
 *   **Version History**:
+    *   **v4.7.0 (2026-09-10)**:
+        -   **[Session & Proxy Fix] Prevent 400 Errors and Account Freezes from Upstream 1M Token Accumulation (PR #3415, Issue #3411, refs #3325)**:
+            -   **Scoped Session IDs per Conversation**: Replaced the account-email-only upstream `sessionId` hash with a scoped derivation combining `account_id`, conversation fingerprint, and a generation counter. Keeps upstream Prompt Cache hits stable within the same dialogue while strictly isolating different conversations from sharing one server-side session.
+            -   **Automatic Generation Bump & Transparent Recovery on 1M Overflow**: When receiving upstream `400 "The input token count exceeds the maximum number of tokens allowed"`, automatically increments the generation counter and retries with a fresh session, seamlessly recovering the dialogue without user intervention.
+        -   **[Adaptive Circuit Breaker] Zero-Quota Lockout & Dynamic Max Backoff Steps (PR #3413)**:
+            -   **Lock on Zero Quota Toggle (`lock_on_zero_quota`)**: Added a circuit breaker option to immediately lock an account until its upstream `reset_time` when 5-hour rolling or weekly quota hits 0%, skipping short backoffs and preventing wasted calls on exhausted accounts; auto-clears locks when quota recovers.
+            -   **Respect Configured Max Backoff Steps**: Removes the hardcoded 300s ceiling on retry lockouts, allowing longer user-configured backoffs (e.g. 1800s / 7200s) to take effect.
+            -   **Clear Stale Protection on Global Disable**: Automatically purges lingering `protected_models` from accounts when quota protection is disabled globally.
+        -   **[Proxy Protocol Compliance] Expose Standard Retry-After Header on Temporary 503 Responses (Issue #3414)**:
+            -   **Standardized Cooldown Header**: When all accounts are temporarily rate-limited (`All accounts limited. Wait Ns.`) resulting in a 503 Service Unavailable, extracts the cooldown duration and returns a standard `Retry-After: <seconds>` HTTP header across OpenAI, Claude, and Gemini proxy handlers.
+            -   **Client-Friendly Backoff**: Enables downstream AI tools and coding agents (e.g., Cursor, Cline, Aider, OpenCode) to accurately pause and back off according to the server cooldown rather than spamming retries.
+        -   **[Internationalization] Detect OS Language for New Configurations (PR #3412)**:
+            -   **System Language Auto-Detection**: Integrated lightweight system locale detection to initialize default language from the OS locale (supporting Traditional Chinese `zh-TW` / `zh-HK`, Simplified `zh`, `en`, `ja`, `ru`, `pt`, etc., with safe fallback to `en`), replacing the hardcoded `"zh"` default for new setups. Existing configurations remain unaffected.
     *   **v4.6.9 (2026-09-08)**:
         -   **[Core Fix] Honor store:false to Inhibit HTTP Session & Global Tool Call Cache Retention (PR #3408)**:
             -   **Respect store:false Parameter**: When full-replay requests explicitly pass `store:false` in the HTTP Responses path, avoids creating redundant session snapshots and background save tasks, significantly reducing memory growth during large-context replays.

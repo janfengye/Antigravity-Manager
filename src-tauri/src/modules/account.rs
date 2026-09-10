@@ -1657,23 +1657,25 @@ pub fn update_account_quota(account_id: &str, quota: QuotaData) -> Result<(), St
                 }
 
                 for std_id in &config.quota_protection.monitored_models {
-                    let max_pct = group_max_percentage.get(std_id).cloned().unwrap_or(100);
+                    let lookup_key = crate::proxy::common::model_mapping::normalize_to_standard_id(std_id)
+                        .unwrap_or_else(|| std_id.clone());
+                    let max_pct = group_max_percentage.get(&lookup_key).cloned().unwrap_or(100);
 
                     if max_pct < threshold {
-                        if !account.protected_models.contains(std_id) {
+                        if !account.protected_models.contains(&lookup_key) {
                             crate::modules::logger::log_info(&format!(
                                 "[Quota] Triggering model protection: {} (Group: {} Max: {}% < Thres: {}%)",
-                                account.email, std_id, max_pct, threshold
+                                account.email, lookup_key, max_pct, threshold
                             ));
-                            account.protected_models.insert(std_id.clone());
+                            account.protected_models.insert(lookup_key.clone());
                         }
                     } else {
-                        if account.protected_models.contains(std_id) {
+                        if account.protected_models.contains(&lookup_key) {
                             crate::modules::logger::log_info(&format!(
                                 "[Quota] Model protection recovered: {} (Group: {} Max: {}% >= Thres: {}%)",
-                                account.email, std_id, max_pct, threshold
+                                account.email, lookup_key, max_pct, threshold
                             ));
-                            account.protected_models.remove(std_id);
+                            account.protected_models.remove(&lookup_key);
                         }
                     }
                 }
@@ -1693,6 +1695,15 @@ pub fn update_account_quota(account_id: &str, quota: QuotaData) -> Result<(), St
                     account.proxy_disabled_reason = None;
                     account.proxy_disabled_at = None;
                 }
+            }
+        } else {
+            // [FIX] 当配额保护在全局关闭时，清空受保护模型列表，避免遗留历史锁
+            if !account.protected_models.is_empty() {
+                crate::modules::logger::log_info(&format!(
+                    "[Quota] Quota protection disabled globally, clearing protected models for {}",
+                    account.email
+                ));
+                account.protected_models.clear();
             }
         }
     }
