@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> 专业级 AI 账号管理与协议代理系统 (v4.7.0)
+> 专业级 AI 账号管理与协议代理系统 (v4.7.1)
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
 
@@ -8,7 +8,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.7.0-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.7.1-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -226,6 +226,7 @@ cd docker
 # 2. 启动服务
 docker compose up -d
 ```
+> **日志轮转**: Compose 默认将 JSON 日志限制为单文件 `100m`、保留 `3` 个文件，避免日志无限增长。
 > **访问地址**: `http://localhost:8045` (管理后台) | `http://localhost:8045/v1` (API Base)
 > **系统要求**:
 > - **内存**: 建议 **1GB** (最小 256MB)。
@@ -456,7 +457,7 @@ response = client.chat.completions.create(
 
 ## 📝 更新日志
 
-> 最新版本 **v4.7.0**（2026-09-10）：修复会话级累计 Token 突破 100 万上限导致账号瘫痪与 400 报错、自适应熔断器新增零配额持续锁定与解除 300s 退避硬上限截断、新建配置自动感知操作系统语言、临时限流 503 响应暴露标准 Retry-After 标头。
+> 最新版本 **v4.7.1**（2026-09-12）：原生语言服务逆向对齐与动态 Agent requestType 按需切换、细粒度 429 熔断分类防误锁、MALFORMED_FUNCTION_CALL 规范化与空白响应自愈、支持一键将 APIKEY.FUN 凭据与模型同步至 OpenCode、核心账号与配置物理刷盘原子写入防损坏、修复 reset_time NaN 倒计时与单模型零配额隔离熔断、代理日志自动保留与增量空间回收、代理密码解密失败安全告警与 URL 凭据优雅降级、Claude 签名日志降噪与 Docker 日志轮转、暗黑模式开关高亮。
 
 👉 **[查看完整更新日志 CHANGELOG.md →](CHANGELOG.md)**
 

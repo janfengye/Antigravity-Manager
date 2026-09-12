@@ -712,6 +712,18 @@ pub fn transform_claude_request_in(
         message_count
     );
 
+    // [NEW] 动态检测是否需要标记为 agent 请求
+    let has_tools = inner_request
+        .get("tools")
+        .and_then(|t| t.as_array())
+        .map(|arr| !arr.is_empty())
+        .unwrap_or(false);
+    let has_tool_interactions = inner_request
+        .get("contents")
+        .map(super::super::common_utils::contents_has_tool_interactions)
+        .unwrap_or(false);
+    let is_agent_request = config.request_type != "image_gen" && (has_tools || has_tool_interactions);
+
     // 构建最终请求体
     let mut body = json!({
         "project": project_id,
@@ -719,9 +731,13 @@ pub fn transform_claude_request_in(
         "request": inner_request,
         "model": config.final_model,
         "userAgent": "antigravity",
-        // [CHANGED v4.1.24] Use "agent" for all non-image requests
-        "requestType": if config.request_type == "image_gen" { "image_gen" } else { "agent" },
     });
+
+    if config.request_type == "image_gen" {
+        body["requestType"] = json!("image_gen");
+    } else if is_agent_request {
+        body["requestType"] = json!("agent");
+    }
 
     // 如果提供了 metadata.user_id，则复用为 sessionId
     if let Some(metadata) = &claude_req.metadata {
@@ -1282,7 +1298,7 @@ fn build_contents(
                                 // Try session-based signature cache at specific msg_index first (Layer 3)
                                 crate::proxy::SignatureCache::global().get_session_signature_at(session_id, msg_index)
                                     .map(|s| {
-                                        tracing::info!(
+                                        tracing::debug!(
                                             "[Claude-Request] Recovered signature from SESSION cache at turn {} (session: {}, len: {})",
                                             msg_index, session_id, s.len()
                                         );
@@ -1293,7 +1309,7 @@ fn build_contents(
                                 // Fallback to latest session signature
                                 crate::proxy::SignatureCache::global().get_session_signature(session_id)
                                     .map(|s| {
-                                        tracing::info!(
+                                        tracing::debug!(
                                             "[Claude-Request] Recovered latest signature from SESSION cache (session: {}, len: {})",
                                             session_id, s.len()
                                         );

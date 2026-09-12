@@ -2082,6 +2082,14 @@ pub async fn handle_chat_completions(
             .await;
         }
 
+        let actual_request_type = gemini_body
+            .get("requestType")
+            .and_then(|v| v.as_str())
+            .unwrap_or("none (standard)");
+        info!(
+            "[{}] Upstream request ready -> model: {}, requestType: {}",
+            trace_id, mapped_model, actual_request_type
+        );
         debug!(
             "[OpenAI-Request] Transformed Gemini body: {} bytes",
             serialized_json_len(&gemini_body)

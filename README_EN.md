@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> Professional AI Account Management & Protocol Proxy System (v4.7.0)
+> Professional AI Account Management & Protocol Proxy System (v4.7.1)
 
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
@@ -9,7 +9,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.7.0-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.7.1-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -224,6 +224,7 @@ cd docker
 # 2. Start the service
 docker compose up -d
 ```
+> **Log rotation**: Compose limits JSON logs to `100m` per file and keeps `3` files by default to prevent unbounded growth.
 > **Access URL**: `http://localhost:8045` (Admin Console) | `http://localhost:8045/v1` (API Base)
 > **System Requirements**:
 > - **RAM**: **1GB** recommended (minimum 256MB).
@@ -445,7 +446,7 @@ In clients that support OpenAI protocol (e.g., Cherry Studio), you can configure
 
 ## 📝 Changelog
 
-> Latest version **v4.7.0** (2026-09-10): Prevented 400 errors and account freezes from upstream 1M token accumulation, added zero-quota circuit breaker lockout and removed 300s backoff ceiling, auto-detected OS language for new configurations, and exposed standard Retry-After headers on temporary 503 responses.
+> Latest version **v4.7.1** (2026-09-12): Native language server reverse-engineering alignment with dynamic on-demand Agent requestType, fine-grained 429 classification to prevent false lockouts, MALFORMED_FUNCTION_CALL normalization and blank response self-healing, one-click sync of APIKEY.FUN credentials and models to OpenCode, atomic file writes with physical fsync for accounts and configurations, resolved reset_time NaN countdown and isolated model-level zero-quota circuit breaking, automated request log retention and incremental vacuum, proxy password decryption failure alerts and URL fallback, Claude signature log demotion and Docker Compose log rotation, and highlighted active switches in dark mode.
 
 👉 **[View Full Changelog → CHANGELOG_EN.md](CHANGELOG_EN.md)**
 

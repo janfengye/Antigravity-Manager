@@ -583,12 +583,14 @@ impl RateLimitTracker {
         // [FIX] 优先判断分钟级限制，避免将 TPM 误判为 Quota
         let generic_resource_exhausted = body_lower.contains("resource has been exhausted")
             || body_lower.contains("resource_exhausted");
-        let explicit_quota_exhausted = body_lower.contains("quota_exhausted")
-            || body_lower.contains("quotaresetdelay")
+        let explicit_quota_exhausted = body_lower.contains("quotaresetdelay")
+            || body_lower.contains("quotareset")
             || body_lower.contains("quota reset")
             || body_lower.contains("quota limit")
             || body_lower.contains("per day")
-            || body_lower.contains("daily quota");
+            || body_lower.contains("daily quota")
+            || (body_lower.contains("quota_exhausted")
+                && crate::proxy::upstream::retry::parse_retry_delay(body, None).is_some());
 
         if body_lower.contains("per minute")
             || body_lower.contains("rate limit")
@@ -596,8 +598,10 @@ impl RateLimitTracker {
             || (generic_resource_exhausted && !explicit_quota_exhausted)
         {
             RateLimitReason::RateLimitExceeded
-        } else if body_lower.contains("exhausted") || body_lower.contains("quota") {
+        } else if explicit_quota_exhausted {
             RateLimitReason::QuotaExhausted
+        } else if body_lower.contains("exhausted") || body_lower.contains("quota") {
+            RateLimitReason::RateLimitExceeded
         } else {
             RateLimitReason::Unknown
         }

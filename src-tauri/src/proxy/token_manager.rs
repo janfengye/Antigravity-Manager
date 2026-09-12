@@ -296,7 +296,7 @@ impl TokenManager {
                     // 跳过无效账号
                 }
                 Err(e) => {
-                    tracing::debug!("加载账号失败 {:?}: {}", path, e);
+                    tracing::warn!("加载账号失败 {:?}: {}", path, e);
                 }
             }
         }
@@ -3614,9 +3614,13 @@ impl TokenManager {
             None => return,
         };
 
-        // 1. 优先检查 quota_groups 中的 5h 和 weekly buckets
+        // 1. 优先检查 quota_groups 中的 5h 和 weekly buckets，按模型组精准隔离，杜绝全账号误杀
         if let Some(groups) = quota.get("quota_groups").and_then(|g| g.as_array()) {
             for group in groups {
+                let group_name = group.get("display_name").and_then(|v| v.as_str()).unwrap_or("");
+                let is_claude_group = group_name.to_lowercase().contains("claude") || group_name.to_lowercase().contains("gpt");
+                let is_gemini_group = group_name.to_lowercase().contains("gemini");
+
                 if let Some(buckets) = group.get("buckets").and_then(|b| b.as_array()) {
                     for bucket in buckets {
                         let remaining_fraction = bucket
@@ -3636,10 +3640,20 @@ impl TokenManager {
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("unknown");
 
+                            // 精确划分模型组 Key，避免连坐同一个账号下额度充沛的其它模型
+                            let target_model = if is_claude_group || bucket_id.contains("3p") {
+                                Some("claude".to_string())
+                            } else if is_gemini_group || bucket_id.contains("gemini") {
+                                Some("gemini-3-flash".to_string())
+                            } else {
+                                None
+                            };
+
                             tracing::warn!(
-                                "[CircuitBreaker] 账号 {} 的配额桶 {} 已耗尽 (0%), 持续锁定至 {}",
+                                "[CircuitBreaker] 账号 {} 的配额桶 {} 已耗尽 (0%), 针对模型 {:?} 持续锁定至 {}",
                                 account_id,
                                 bucket_id,
+                                target_model,
                                 reset_time
                             );
 
@@ -3647,10 +3661,9 @@ impl TokenManager {
                                 account_id,
                                 reset_time,
                                 crate::proxy::rate_limit::RateLimitReason::QuotaExhausted,
-                                None,
+                                target_model,
                                 false, // 不截断为 300s，持续锁定到真实 reset_time
                             );
-                            return;
                         }
                     }
                 }
