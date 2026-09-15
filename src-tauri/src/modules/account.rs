@@ -534,10 +534,16 @@ pub(crate) fn lock_account_file_updates() -> Result<std::sync::MutexGuard<'stati
 const DATA_DIR: &str = ".antigravity_tools";
 const ACCOUNTS_INDEX: &str = "accounts.json";
 const ACCOUNTS_DIR: &str = "accounts";
+const DATA_DIR_POINTER_FILE: &str = "data_dir.txt";
+
+/// 获取数据目录自举指针文件路径（保存在系统标准配置目录下）
+pub fn get_data_dir_pointer_file() -> Option<PathBuf> {
+    dirs::config_dir().map(|p| p.join("antigravity-tools").join(DATA_DIR_POINTER_FILE))
+}
 
 /// Get data directory path
 pub fn get_data_dir() -> Result<PathBuf, String> {
-    // [NEW] Support custom data directory via environment variable
+    // 1. 优先支持环境变量指定的自定义数据目录
     if let Ok(env_path) = std::env::var("ABV_DATA_DIR") {
         if !env_path.trim().is_empty() {
             let data_dir = PathBuf::from(env_path);
@@ -549,6 +555,25 @@ pub fn get_data_dir() -> Result<PathBuf, String> {
         }
     }
 
+    // 2. 检查持久化指针文件（通过 GUI 迁移设定的自定义路径）
+    if let Some(pointer_file) = get_data_dir_pointer_file() {
+        if pointer_file.exists() {
+            if let Ok(content) = fs::read_to_string(&pointer_file) {
+                let custom_path_str = content.trim();
+                if !custom_path_str.is_empty() {
+                    let custom_path = PathBuf::from(custom_path_str);
+                    if !custom_path.exists() {
+                        let _ = fs::create_dir_all(&custom_path);
+                    }
+                    if custom_path.exists() {
+                        return Ok(custom_path);
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. 默认回退至 ~/.antigravity_tools
     let home = dirs::home_dir().ok_or("failed_to_get_home_dir")?;
     let data_dir = home.join(DATA_DIR);
 

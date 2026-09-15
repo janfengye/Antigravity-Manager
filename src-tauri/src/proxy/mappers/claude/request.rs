@@ -930,7 +930,7 @@ fn build_system_instruction(
     let antigravity_identity = "You are Antigravity, a powerful agentic AI coding assistant designed by the Google Deepmind team working on Advanced Agentic Coding.\n\
     You are pair programming with a USER to solve their coding task. The task may require creating a new codebase, modifying or debugging an existing codebase, or simply answering a question.\n\
     **Absolute paths only**\n\
-    **Proactiveness**";
+    **Proactiveness**\n\n";
 
     // [HYBRID] 检查用户是否已提供 Antigravity 身份
     let mut user_has_antigravity = false;
@@ -960,7 +960,8 @@ fn build_system_instruction(
     // [NEW] 注入全局系统提示词 (紧跟 Antigravity 身份之后)
     let global_prompt_config = crate::proxy::config::get_global_system_prompt();
     if global_prompt_config.enabled && !global_prompt_config.content.trim().is_empty() {
-        parts.push(json!({"text": global_prompt_config.content}));
+        let content = global_prompt_config.content.trim();
+        parts.push(json!({"text": format!("{}\n\n", content)}));
     }
 
     // 添加用户的系统提示词

@@ -712,7 +712,7 @@ pub fn wrap_request_v2(
             "You are Antigravity, a powerful agentic AI coding assistant designed by the Google Deepmind team working on Advanced Agentic Coding.\n\
             You are pair programming with a USER to solve their coding task. The task may require creating a new codebase, modifying or debugging an existing codebase, or simply answering a question.\n\
             **Absolute paths only**\n\
-            **Proactiveness**"
+            **Proactiveness**\n\n"
         };
 
         // [HYBRID] 检查是否已有 systemInstruction
@@ -744,13 +744,22 @@ pub fn wrap_request_v2(
                     if global_prompt_config.enabled
                         && !global_prompt_config.content.trim().is_empty()
                     {
-                        // 插入位置：Antigravity 身份之后 (index 1)
-                        let insert_pos = if has_antigravity { 1 } else { 1 };
-                        if insert_pos <= parts_array.len() {
-                            parts_array
-                                .insert(insert_pos, json!({"text": global_prompt_config.content}));
-                        } else {
-                            parts_array.push(json!({"text": global_prompt_config.content}));
+                        let prompt_content = global_prompt_config.content.trim();
+                        let already_has_global = parts_array.iter().any(|p| {
+                            p.get("text")
+                                .and_then(|t| t.as_str())
+                                .map(|s| s.contains(prompt_content))
+                                .unwrap_or(false)
+                        });
+
+                        if !already_has_global {
+                            let formatted = format!("{}\n\n", prompt_content);
+                            let insert_pos = if has_antigravity { 1 } else { 1 };
+                            if insert_pos <= parts_array.len() {
+                                parts_array.insert(insert_pos, json!({"text": formatted}));
+                            } else {
+                                parts_array.push(json!({"text": formatted}));
+                            }
                         }
                     }
                 }
@@ -761,7 +770,7 @@ pub fn wrap_request_v2(
             // [NEW] 注入全局系统提示词
             let global_prompt_config = crate::proxy::config::get_global_system_prompt();
             if global_prompt_config.enabled && !global_prompt_config.content.trim().is_empty() {
-                parts.push(json!({"text": global_prompt_config.content}));
+                parts.push(json!({"text": format!("{}\n\n", global_prompt_config.content.trim())}));
             }
             inner_request["systemInstruction"] = json!({
                 "role": "user",

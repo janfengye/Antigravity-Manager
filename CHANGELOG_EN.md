@@ -3,6 +3,17 @@
 > Complete version history for Antigravity Tools. Return to project home at [README_EN.md](README_EN.md).
 
 *   **Version History**:
+    *   **v4.7.2 (2026-09-15)**:
+        -   **[OpenAI / Codex Alignment] Fix Gemini Thoughts Display as Reasoning Summaries in Codex (PR #3439, Issue #3438)**:
+            -   **Standardized Reasoning Summary Events**: When streaming via `POST /v1/responses`, maps Gemini parts with `thought: true` to standard `rs_...` items (`type: reasoning`) and emits canonical `response.reasoning_summary_part.*` and `response.reasoning_summary_text.*` SSE events so Codex renders thought summaries in the dedicated reasoning block.
+            -   **Lifecycle Management & Stream-End Closure**: Gracefully closes reasoning summaries prior to standard text or tool item delivery and at stream completion, ensuring lifecycle non-overlap and maintaining consistent completed outputs in session storage.
+        -   **[Prompt Isolation & Memory Sync] Global System Prompt Spacing, Gemini Wrapper Deduplication & Instant Config Sync (PR #3433)**:
+            -   **Markdown Header Isolation**: Added double newline (`\n\n`) delimiters after the Antigravity identity and global system prompt, preventing downstream Markdown headings (e.g. `## Global Preferences`) from concatenating directly onto preceding bold tokens (`**Proactiveness**`) and avoiding trailing header collisions.
+            -   **Gemini Wrapper Deduplication**: Added content deduplication in `wrap_request_v2` to prevent redundant global prompt injection during retries or multiple wrapper passes.
+            -   **Synchronize Config Outside Proxy Instance**: Hoisted global memory updates in `save_config` (thinking budget, global system prompt, image thinking mode, and compression configs) outside the active instance check, ensuring settings take effect in memory immediately even when the proxy server is stopped.
+        -   **[Storage & Data Management] Custom Data Directory with Seamless Full Migration (Issue #3441)**:
+            -   **Custom Data Directory & Bootstrap Pointer**: Addressed C: drive disk space exhaustion caused by default storage (`~/.antigravity_tools`) by introducing persistent pointer file resolution. Users can now choose any disk directory (e.g. `D:\AntigravityData`) in Advanced Settings, which the application auto-detects at boot.
+            -   **Full Seamless Migration & Safe Disk Reclamation**: Added a "Change & Migrate" button in Advanced Settings to safely copy accounts, configurations, request logs, and SQLite databases to the target location, with an option to clean up original files and automatically restart the application to load the new directory seamlessly.
     *   **v4.7.1 (2026-09-12)**:
         -   **[Upstream Protocol Optimization & Native Alignment] Native Language Server Alignment: Dynamic Agent RequestType, Fine-Grained 429 Classification & Malformed Call Fallback**:
             -   **Dynamic On-Demand `requestType: "agent"`**: Reverse-engineered native Antigravity language server behavior to eliminate unnecessary `"requestType": "agent"` flags on every prompt. Now, Agent mode is only activated when tool declarations exist or messages contain tool turns. Normal chat and code completions flow through the standard Chat pool, drastically reducing 429 rate limit contention on Google's Agent pool.

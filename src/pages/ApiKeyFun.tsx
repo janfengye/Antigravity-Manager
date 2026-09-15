@@ -52,7 +52,7 @@ interface UsageSummary {
 }
 
 const STORAGE_KEY = 'apikey_fun_managed_keys_local';
-const DEFAULT_ENDPOINT = 'https://api.apikey.fun/v1';
+const DEFAULT_ENDPOINT = 'https://api.apikey.fan/v1';
 
 function maskKey(value: string): string {
     const trimmed = value.trim();
@@ -421,7 +421,7 @@ export const ApiKeyFun: React.FC = () => {
                 </div>
 
                 <a
-                    href="https://apikey.fun/register?aff=AntManager"
+                    href="https://apikey.fan/register?aff=AntManager"
                     target="_blank"
                     rel="noopener noreferrer"
                     className="bg-white hover:bg-blue-50 dark:bg-base-200 dark:hover:bg-base-300 text-blue-700 dark:text-blue-400 border border-blue-200 dark:border-blue-800/50 px-6 py-3 rounded-xl font-bold text-sm flex items-center gap-2 transition-all shadow-md shadow-blue-500/10 dark:shadow-none flex-shrink-0 hover:scale-[1.02] active:scale-[0.98] duration-200 z-10"
