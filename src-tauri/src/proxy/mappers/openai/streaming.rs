@@ -37,70 +37,14 @@ pub fn store_thought_signature(sig: &str, session_id: &str, message_count: usize
 /// - New format: total_output_tokens = text + tool output only; thought tokens are separate (total_thought_tokens)
 /// For Codex, we must sum them back together as `completion_tokens`.
 fn extract_usage_metadata(u: &Value) -> Option<super::models::OpenAIUsage> {
-    use super::models::{CompletionTokensDetails, OpenAIUsage, PromptTokensDetails};
-
-    // 优先使用新格式字段，fallback 到旧格式
-    let prompt_tokens = u
-        .get("total_input_tokens")
-        .or_else(|| u.get("promptTokenCount"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as u32;
-    let raw_output_tokens = u
-        .get("total_output_tokens")
-        .or_else(|| u.get("candidatesTokenCount"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as u32;
-    let raw_total_tokens = u
-        .get("total_tokens")
-        .or_else(|| u.get("totalTokenCount"))
-        .and_then(|v| v.as_u64())
-        .map(|v| v as u32);
-    let cached_tokens = u
-        .get("total_cached_tokens")
-        .or_else(|| u.get("cachedContentTokenCount"))
-        .or_else(|| u.get("cachedTokens"))
-        .and_then(|v| v.as_u64())
-        .map(|v| v as u32);
-    let reasoning_tokens = u
-        .get("total_thought_tokens")
-        .or_else(|| u.get("totalThoughtTokens"))
-        .or_else(|| u.get("thoughtsTokenCount"))
-        .and_then(|v| v.as_u64())
-        .map(|v| v as u32);
-    let tool_use_tokens = u
+    let canonical = crate::proxy::pipeline::CanonicalUsage::from_gemini(u);
+    let mut usage = super::models::OpenAIUsage::from(&canonical);
+    usage.input_tokens_by_modality = u.get("input_tokens_by_modality").cloned();
+    usage.total_tool_use_tokens = u
         .get("total_tool_use_tokens")
         .and_then(|v| v.as_u64())
         .map(|v| v as u32);
-    let input_tokens_by_modality = u.get("input_tokens_by_modality").cloned();
-
-    // 新格式下 output_tokens 不含 thought/tool-use, 需要加回来。旧格式 candidatesTokenCount 已经包含它们
-    let has_new_format = u.get("total_output_tokens").is_some();
-    let completion_tokens = if has_new_format {
-        raw_output_tokens + reasoning_tokens.unwrap_or(0) + tool_use_tokens.unwrap_or(0)
-    } else {
-        raw_output_tokens
-    };
-
-    // cached_tokens is a subset of prompt_tokens. Keep prompt_tokens in the same
-    // raw-input-token unit as Gemini usageMetadata so downstream logs can reconcile it.
-    let final_total_tokens = raw_total_tokens.unwrap_or(prompt_tokens + completion_tokens);
-
-    Some(OpenAIUsage {
-        prompt_tokens,
-        completion_tokens,
-        total_tokens: final_total_tokens,
-        prompt_tokens_details: cached_tokens.map(|ct| PromptTokensDetails {
-            cached_tokens: Some(ct),
-        }),
-        completion_tokens_details: reasoning_tokens.map(|rt| CompletionTokensDetails {
-            reasoning_tokens: Some(rt),
-        }),
-        input_tokens_by_modality,
-        raw_output_tokens: Some(raw_output_tokens),
-        total_thought_tokens: reasoning_tokens,
-        total_tool_use_tokens: tool_use_tokens,
-        gemini_total_tokens: raw_total_tokens,
-    })
+    Some(usage)
 }
 
 pub fn create_openai_sse_stream<S, E>(
@@ -109,6 +53,7 @@ pub fn create_openai_sse_stream<S, E>(
     session_id: String,
     message_count: usize,
     client_tool_names: Option<std::collections::HashSet<String>>,
+    include_usage: bool,
 ) -> Pin<Box<dyn Stream<Item = Result<Bytes, String>> + Send>>
 where
     S: Stream<Item = Result<Bytes, E>> + Send + ?Sized + 'static,
@@ -325,11 +270,13 @@ where
                                                             }]
                                                         });
                                                         if finish_reason.is_some() {
-                                                            if let Some(ref usage) = final_usage {
-                                                                openai_chunk["usage"] = serde_json::to_value(usage).unwrap();
+                                                            if !include_usage {
+                                                                if let Some(ref usage) = final_usage {
+                                                                    openai_chunk["usage"] = serde_json::to_value(usage).unwrap();
+                                                                }
+                                                                final_usage = None;
                                                             }
                                                         }
-                                                        if finish_reason.is_some() { final_usage = None; }
                                                         let sse_out = format!("data: {}\n\n", serde_json::to_string(&openai_chunk).unwrap_or_default());
                                                         yield Ok::<Bytes, String>(Bytes::from(sse_out));
                                                     }
@@ -380,16 +327,21 @@ where
 
         thinking_acc.commit(&session_id);
         if !error_occurred {
-            if let Some(usage) = final_usage.take() {
-                let usage_chunk = json!({
-                    "id": &stream_id,
-                    "object": "chat.completion.chunk",
-                    "created": created_ts,
-                    "model": &model,
-                    "choices": [],
-                    "usage": usage
-                });
-                yield Ok::<Bytes, String>(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&usage_chunk).unwrap_or_default())));
+            // [CRITICAL FIX #3455] Only emit standalone usage chunk with empty choices if client explicitly
+            // requested stream_options.include_usage: true. Emitting choices: [] unconditionally causes Python
+            // OpenAI SDK and autonomous agents (Hermes, etc.) to crash with `IndexError: list index out of range`!
+            if include_usage {
+                if let Some(usage) = final_usage.take() {
+                    let usage_chunk = json!({
+                        "id": &stream_id,
+                        "object": "chat.completion.chunk",
+                        "created": created_ts,
+                        "model": &model,
+                        "choices": [],
+                        "usage": usage
+                    });
+                    yield Ok::<Bytes, String>(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&usage_chunk).unwrap_or_default())));
+                }
             }
             yield Ok::<Bytes, String>(Bytes::from("data: [DONE]\n\n"));
         }
@@ -1743,6 +1695,7 @@ mod tests {
             "test-session".to_string(),
             0,
             None,
+            false,
         );
 
         let mut chunks = Vec::new();
@@ -1793,6 +1746,144 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_openai_streaming_with_include_usage_true() {
+        let chunk1_json = json!({
+            "candidates": [{
+                "content": {
+                    "parts": [{ "text": "Hello" }]
+                }
+            }]
+        });
+
+        let chunk2_json = json!({
+            "candidates": [{
+                "finishReason": "STOP",
+                "content": {
+                    "parts": [{ "text": " world" }]
+                }
+            }],
+            "usageMetadata": {
+                "promptTokenCount": 10,
+                "candidatesTokenCount": 5,
+                "totalTokenCount": 15
+            }
+        });
+
+        let items: Vec<Result<Bytes, reqwest::Error>> = vec![
+            Ok(Bytes::from(format!("data: {}\n\n", chunk1_json))),
+            Ok(Bytes::from(format!("data: {}\n\n", chunk2_json))),
+        ];
+
+        let gemini_stream = Box::pin(stream::iter(items));
+
+        let mut openai_stream = create_openai_sse_stream(
+            gemini_stream,
+            "gemini-1.5-flash".to_string(),
+            "test-session".to_string(),
+            0,
+            None,
+            true, // include_usage = true
+        );
+
+        let mut chunks = Vec::new();
+        while let Some(result) = openai_stream.next().await {
+            if let Ok(bytes) = result {
+                let s = String::from_utf8_lossy(&bytes).to_string();
+                for line in s.lines() {
+                    if line.starts_with("data: ") && !line.contains("[DONE]") {
+                        chunks.push(line.to_string());
+                    }
+                }
+            }
+        }
+
+        // With include_usage: true, the last chunk before [DONE] MUST have choices: [] and usage
+        assert!(
+            chunks.len() >= 3,
+            "Expected at least 3 chunks: partial, finish, usage"
+        );
+        let last_chunk: Value =
+            serde_json::from_str(chunks.last().unwrap().trim_start_matches("data: ").trim())
+                .unwrap();
+        assert_eq!(last_chunk["choices"], json!([]));
+        assert!(
+            last_chunk.get("usage").is_some(),
+            "Standalone usage chunk must contain usage"
+        );
+        let usage = &last_chunk["usage"];
+        assert_eq!(usage["prompt_tokens"], 10);
+        assert_eq!(usage["completion_tokens"], 5);
+        assert_eq!(usage["total_tokens"], 15);
+    }
+
+    #[tokio::test]
+    async fn test_hermes_stream_without_include_usage_never_emits_empty_choices() {
+        // Simulates real Gemini streaming where finishReason arrives in chunk 1,
+        // and usageMetadata arrives in chunk 2 without candidates.
+        let chunk1_json = json!({
+            "candidates": [{
+                "finishReason": "STOP",
+                "content": {
+                    "parts": [{ "text": "Task complete." }]
+                }
+            }]
+        });
+
+        let chunk2_json = json!({
+            "usageMetadata": {
+                "promptTokenCount": 20,
+                "candidatesTokenCount": 8,
+                "totalTokenCount": 28
+            }
+        });
+
+        let items: Vec<Result<Bytes, reqwest::Error>> = vec![
+            Ok(Bytes::from(format!("data: {}\n\n", chunk1_json))),
+            Ok(Bytes::from(format!("data: {}\n\n", chunk2_json))),
+        ];
+
+        let gemini_stream = Box::pin(stream::iter(items));
+
+        // Hermes / standard OpenAI Python SDK default: include_usage = false
+        let mut openai_stream = create_openai_sse_stream(
+            gemini_stream,
+            "gemini-1.5-flash".to_string(),
+            "hermes-session".to_string(),
+            0,
+            None,
+            false,
+        );
+
+        let mut chunks = Vec::new();
+        while let Some(result) = openai_stream.next().await {
+            if let Ok(bytes) = result {
+                let s = String::from_utf8_lossy(&bytes).to_string();
+                for line in s.lines() {
+                    if line.starts_with("data: ") && !line.contains("[DONE]") {
+                        chunks.push(line.to_string());
+                    }
+                }
+            }
+        }
+
+        // CRITICAL: Ensure NO chunk has empty choices: []!
+        // Hermes iterates `chunk.choices[0]`. An empty choices: [] chunk crashes Hermes with IndexError!
+        for chunk_str in &chunks {
+            let json_str = chunk_str.trim_start_matches("data: ").trim();
+            let json: Value = serde_json::from_str(json_str).unwrap();
+            if let Some(choices) = json.get("choices").and_then(|c| c.as_array()) {
+                assert!(
+                    !choices.is_empty(),
+                    "Crash hazard! Found empty choices: [] chunk when include_usage=false: {}",
+                    json_str
+                );
+                // Verify choices[0] can be accessed without panic
+                assert!(choices.get(0).is_some());
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn test_openai_streaming_reasoning_content() {
         // Chunk with thought part
         let chunk_json = json!({
@@ -1817,6 +1908,7 @@ mod tests {
             "test-session".to_string(),
             0,
             None,
+            false,
         );
 
         let mut chunks = Vec::new();

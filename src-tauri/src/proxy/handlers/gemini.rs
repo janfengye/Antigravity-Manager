@@ -70,8 +70,10 @@ mod image_success_tests {
 pub async fn handle_generate(
     State(state): State<AppState>,
     Path(model_action): Path<String>,
-    headers: HeaderMap,          // [NEW] Extract headers for adapter detection
-    upstream_recorder: Option<axum::extract::Extension<crate::proxy::monitor::UpstreamRequestBodyHolder>>,
+    headers: HeaderMap, // [NEW] Extract headers for adapter detection
+    upstream_recorder: Option<
+        axum::extract::Extension<crate::proxy::monitor::UpstreamRequestBodyHolder>,
+    >,
     Json(mut body): Json<Value>, // 改为 mut 以支持修复提示词注入
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     let clean_start = std::time::Instant::now();
@@ -296,10 +298,11 @@ pub async fn handle_generate(
         norm_ms = norm_total_micros.saturating_sub(tf_micros) as f64 / 1000.0;
         think_fill_ms = tf_micros as f64 / 1000.0;
 
-        let _ = crate::proxy::mappers::context_manager::ContextManager::apply_post_transit_context_mgmt(
-            &mut wrapped_body,
-            &mapped_model,
-        );
+        let _ =
+            crate::proxy::mappers::context_manager::ContextManager::apply_post_transit_context_mgmt(
+                &mut wrapped_body,
+                &mapped_model,
+            );
 
         if let Some(ref recorder) = upstream_recorder {
             recorder.set_value(&wrapped_body);
@@ -732,8 +735,13 @@ pub async fn handle_generate(
                                         sig.to_string(),
                                         1,
                                     );
-                                    if let Some(call_id) = part.get("functionCall").and_then(|f| f.get("id")).and_then(|id| id.as_str()) {
-                                        crate::proxy::SignatureCache::global().cache_tool_signature(call_id, sig.to_string());
+                                    if let Some(call_id) = part
+                                        .get("functionCall")
+                                        .and_then(|f| f.get("id"))
+                                        .and_then(|id| id.as_str())
+                                    {
+                                        crate::proxy::SignatureCache::global()
+                                            .cache_tool_signature(call_id, sig.to_string());
                                     }
                                     debug!("[Gemini-Response] Cached signature (len: {}) for session: {}", sig.len(), session_id);
                                 }
@@ -830,7 +838,12 @@ pub async fn handle_generate(
         // [FIX] 429 时立即解绑当前会话，确保换号重试与后续请求不会死锁在受限账号上
         if status_code == 429 || status_code == 529 {
             token_manager.clear_session_binding(&session_id);
-            tracing::debug!("[Gemini] Unbound session {} from account {} due to status {}", session_id, email, status_code);
+            tracing::debug!(
+                "[Gemini] Unbound session {} from account {} due to status {}",
+                session_id,
+                email,
+                status_code
+            );
         }
 
         // 确定重试策略
@@ -1066,11 +1079,7 @@ pub async fn execute_count_tokens(
     {
         Ok(t) => t,
         Err(e) => {
-            let headers = build_token_error_headers(
-                Some(mapped_model.as_str()),
-                None,
-                &e,
-            );
+            let headers = build_token_error_headers(Some(mapped_model.as_str()), None, &e);
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
                 headers,

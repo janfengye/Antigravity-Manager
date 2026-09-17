@@ -383,11 +383,11 @@ Please read the file locally."#;
         let mut blocks = vec![
             serde_json::json!({
                 "type": "text",
-                "text": "a".repeat(100_000)
+                "text": "a".repeat(50_000)
             }),
             serde_json::json!({
                 "type": "text",
-                "text": "b".repeat(150_000)
+                "text": "b".repeat(50_000)
             }),
             serde_json::json!({
                 "type": "image",

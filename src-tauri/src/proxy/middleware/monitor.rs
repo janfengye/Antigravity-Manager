@@ -280,94 +280,45 @@ fn record_user_token_usage(
 }
 
 fn extract_cached_tokens(usage: &Value) -> Option<u32> {
-    usage
-        .get("cache_read_input_tokens")
-        .or_else(|| usage.get("total_cached_tokens"))
-        .or_else(|| usage.get("cachedContentTokenCount"))
-        .or_else(|| {
-            usage
-                .get("prompt_tokens_details")
-                .and_then(|details| details.get("cached_tokens"))
-        })
-        .or_else(|| {
-            usage
-                .get("input_tokens_details")
-                .and_then(|details| details.get("cached_tokens"))
-        })
-        .and_then(|v| v.as_u64())
-        .map(|v| v as u32)
-}
-
-fn value_as_u32(value: Option<&Value>) -> Option<u32> {
-    value.and_then(|v| v.as_u64()).map(|v| v as u32)
+    let c = crate::proxy::pipeline::CanonicalUsage::from_gemini(usage);
+    if c.cached_tokens > 0 {
+        Some(c.cached_tokens)
+    } else {
+        None
+    }
 }
 
 fn extract_input_tokens(usage: &Value) -> Option<u32> {
-    let raw_input = value_as_u32(
-        usage
-            .get("prompt_tokens")
-            .or_else(|| usage.get("input_tokens"))
-            .or_else(|| usage.get("total_input_tokens"))
-            .or_else(|| usage.get("promptTokenCount")),
-    );
-
-    // In Anthropic Claude protocol, `input_tokens` represents only the UNCACHED portion of prompt tokens.
-    // `cache_read_input_tokens` (and optional `cache_creation_input_tokens`) are reported separately.
-    // Therefore, Anthropic total prompt tokens = input_tokens + cache_read_input_tokens + cache_creation_input_tokens.
-    // In contrast, OpenAI Chat (`prompt_tokens`), OpenAI Responses (`input_tokens` + `input_tokens_details.cached_tokens`),
-    // and Gemini (`promptTokenCount`) already include cached tokens in their prompt/input token count.
-    if let Some(cache_read) = value_as_u32(usage.get("cache_read_input_tokens")) {
-        let cache_creation = value_as_u32(usage.get("cache_creation_input_tokens")).unwrap_or(0);
-        if let Some(inp) = raw_input {
-            return Some(inp + cache_read + cache_creation);
-        }
+    let has_field = usage.get("prompt_tokens").is_some()
+        || usage.get("input_tokens").is_some()
+        || usage.get("total_input_tokens").is_some()
+        || usage.get("promptTokenCount").is_some();
+    if !has_field {
+        return None;
     }
-
-    raw_input
+    let c = crate::proxy::pipeline::CanonicalUsage::from_gemini(usage);
+    Some(c.total_input_tokens)
 }
 
 fn extract_reasoning_tokens(usage: &Value) -> Option<u32> {
-    value_as_u32(
-        usage
-            .get("reasoning_tokens")
-            .or_else(|| {
-                usage
-                    .get("output_tokens_details")
-                    .and_then(|details| details.get("reasoning_tokens"))
-            })
-            .or_else(|| {
-                usage
-                    .get("completion_tokens_details")
-                    .and_then(|details| details.get("reasoning_tokens"))
-            })
-            .or_else(|| usage.get("total_thought_tokens"))
-            .or_else(|| usage.get("totalThoughtTokens"))
-            .or_else(|| usage.get("thoughtsTokenCount")),
-    )
+    let c = crate::proxy::pipeline::CanonicalUsage::from_gemini(usage);
+    if c.reasoning_tokens > 0 {
+        Some(c.reasoning_tokens)
+    } else {
+        None
+    }
 }
 
 fn extract_output_tokens(usage: &Value) -> Option<u32> {
-    if let Some(tokens) = value_as_u32(
-        usage
-            .get("completion_tokens")
-            .or_else(|| usage.get("output_tokens")),
-    ) {
-        return Some(tokens);
+    let has_field = usage.get("completion_tokens").is_some()
+        || usage.get("output_tokens").is_some()
+        || usage.get("total_output_tokens").is_some()
+        || usage.get("candidatesTokenCount").is_some();
+    if !has_field {
+        return None;
     }
-
-    let base = value_as_u32(
-        usage
-            .get("total_output_tokens")
-            .or_else(|| usage.get("candidatesTokenCount")),
-    )?;
-    let has_new_format = usage.get("total_output_tokens").is_some();
-    if has_new_format {
-        let reasoning = extract_reasoning_tokens(usage).unwrap_or(0);
-        let tool_use = value_as_u32(usage.get("total_tool_use_tokens")).unwrap_or(0);
-        Some(base + reasoning + tool_use)
-    } else {
-        Some(base)
-    }
+    let c = crate::proxy::pipeline::CanonicalUsage::from_gemini(usage);
+    Some(c.output_tokens)
 }
 
 pub async fn monitor_middleware(
@@ -708,13 +659,22 @@ pub async fn monitor_middleware(
                         }
 
                         // Gemini format: candidates[0].content.parts
-                        if let Some(candidates) = json.get("candidates").and_then(|c| c.as_array()) {
+                        if let Some(candidates) = json.get("candidates").and_then(|c| c.as_array())
+                        {
                             for cand in candidates {
                                 if let Some(content) = cand.get("content") {
-                                    if let Some(parts) = content.get("parts").and_then(|p| p.as_array()) {
+                                    if let Some(parts) =
+                                        content.get("parts").and_then(|p| p.as_array())
+                                    {
                                         for part in parts {
-                                            if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
-                                                if part.get("thought").and_then(|t| t.as_bool()).unwrap_or(false) {
+                                            if let Some(text) =
+                                                part.get("text").and_then(|t| t.as_str())
+                                            {
+                                                if part
+                                                    .get("thought")
+                                                    .and_then(|t| t.as_bool())
+                                                    .unwrap_or(false)
+                                                {
                                                     thinking_content.push_str(text);
                                                 } else {
                                                     response_content.push_str(text);
@@ -728,8 +688,13 @@ pub async fn monitor_middleware(
                                                 thinking_signature = sig.to_string();
                                             }
                                             if let Some(fc) = part.get("functionCall") {
-                                                if let Some(name) = fc.get("name").and_then(|n| n.as_str()) {
-                                                    let args = fc.get("args").map(|a| a.to_string()).unwrap_or_default();
+                                                if let Some(name) =
+                                                    fc.get("name").and_then(|n| n.as_str())
+                                                {
+                                                    let args = fc
+                                                        .get("args")
+                                                        .map(|a| a.to_string())
+                                                        .unwrap_or_default();
                                                     tool_calls.push(serde_json::json!({
                                                         "id": "",
                                                         "type": "function",
@@ -770,7 +735,9 @@ pub async fn monitor_middleware(
                                             "function": { "name": name, "arguments": "" }
                                         });
                                     }
-                                    if let Some(thinking) = block.get("thinking").and_then(|v| v.as_str()) {
+                                    if let Some(thinking) =
+                                        block.get("thinking").and_then(|v| v.as_str())
+                                    {
                                         thinking_content.push_str(thinking);
                                     }
                                     if let Some(sig) = block
@@ -952,7 +919,10 @@ pub async fn monitor_middleware(
 
                 // [Timing Diagnostics] 注入耗时诊断元数据 (秒)
                 let mut timing_obj = serde_json::Map::new();
-                if let Some(clean) = headers_map.get("x-timing-clean-ms").and_then(|v| v.as_str()) {
+                if let Some(clean) = headers_map
+                    .get("x-timing-clean-ms")
+                    .and_then(|v| v.as_str())
+                {
                     if let Ok(n) = clean.parse::<f64>() {
                         timing_obj.insert("clean_s".to_string(), serde_json::json!(n / 1000.0));
                     }
@@ -962,7 +932,10 @@ pub async fn monitor_middleware(
                         timing_obj.insert("norm_s".to_string(), serde_json::json!(n / 1000.0));
                     }
                 }
-                if let Some(th) = headers_map.get("x-timing-thinking-ms").and_then(|v| v.as_str()) {
+                if let Some(th) = headers_map
+                    .get("x-timing-thinking-ms")
+                    .and_then(|v| v.as_str())
+                {
                     if let Ok(n) = th.parse::<f64>() {
                         timing_obj.insert("thinking_s".to_string(), serde_json::json!(n / 1000.0));
                     }
@@ -972,7 +945,10 @@ pub async fn monitor_middleware(
                         timing_obj.insert("ttft_s".to_string(), serde_json::json!(n / 1000.0));
                     }
                 }
-                timing_obj.insert("stream_s".to_string(), serde_json::json!(stream_ms / 1000.0));
+                timing_obj.insert(
+                    "stream_s".to_string(),
+                    serde_json::json!(stream_ms / 1000.0),
+                );
                 timing_obj.insert("total_s".to_string(), serde_json::json!(total_ms / 1000.0));
                 consolidated.insert("_timing".to_string(), Value::Object(timing_obj));
                 if has_actual_content {
@@ -1090,7 +1066,9 @@ pub async fn monitor_middleware(
                     .as_ref()
                     .or(log.request_body.as_ref())
                     .map(|body| {
-                        crate::proxy::mappers::context_manager::estimate_raw_tokens_from_payload(body)
+                        crate::proxy::mappers::context_manager::estimate_raw_tokens_from_payload(
+                            body,
+                        )
                     })
                     .unwrap_or(0);
                 if estimated > 0 {

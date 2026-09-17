@@ -499,7 +499,12 @@ impl RateLimitTracker {
         };
 
         let mut retry_sec = retry_sec;
-        let max_allowed_lockout = backoff_steps.iter().copied().max().unwrap_or(MAX_LOCKOUT_SECONDS).max(MAX_LOCKOUT_SECONDS);
+        let max_allowed_lockout = backoff_steps
+            .iter()
+            .copied()
+            .max()
+            .unwrap_or(MAX_LOCKOUT_SECONDS)
+            .max(MAX_LOCKOUT_SECONDS);
         if retry_sec > max_allowed_lockout && !preserve_long_image_quota {
             tracing::info!(
                 "Capping retry lockout time for {} from {}s to {}s (max backoff limit)",
@@ -1061,12 +1066,24 @@ mod tests {
         let target_time = SystemTime::now() + Duration::from_secs(5 * 3600); // 5 hours
 
         // Capped: should be capped to 300s
-        tracker.set_lockout_until_with_cap("acc_cap", target_time, RateLimitReason::QuotaExhausted, None, true);
+        tracker.set_lockout_until_with_cap(
+            "acc_cap",
+            target_time,
+            RateLimitReason::QuotaExhausted,
+            None,
+            true,
+        );
         let wait_capped = tracker.get_remaining_wait("acc_cap", None);
         assert!(wait_capped <= 300 && wait_capped >= 290);
 
         // Uncapped (Zero Quota): should retain full 5 hours duration
-        tracker.set_lockout_until_with_cap("acc_uncap", target_time, RateLimitReason::QuotaExhausted, None, false);
+        tracker.set_lockout_until_with_cap(
+            "acc_uncap",
+            target_time,
+            RateLimitReason::QuotaExhausted,
+            None,
+            false,
+        );
         let wait_uncapped = tracker.get_remaining_wait("acc_uncap", None);
         assert!(wait_uncapped > 300 && wait_uncapped <= 5 * 3600);
     }

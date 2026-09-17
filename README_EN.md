@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> Professional AI Account Management & Protocol Proxy System (v4.7.3)
+> Professional AI Account Management & Protocol Proxy System (v4.7.4)
 
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
@@ -9,7 +9,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.7.3-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.7.4-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -446,7 +446,7 @@ In clients that support OpenAI protocol (e.g., Cherry Studio), you can configure
 
 ## 📝 Changelog
 
-> Latest version **v4.7.3** (2026-09-16): Built in-house Thinking Store engine (L1 memory + L2 SQLite caching with AGZ1 fast compression) eliminating third-party CLI/Agent model degradation and early refusals caused by dropped signatures; normalized Claude/OpenAI/Gemini/Codex pipeline to canonical Gemini Contents with native tool calling; adapted DeepSeek Harness (DSH) and WorkBuddy tool calling schemas; granular microsecond stage timing diagnostics and three-pane inspection window; traffic log memory slimming with disk budget safety.
+> Latest version **v4.7.4** (2026-09-17): Unified Pipeline processing engine across OpenAI Chat/Responses, Claude, and Gemini Native protocols; authoritative thinking and cryptographic signature normalization; read-only SQLite connection reuse for tool signature lookups eliminating write transactions and fsync (reducing long-context overhead by 98.5%, from 14.7s to 0.22s); fixed Hermes streaming crash, OpenAI 429/503 errors, and UTF-8 multi-byte panic.
 
 👉 **[View Full Changelog → CHANGELOG_EN.md](CHANGELOG_EN.md)**
 

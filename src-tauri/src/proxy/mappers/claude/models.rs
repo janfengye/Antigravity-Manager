@@ -164,7 +164,7 @@ pub struct DocumentSource {
     #[serde(default)]
     pub media_type: Option<String>, // e.g. "application/pdf"
     #[serde(default)]
-    pub data: Option<String>,       // base64 data
+    pub data: Option<String>, // base64 data
 }
 
 /// Tool - supports both client tools (with input_schema) and server tools (like web_search)

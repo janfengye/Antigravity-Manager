@@ -116,7 +116,9 @@ pub fn close_tool_loop_for_thinking(messages: &mut Vec<Message>) {
                             && (signature.is_none()
                                 || signature
                                     .as_ref()
-                                    .map(|s| s.len() >= MIN_SIGNATURE_LENGTH || s == SENTINEL_SIGNATURE)
+                                    .map(|s| {
+                                        s.len() >= MIN_SIGNATURE_LENGTH || s == SENTINEL_SIGNATURE
+                                    })
                                     .unwrap_or(true))
                         {
                             has_valid_thinking = true;
@@ -234,7 +236,12 @@ pub fn filter_invalid_thinking_blocks_with_family(
             // Clean up completely empty thinking blocks without text or signature
             let original_len = blocks.len();
             blocks.retain(|b| {
-                if let ContentBlock::Thinking { thinking, signature, .. } = b {
+                if let ContentBlock::Thinking {
+                    thinking,
+                    signature,
+                    ..
+                } = b
+                {
                     if thinking.trim().is_empty() && signature.is_none() {
                         return false;
                     }

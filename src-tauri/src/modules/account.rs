@@ -106,14 +106,8 @@ mod tests {
             format_data_dir_path(Path::new(r"\\?\UNC\server\share\data")),
             r"\\server\share\data"
         );
-        assert_eq!(
-            format_data_dir_path(Path::new("//?/C:/data")),
-            "C:/data"
-        );
-        assert_eq!(
-            format_data_dir_path(Path::new("/app/data")),
-            "/app/data"
-        );
+        assert_eq!(format_data_dir_path(Path::new("//?/C:/data")), "C:/data");
+        assert_eq!(format_data_dir_path(Path::new("/app/data")), "/app/data");
         assert_eq!(
             format_data_dir_path(Path::new(r"F:\antigravity-tools-data")),
             r"F:\antigravity-tools-data"
@@ -517,14 +511,18 @@ mod tests {
         fs::write(&account_path, &raw).unwrap();
 
         // Load account should successfully self-heal and return valid Account
-        let loaded = load_account_at_path(&account_path).expect("Should self-heal trailing characters");
+        let loaded =
+            load_account_at_path(&account_path).expect("Should self-heal trailing characters");
         assert_eq!(loaded.id, "corrupt-tail-acc");
         assert_eq!(loaded.email, "tail@example.com");
 
         // Verify the file was cleaned and re-written as valid JSON
         let healed_raw = fs::read_to_string(&account_path).unwrap();
         let regular_parse: Result<Account, _> = serde_json::from_str(&healed_raw);
-        assert!(regular_parse.is_ok(), "Healed file should be standard valid JSON");
+        assert!(
+            regular_parse.is_ok(),
+            "Healed file should be standard valid JSON"
+        );
     }
 
     #[test]
@@ -645,7 +643,9 @@ fn ensure_dir(path: &Path) -> Result<(), String> {
 /// Strip Windows `\\?\` / `\\?\UNC\` prefixes and quotes so paths stay portable
 /// across Windows, Linux, macOS and Docker (`ABV_DATA_DIR=/app/data`).
 fn strip_extended_path_prefix(input: &str) -> String {
-    let s = input.trim().trim_matches(|c| c == '"' || c == '\'' || c == '\u{feff}');
+    let s = input
+        .trim()
+        .trim_matches(|c| c == '"' || c == '\'' || c == '\u{feff}');
     if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
         return format!(r"\\{}", rest);
     }
@@ -688,9 +688,7 @@ pub fn normalize_data_dir_path(path: impl AsRef<Path>) -> PathBuf {
 
 /// Human-readable path without Windows verbatim prefixes.
 pub fn format_data_dir_path(path: &Path) -> String {
-    normalize_data_dir_path(path)
-        .to_string_lossy()
-        .into_owned()
+    normalize_data_dir_path(path).to_string_lossy().into_owned()
 }
 
 fn resolve_existing_path(path: &Path) -> PathBuf {
@@ -768,11 +766,9 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
             copy_dir_recursive(&from, &to)?;
         } else {
             if let Some(parent) = to.parent() {
-                fs::create_dir_all(parent)
-                    .map_err(|e| format!("创建目标子目录失败: {}", e))?;
+                fs::create_dir_all(parent).map_err(|e| format!("创建目标子目录失败: {}", e))?;
             }
-            fs::copy(&from, &to)
-                .map_err(|e| format!("复制文件失败 {}: {}", from.display(), e))?;
+            fs::copy(&from, &to).map_err(|e| format!("复制文件失败 {}: {}", from.display(), e))?;
         }
     }
     Ok(())
@@ -1041,7 +1037,10 @@ fn load_account_at_path(account_path: &PathBuf) -> Result<Account, String> {
         Err(e) => {
             let err_msg = e.to_string();
             // Self-healing attempt: handle trailing characters / extra closing brackets
-            if err_msg.contains("trailing characters") || err_msg.contains("trailing comma") || err_msg.contains("trailing") {
+            if err_msg.contains("trailing characters")
+                || err_msg.contains("trailing comma")
+                || err_msg.contains("trailing")
+            {
                 let mut de = serde_json::Deserializer::from_str(&content);
                 if let Ok(account) = serde::Deserialize::deserialize(&mut de) {
                     crate::modules::logger::log_warn(&format!(
@@ -1901,9 +1900,13 @@ pub fn update_account_quota(account_id: &str, quota: QuotaData) -> Result<(), St
                 }
 
                 for std_id in &config.quota_protection.monitored_models {
-                    let lookup_key = crate::proxy::common::model_mapping::normalize_to_standard_id(std_id)
-                        .unwrap_or_else(|| std_id.clone());
-                    let max_pct = group_max_percentage.get(&lookup_key).cloned().unwrap_or(100);
+                    let lookup_key =
+                        crate::proxy::common::model_mapping::normalize_to_standard_id(std_id)
+                            .unwrap_or_else(|| std_id.clone());
+                    let max_pct = group_max_percentage
+                        .get(&lookup_key)
+                        .cloned()
+                        .unwrap_or(100);
 
                     if max_pct < threshold {
                         if !account.protected_models.contains(&lookup_key) {

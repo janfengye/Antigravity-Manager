@@ -48,12 +48,30 @@ pub struct OpenAIRequest {
     // Codex Responses API reasoning controls. Applied only to tiered Flash models.
     #[serde(default)]
     pub reasoning: Option<ReasoningConfig>,
+    // [NEW] OpenAI o1/o3/o4 reasoning_effort (and aliases) support
+    #[serde(
+        default,
+        rename = "reasoning_effort",
+        alias = "reasoningEffort",
+        alias = "thinkingLevel",
+        alias = "thinking_level"
+    )]
+    pub reasoning_effort: Option<String>,
     // [NEW] Direct imageSize support (for Gemini native parameter)
     #[serde(default, rename = "imageSize")]
     pub image_size: Option<String>,
     /// Client/session id used to store and restore full thinking blocks.
     #[serde(default, rename = "session_id")]
     pub session_id: Option<String>,
+    // [NEW] OpenAI stream_options support (include_usage gate)
+    #[serde(default, rename = "stream_options")]
+    pub stream_options: Option<StreamOptions>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct StreamOptions {
+    #[serde(default)]
+    pub include_usage: bool,
 }
 
 /// Thinking 配置 (兼容 Anthropic 和 OpenAI 扩展协议)
@@ -155,7 +173,12 @@ pub struct OpenAIInputAudio {
     /// base64 编码的音频数据 (也兼容传入 data: URL)
     pub data: String,
     /// "wav" | "mp3" | "m4a" | "ogg" | "flac" | "aiff" ... 亦接受完整 MIME
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "mimeType", alias = "mime_type")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "mimeType",
+        alias = "mime_type"
+    )]
     pub format: Option<String>,
 }
 
@@ -173,8 +196,14 @@ pub struct OpenAIMessage {
     pub refusal: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<OpenAIContent>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", alias = "thought")]
     pub reasoning_content: Option<String>,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        alias = "thoughtSignature",
+        alias = "thought_signature"
+    )]
+    pub signature: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -183,13 +212,20 @@ pub struct OpenAIMessage {
     pub name: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ToolCall {
     pub id: String,
     pub r#type: String,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub function: Option<ToolFunction>,
+
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        alias = "thoughtSignature",
+        alias = "thought_signature"
+    )]
+    pub signature: Option<String>,
 
     // [NEW] Fields for apply_patch_call
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -288,5 +324,38 @@ impl OpenAIUsage {
             },
             "total_tokens": self.total_tokens
         })
+    }
+}
+
+impl From<&crate::proxy::pipeline::CanonicalUsage> for OpenAIUsage {
+    fn from(c: &crate::proxy::pipeline::CanonicalUsage) -> Self {
+        Self {
+            prompt_tokens: c.total_input_tokens,
+            completion_tokens: c.output_tokens,
+            total_tokens: c.total_tokens,
+            prompt_tokens_details: if c.cached_tokens > 0 {
+                Some(PromptTokensDetails {
+                    cached_tokens: Some(c.cached_tokens),
+                })
+            } else {
+                None
+            },
+            completion_tokens_details: if c.reasoning_tokens > 0 {
+                Some(CompletionTokensDetails {
+                    reasoning_tokens: Some(c.reasoning_tokens),
+                })
+            } else {
+                None
+            },
+            input_tokens_by_modality: None,
+            raw_output_tokens: Some(c.output_tokens),
+            total_thought_tokens: if c.reasoning_tokens > 0 {
+                Some(c.reasoning_tokens)
+            } else {
+                None
+            },
+            total_tool_use_tokens: None,
+            gemini_total_tokens: Some(c.total_tokens),
+        }
     }
 }

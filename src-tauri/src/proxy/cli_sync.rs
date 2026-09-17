@@ -226,7 +226,7 @@ impl CliApp {
                         path: codex_dir.join("config.toml"),
                     },
                 ]
-            },
+            }
             CliApp::Gemini => vec![
                 CliConfigFile {
                     name: ".env".to_string(),
@@ -571,7 +571,8 @@ pub fn sync_config(
                             Value::String(proxy_url.to_string()),
                         );
                         if !api_key.is_empty() {
-                            if proxy_url.contains("apikey.fun") || proxy_url.contains("apikey.fan") {
+                            if proxy_url.contains("apikey.fun") || proxy_url.contains("apikey.fan")
+                            {
                                 env_obj.insert(
                                     "ANTHROPIC_AUTH_TOKEN".to_string(),
                                     Value::String(api_key.to_string()),
@@ -643,7 +644,8 @@ pub fn sync_config(
 
                     // 必须使用 custom 提供商，Codex 不支持原生的 codex provider
                     let provider_key = "custom";
-                    let is_apikey_fun = proxy_url.contains("apikey.fun") || proxy_url.contains("apikey.fan");
+                    let is_apikey_fun =
+                        proxy_url.contains("apikey.fun") || proxy_url.contains("apikey.fan");
                     let display_name = if is_apikey_fun {
                         "APIKEY.FUN"
                     } else {

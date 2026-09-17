@@ -28,7 +28,10 @@ fn json_with_session(
     (status, headers, Json(body)).into_response()
 }
 
-fn resolve_end_key(headers: &HeaderMap, body_sid: Option<&str>) -> Result<SessionScope, (StatusCode, String)> {
+fn resolve_end_key(
+    headers: &HeaderMap,
+    body_sid: Option<&str>,
+) -> Result<SessionScope, (StatusCode, String)> {
     let from_body = body_sid
         .map(str::trim)
         .filter(|s| !s.is_empty())

@@ -193,7 +193,10 @@ pub fn update_global_audit_config(
         "simple"
     };
     write_or_init(&GLOBAL_PAYLOAD_STORAGE_MODE, mode.to_string());
-    write_or_init(&GLOBAL_LOG_RETENTION_DAYS, log_retention_days.clamp(1, 3650));
+    write_or_init(
+        &GLOBAL_LOG_RETENTION_DAYS,
+        log_retention_days.clamp(1, 3650),
+    );
     write_or_init(&GLOBAL_THINKING_STORE_ENABLED, thinking_store_enabled);
     write_or_init(
         &GLOBAL_THINKING_RETENTION_DAYS,

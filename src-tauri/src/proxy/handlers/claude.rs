@@ -295,9 +295,9 @@ mod variant_tests {
     #[test]
     fn invalid_effort_falls_back_to_budget_tokens_for_gemini_3_model() {
         // Given a Gemini 3 model ("gemini-3-flash") with an unrecognized
-        // effort value ("max"), tier_from_effort returns None, so
+        // effort value ("unrecognized"), tier_from_effort returns None, so
         // apply_variant falls back to budget-based tier inference.
-        let mut request = request_with_effort("gemini-3-flash", "max", 4_000);
+        let mut request = request_with_effort("gemini-3-flash", "unrecognized", 4_000);
         let effort = crate::proxy::common::variant_mapping::tier_from_effort(
             request
                 .output_config
@@ -305,7 +305,7 @@ mod variant_tests {
                 .and_then(|config| config.effort.as_deref()),
         );
 
-        // tier_from_effort(Some("max")) → None (invalid value)
+        // tier_from_effort(Some("unrecognized")) → None (invalid value)
         assert_eq!(effort, None);
 
         // With effort=None and budget=4_000, infer_tier → Medium →
@@ -320,6 +320,30 @@ mod variant_tests {
         assert_eq!(
             request.thinking.as_ref().and_then(|t| t.budget_tokens),
             Some(4_000)
+        );
+    }
+
+    #[test]
+    fn max_effort_maps_to_high_tier_for_gemini_3_flash() {
+        let mut request = request_with_effort("gemini-3-flash", "max", 1_000);
+        let effort = crate::proxy::common::variant_mapping::tier_from_effort(
+            request
+                .output_config
+                .as_ref()
+                .and_then(|config| config.effort.as_deref()),
+        );
+        assert_eq!(
+            effort,
+            Some(crate::proxy::common::variant_mapping::VariantTier::High)
+        );
+
+        apply_variant(&mut request, effort, Some(1_000))
+            .expect("gemini-3-flash must resolve with max effort");
+
+        assert_eq!(request.model, "gemini-3-flash-agent");
+        assert_eq!(
+            request.thinking.as_ref().and_then(|t| t.budget_tokens),
+            Some(10_000)
         );
     }
 
@@ -388,7 +412,9 @@ fn apply_variant(
 pub async fn handle_messages(
     State(state): State<AppState>,
     headers: HeaderMap,
-    upstream_recorder: Option<axum::extract::Extension<crate::proxy::monitor::UpstreamRequestBodyHolder>>,
+    upstream_recorder: Option<
+        axum::extract::Extension<crate::proxy::monitor::UpstreamRequestBodyHolder>,
+    >,
     Json(body): Json<Value>,
 ) -> Response {
     // [FIX] 保存原始请求体的完整副本，用于日志记录
@@ -459,16 +485,13 @@ pub async fn handle_messages(
 
     // [USER RULE] 对于 Gemini >= 3 或显式指定档位的模型，进站阶段彻底忽略客户端思考与预算参数，绝不被客户端 1024 或 low 污染
     if is_v3_or_above || is_explicit_tier_model {
-        // 如果客户端未显式提供 thinking 结构体，或者需要开启思考，初始化为 enabled，但绝不填客户端 budget
-        if request.thinking.is_none() {
-            request.thinking = Some(crate::proxy::mappers::claude::models::ThinkingConfig {
-                type_: "enabled".to_string(),
-                budget_tokens: None,
-                effort: None,
-            });
-        } else if let Some(ref mut t) = request.thinking {
-            t.budget_tokens = None; // 清理客户端 budget_tokens，防止污染
-        }
+        // 无论客户端未提供 thinking，或者传了 disabled，只要是 3+ 或显式模型，强制矫正为 enabled，清理客户端 budget_tokens
+        let effort_in_thinking = request.thinking.as_ref().and_then(|t| t.effort.clone());
+        request.thinking = Some(crate::proxy::mappers::claude::models::ThinkingConfig {
+            type_: "enabled".to_string(),
+            budget_tokens: None,
+            effort: effort_in_thinking,
+        });
     } else {
         // 由于此时还没拿到账号，先用模型默认限额兜底
         let temp_cap = model_specs::get_thinking_budget(&request.model, None);
@@ -839,8 +862,8 @@ pub async fn handle_messages(
     let mut force_rotate = false;
 
     // [Stage Timing] 阶段耗时度量变量 (毫秒，保留微秒级浮点精度)
-    let mut clean_micros = clean_start.elapsed().as_micros() as u64;
-    let mut clean_ms: f64 = clean_micros as f64 / 1000.0;
+    let clean_micros = clean_start.elapsed().as_micros() as u64;
+    let clean_ms: f64 = clean_micros as f64 / 1000.0;
     let mut norm_ms: f64 = 0.0;
     let mut think_fill_ms: f64 = 0.0;
     let mut ttft_ms: f64 = 0.0;
@@ -1109,46 +1132,48 @@ pub async fn handle_messages(
         // let _trace_id = format!("req_{}", chrono::Utc::now().timestamp_subsec_millis());
 
         let token_obj = token_manager.get_token_by_id(&account_id);
-        let (mut gemini_body, transform_timing) = match crate::proxy::mappers::claude::transform_claude_request_in_timed(
-            &request_with_mapped,
-            &project_id,
-            retried_without_thinking,
-            Some(account_id.as_str()),
-            &session_id_str,
-            token_obj.as_ref(),
-        ) {
-            Ok((b, timing)) => {
-                debug!(
-                    "[{}] Transformed Gemini Body: {}",
-                    trace_id,
-                    serde_json::to_string_pretty(&b).unwrap_or_default()
-                );
-                (b, timing)
-            }
-            Err(e) => {
-                let headers = [
-                    ("X-Mapped-Model", request_with_mapped.model.as_str()),
-                    ("X-Account-Email", email.as_str()),
-                ];
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    headers,
-                    Json(json!({
-                        "type": "error",
-                        "error": {
-                            "type": "api_error",
-                            "message": format!("Transform error: {}", e)
-                        }
-                    })),
-                )
-                    .into_response();
-            }
-        };
+        let (mut gemini_body, transform_timing) =
+            match crate::proxy::mappers::claude::transform_claude_request_in_timed(
+                &request_with_mapped,
+                &project_id,
+                retried_without_thinking,
+                Some(account_id.as_str()),
+                &session_id_str,
+                token_obj.as_ref(),
+            ) {
+                Ok((b, timing)) => {
+                    debug!(
+                        "[{}] Transformed Gemini Body: {}",
+                        trace_id,
+                        serde_json::to_string_pretty(&b).unwrap_or_default()
+                    );
+                    (b, timing)
+                }
+                Err(e) => {
+                    let headers = [
+                        ("X-Mapped-Model", request_with_mapped.model.as_str()),
+                        ("X-Account-Email", email.as_str()),
+                    ];
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        headers,
+                        Json(json!({
+                            "type": "error",
+                            "error": {
+                                "type": "api_error",
+                                "message": format!("Transform error: {}", e)
+                            }
+                        })),
+                    )
+                        .into_response();
+                }
+            };
 
-        let _ = crate::proxy::mappers::context_manager::ContextManager::apply_post_transit_context_mgmt(
-            &mut gemini_body,
-            &mapped_model,
-        );
+        let _ =
+            crate::proxy::mappers::context_manager::ContextManager::apply_post_transit_context_mgmt(
+                &mut gemini_body,
+                &mapped_model,
+            );
 
         let norm_total_micros = norm_start.elapsed().as_micros() as u64;
         let tf_micros = transform_timing.think_fill_micros;
@@ -1489,7 +1514,10 @@ pub async fn handle_messages(
                                         )
                                         .header("X-Timing-Clean-Ms", format!("{:.3}", clean_ms))
                                         .header("X-Timing-Norm-Ms", format!("{:.3}", norm_ms))
-                                        .header("X-Timing-Thinking-Ms", format!("{:.3}", think_fill_ms))
+                                        .header(
+                                            "X-Timing-Thinking-Ms",
+                                            format!("{:.3}", think_fill_ms),
+                                        )
                                         .header("X-Timing-Ttft-Ms", format!("{:.3}", ttft_ms))
                                         .body(Body::from(
                                             serde_json::to_string(&full_response).unwrap(),
@@ -1683,7 +1711,10 @@ pub async fn handle_messages(
             if status_code == 429 || status_code == 529 {
                 if let Some(sid) = session_id {
                     token_manager.clear_session_binding(sid);
-                    debug!("[{}] Unbound session {} from account {} due to status {}", trace_id, sid, email, status_code);
+                    debug!(
+                        "[{}] Unbound session {} from account {} due to status {}",
+                        trace_id, sid, email, status_code
+                    );
                 }
             }
         }
@@ -1938,7 +1969,8 @@ pub async fn handle_messages(
             last_status
         };
 
-        if let Some(sec) = crate::proxy::handlers::common::extract_retry_after_seconds(&last_error) {
+        if let Some(sec) = crate::proxy::handlers::common::extract_retry_after_seconds(&last_error)
+        {
             if let Ok(val) = header::HeaderValue::from_str(&sec.to_string()) {
                 headers.insert(axum::http::header::RETRY_AFTER, val);
             }
@@ -1960,7 +1992,8 @@ pub async fn handle_messages(
                 headers.insert("X-Mapped-Model", v);
             }
         }
-        if let Some(sec) = crate::proxy::handlers::common::extract_retry_after_seconds(&last_error) {
+        if let Some(sec) = crate::proxy::handlers::common::extract_retry_after_seconds(&last_error)
+        {
             if let Ok(val) = header::HeaderValue::from_str(&sec.to_string()) {
                 headers.insert(axum::http::header::RETRY_AFTER, val);
             }

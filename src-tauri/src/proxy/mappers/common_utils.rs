@@ -168,10 +168,7 @@ pub fn try_parse_image_config_with_params(
 ) -> Result<(Value, String), String> {
     let image_size = normalize_image_size(image_size)?;
     Ok(parse_image_config_with_normalized_params(
-        model_name,
-        size,
-        quality,
-        image_size,
+        model_name, size, quality, image_size,
     ))
 }
 
@@ -432,7 +429,8 @@ pub fn inject_google_search_tool(body: &mut Value, _mapped_model: Option<&str>) 
         if let Some(tools_arr) = tools_entry.as_array_mut() {
             let has_functions = tools_arr.iter().any(|t| {
                 t.as_object().map_or(false, |o| {
-                    o.contains_key("functionDeclarations") || o.contains_key("function_declarations")
+                    o.contains_key("functionDeclarations")
+                        || o.contains_key("function_declarations")
                 })
             });
 
@@ -448,7 +446,9 @@ pub fn inject_google_search_tool(body: &mut Value, _mapped_model: Option<&str>) 
             // 首先清理掉已存在的 googleSearch 或 googleSearchRetrieval，以防重复产生冲突
             tools_arr.retain(|t| {
                 if let Some(o) = t.as_object() {
-                    !(o.contains_key("googleSearch") || o.contains_key("google_search") || o.contains_key("googleSearchRetrieval"))
+                    !(o.contains_key("googleSearch")
+                        || o.contains_key("google_search")
+                        || o.contains_key("googleSearchRetrieval"))
                 } else {
                     true
                 }
@@ -1030,13 +1030,9 @@ mod tests {
             assert_eq!(fallback["imageSize"], "4K");
         }
 
-        let (upstream_default, _) = try_parse_image_config_with_params(
-            "gemini-3.1-flash-image",
-            None,
-            Some("auto"),
-            None,
-        )
-        .expect("auto without suffix uses upstream default");
+        let (upstream_default, _) =
+            try_parse_image_config_with_params("gemini-3.1-flash-image", None, Some("auto"), None)
+                .expect("auto without suffix uses upstream default");
         assert!(upstream_default.get("imageSize").is_none());
 
         assert!(try_parse_image_config_with_params(
@@ -1050,26 +1046,50 @@ mod tests {
 
     #[test]
     fn test_detect_mime_from_bytes() {
-        assert_eq!(detect_mime_from_bytes(b"\x89PNG\r\n\x1a\n\0\0\0"), Some("image/png"));
-        assert_eq!(detect_mime_from_bytes(b"\xff\xd8\xff\xe0\0\x10JFIF"), Some("image/jpeg"));
-        assert_eq!(detect_mime_from_bytes(b"GIF89a\x01\0\x01\0"), Some("image/gif"));
-        assert_eq!(detect_mime_from_bytes(b"RIFF\0\0\0\0WEBPVP8 "), Some("image/webp"));
-        assert_eq!(detect_mime_from_bytes(b"%PDF-1.7\n%"), Some("application/pdf"));
+        assert_eq!(
+            detect_mime_from_bytes(b"\x89PNG\r\n\x1a\n\0\0\0"),
+            Some("image/png")
+        );
+        assert_eq!(
+            detect_mime_from_bytes(b"\xff\xd8\xff\xe0\0\x10JFIF"),
+            Some("image/jpeg")
+        );
+        assert_eq!(
+            detect_mime_from_bytes(b"GIF89a\x01\0\x01\0"),
+            Some("image/gif")
+        );
+        assert_eq!(
+            detect_mime_from_bytes(b"RIFF\0\0\0\0WEBPVP8 "),
+            Some("image/webp")
+        );
+        assert_eq!(
+            detect_mime_from_bytes(b"%PDF-1.7\n%"),
+            Some("application/pdf")
+        );
         assert_eq!(detect_mime_from_bytes(b"invalid"), None);
     }
 
     #[test]
     fn test_validate_and_sanitize_inline_data() {
         // 1. Empty data
-        assert_eq!(validate_and_sanitize_inline_data(Some("image/png"), ""), None);
+        assert_eq!(
+            validate_and_sanitize_inline_data(Some("image/png"), ""),
+            None
+        );
         assert_eq!(validate_and_sanitize_inline_data(None, "   "), None);
 
         // 2. Corrupted short data (like the +A== in the incident)
-        assert_eq!(validate_and_sanitize_inline_data(Some("image/png"), "+A=="), None);
+        assert_eq!(
+            validate_and_sanitize_inline_data(Some("image/png"), "+A=="),
+            None
+        );
         assert_eq!(validate_and_sanitize_inline_data(None, "AQ=="), None);
 
         // 3. Invalid base64 characters
-        assert_eq!(validate_and_sanitize_inline_data(Some("image/png"), "not-valid-base64!@#$"), None);
+        assert_eq!(
+            validate_and_sanitize_inline_data(Some("image/png"), "not-valid-base64!@#$"),
+            None
+        );
 
         // 4. Valid PNG base64 (8 bytes magic header)
         let valid_png_b64 = "iVBORw0KGgo=";
@@ -1094,7 +1114,10 @@ mod tests {
 
         let bad_part = create_gemini_inline_part(Some("image/png"), "+A==", "Image");
         assert!(bad_part.get("inlineData").is_none());
-        assert_eq!(bad_part["text"], "[Image: invalid or corrupted data omitted]");
+        assert_eq!(
+            bad_part["text"],
+            "[Image: invalid or corrupted data omitted]"
+        );
     }
 
     #[test]
@@ -1120,8 +1143,14 @@ mod tests {
         let parts = payload["contents"][0]["parts"].as_array().unwrap();
         assert_eq!(parts.len(), 4);
         assert_eq!(parts[0]["text"], "Hello");
-        assert_eq!(parts[1]["text"], "[Image/Data: invalid or corrupted inline payload omitted]");
-        assert_eq!(parts[2]["text"], "[Image/Data: invalid or corrupted inline payload omitted]");
+        assert_eq!(
+            parts[1]["text"],
+            "[Image/Data: invalid or corrupted inline payload omitted]"
+        );
+        assert_eq!(
+            parts[2]["text"],
+            "[Image/Data: invalid or corrupted inline payload omitted]"
+        );
         assert!(parts[3].get("inlineData").is_some());
         assert_eq!(parts[3]["inlineData"]["data"], valid_png_b64);
     }
@@ -1383,7 +1412,9 @@ pub fn sanitize_gemini_payload_inline_data(body: &mut Value) -> usize {
                         .and_then(Value::as_str)
                         .unwrap_or_default();
 
-                    if let Some((valid_mime, valid_data)) = validate_and_sanitize_inline_data(mime, data) {
+                    if let Some((valid_mime, valid_data)) =
+                        validate_and_sanitize_inline_data(mime, data)
+                    {
                         // Ensure mimeType and data are normalized
                         obj.insert(
                             "inlineData".to_string(),
@@ -1419,11 +1450,71 @@ pub fn sanitize_gemini_payload_inline_data(body: &mut Value) -> usize {
         }
     }
 
-    if let Some(sys) = body.get_mut("systemInstruction").and_then(Value::as_object_mut) {
+    if let Some(sys) = body
+        .get_mut("systemInstruction")
+        .and_then(Value::as_object_mut)
+    {
         if let Some(parts) = sys.get_mut("parts").and_then(Value::as_array_mut) {
             sanitize_parts(parts);
         }
     }
 
     total_sanitized
+}
+
+/// Check if two model strings are compatible (same family)
+pub fn is_model_compatible(cached: &str, target: &str) -> bool {
+    let c = cached.to_lowercase();
+    let t = target.to_lowercase();
+
+    if c == t {
+        return true;
+    }
+
+    // Grouped family match (Claude models are more permissive)
+    if c.contains("claude-3-5") && t.contains("claude-3-5") {
+        return true;
+    }
+    if c.contains("claude-3-7") && t.contains("claude-3-7") {
+        return true;
+    }
+
+    // Gemini models: strict family match required for signatures
+    if c.contains("gemini-1.5-pro") && t.contains("gemini-1.5-pro") {
+        return true;
+    }
+    if c.contains("gemini-1.5-flash") && t.contains("gemini-1.5-flash") {
+        return true;
+    }
+    if c.contains("gemini-2.0-flash") && t.contains("gemini-2.0-flash") {
+        return true;
+    }
+    if c.contains("gemini-2.0-pro") && t.contains("gemini-2.0-pro") {
+        return true;
+    }
+    if c.contains("gemini-3") && t.contains("gemini-3") {
+        let c_flash = c.contains("flash");
+        let t_flash = t.contains("flash");
+        let c_pro = c.contains("pro");
+        let t_pro = t.contains("pro");
+        if c_flash == t_flash && c_pro == t_pro {
+            return true;
+        }
+        if c_flash && t_flash {
+            return true;
+        }
+        if c_pro && t_pro {
+            return true;
+        }
+    }
+    if c.contains("gemini-3.7") && t.contains("gemini-3.7") {
+        return true;
+    }
+
+    false
+}
+
+pub fn model_keeps_thinking_without_signature(mapped_model: &str) -> bool {
+    let m = mapped_model.to_lowercase();
+    m.contains("flash") || m.contains("gemini-pro-agent")
 }

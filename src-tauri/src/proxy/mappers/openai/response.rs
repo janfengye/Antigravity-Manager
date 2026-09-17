@@ -365,8 +365,13 @@ pub fn transform_openai_response(
                             .map(|s| s.to_string())
                             .unwrap_or_else(|| format!("{}-{}", final_name, uuid::Uuid::new_v4()));
 
-                        if let Some(sig) = part.get("thoughtSignature").or(part.get("thought_signature")).and_then(|s| s.as_str()) {
-                            crate::proxy::SignatureCache::global().cache_tool_signature(&id, sig.to_string());
+                        if let Some(sig) = part
+                            .get("thoughtSignature")
+                            .or(part.get("thought_signature"))
+                            .and_then(|s| s.as_str())
+                        {
+                            crate::proxy::SignatureCache::global()
+                                .cache_tool_signature(&id, sig.to_string());
                         }
 
                         tool_calls.push(ToolCall {
@@ -376,6 +381,7 @@ pub fn transform_openai_response(
                                 name: final_name.to_string(),
                                 arguments: arguments_str,
                             }),
+                            signature: None,
                             status: None,
                             call_id: None,
                             operation: None,
@@ -525,6 +531,7 @@ pub fn transform_openai_response(
                     } else {
                         Some(thought_out)
                     },
+                    signature: None,
                     tool_calls: if tool_calls.is_empty() {
                         None
                     } else {
@@ -553,6 +560,7 @@ pub fn transform_openai_response(
                     role: "assistant".to_string(),
                     content: None,
                     reasoning_content: None,
+                    signature: None,
                     tool_calls: None,
                     tool_call_id: None,
                     name: None,
@@ -566,72 +574,15 @@ pub fn transform_openai_response(
     // Extract and map usage metadata from Gemini to OpenAI format
     // Supports both legacy v1internal format (promptTokenCount/candidatesTokenCount/totalTokenCount/cachedContentTokenCount)
     // and new Interactions API format (total_input_tokens/total_output_tokens/total_thought_tokens/total_cached_tokens)
-    let usage = raw.get("usageMetadata").and_then(|u| {
-        // 优先使用新格式字段，fallback 到旧格式
-        let prompt_tokens = u
-            .get("total_input_tokens")
-            .or_else(|| u.get("promptTokenCount"))
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as u32;
-        let raw_output_tokens = u
-            .get("total_output_tokens")
-            .or_else(|| u.get("candidatesTokenCount"))
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as u32;
-        let raw_total_tokens = u
-            .get("total_tokens")
-            .or_else(|| u.get("totalTokenCount"))
-            .and_then(|v| v.as_u64())
-            .map(|v| v as u32);
-        let cached_tokens = u
-            .get("total_cached_tokens")
-            .or_else(|| u.get("cachedContentTokenCount"))
-            .and_then(|v| v.as_u64())
-            .map(|v| v as u32);
-        // [NEW] 从新格式提取 reasoning/thought tokens
-        let reasoning_tokens = u
-            .get("total_thought_tokens")
-            .or_else(|| u.get("totalThoughtTokens"))
-            .or_else(|| u.get("thoughtsTokenCount"))
-            .and_then(|v| v.as_u64())
-            .map(|v| v as u32);
-        let tool_use_tokens = u
+    let usage = raw.get("usageMetadata").map(|u| {
+        let canonical = crate::proxy::pipeline::CanonicalUsage::from_gemini(u);
+        let mut usage = super::models::OpenAIUsage::from(&canonical);
+        usage.input_tokens_by_modality = u.get("input_tokens_by_modality").cloned();
+        usage.total_tool_use_tokens = u
             .get("total_tool_use_tokens")
             .and_then(|v| v.as_u64())
             .map(|v| v as u32);
-        let input_tokens_by_modality = u.get("input_tokens_by_modality").cloned();
-
-        // New Interactions usage keeps thought/tool-use tokens separate from
-        // total_output_tokens. Legacy candidatesTokenCount already includes those.
-        let has_new_format = u.get("total_output_tokens").is_some();
-        let completion_tokens = if has_new_format {
-            raw_output_tokens + reasoning_tokens.unwrap_or(0) + tool_use_tokens.unwrap_or(0)
-        } else {
-            raw_output_tokens
-        };
-
-        // Keep prompt_tokens as Gemini's raw input token count. cached_tokens is a
-        // subset of the prompt, not an amount to subtract from it.
-        let final_total_tokens = raw_total_tokens.unwrap_or(prompt_tokens + completion_tokens);
-
-        Some(super::models::OpenAIUsage {
-            prompt_tokens,
-            completion_tokens,
-            total_tokens: final_total_tokens,
-            prompt_tokens_details: cached_tokens.map(|ct| super::models::PromptTokensDetails {
-                cached_tokens: Some(ct),
-            }),
-            completion_tokens_details: reasoning_tokens.map(|rt| {
-                super::models::CompletionTokensDetails {
-                    reasoning_tokens: Some(rt),
-                }
-            }),
-            input_tokens_by_modality,
-            raw_output_tokens: Some(raw_output_tokens),
-            total_thought_tokens: reasoning_tokens,
-            total_tool_use_tokens: tool_use_tokens,
-            gemini_total_tokens: raw_total_tokens,
-        })
+        usage
     });
 
     OpenAIResponse {

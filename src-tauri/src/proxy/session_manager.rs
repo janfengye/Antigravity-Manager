@@ -132,8 +132,11 @@ impl SessionManager {
             };
             let clean_sys = sanitize_user_text_for_fingerprint(&sys_text);
             if !clean_sys.is_empty() {
-                let take_len = clean_sys.len().min(512);
-                hasher.update(clean_sys[..take_len].as_bytes());
+                // [FIX] Slicing &str with raw byte index panics if cut inside a multi-byte UTF-8 char (e.g. Chinese)!
+                // Convert to byte slice first before taking the prefix for hasher.
+                let sys_bytes = clean_sys.as_bytes();
+                let take_len = sys_bytes.len().min(512);
+                hasher.update(&sys_bytes[..take_len]);
             }
         }
 
@@ -226,19 +229,24 @@ impl SessionManager {
                         OpenAIContent::String(s) => s.clone(),
                         OpenAIContent::Array(blocks) => blocks
                             .iter()
-                            .filter_map(|block| match block {
+                            .filter_map(|block| {
+                                match block {
                                 crate::proxy::mappers::openai::models::OpenAIContentBlock::Text {
                                     text,
                                 } => Some(text.as_str()),
                                 _ => None,
+                            }
                             })
                             .collect::<Vec<_>>()
                             .join(" "),
                     };
                     let clean_sys = sanitize_user_text_for_fingerprint(&text);
                     if !clean_sys.is_empty() {
-                        let take_len = clean_sys.len().min(512);
-                        hasher.update(clean_sys[..take_len].as_bytes());
+                        // [FIX] Slicing &str with raw byte index panics if cut inside a multi-byte UTF-8 char (e.g. Chinese)!
+                        // Convert to byte slice first before taking the prefix for hasher.
+                        let sys_bytes = clean_sys.as_bytes();
+                        let take_len = sys_bytes.len().min(512);
+                        hasher.update(&sys_bytes[..take_len]);
                         break;
                     }
                 }
@@ -322,8 +330,11 @@ impl SessionManager {
                 }
                 let clean_sys = sanitize_user_text_for_fingerprint(&sys_texts.join(" "));
                 if !clean_sys.is_empty() {
-                    let take_len = clean_sys.len().min(512);
-                    hasher.update(clean_sys[..take_len].as_bytes());
+                    // [FIX] Slicing &str with raw byte index panics if cut inside a multi-byte UTF-8 char (e.g. Chinese)!
+                    // Convert to byte slice first before taking the prefix for hasher.
+                    let sys_bytes = clean_sys.as_bytes();
+                    let take_len = sys_bytes.len().min(512);
+                    hasher.update(&sys_bytes[..take_len]);
                 }
             }
         }
@@ -356,8 +367,10 @@ mod tests {
 
     #[test]
     fn test_sanitize_user_text_for_fingerprint() {
-        let text1 = "你好啊\n\n<system-reminder>\nCurrent date: 2026-09-08 (Tue)\n</system-reminder>";
-        let text2 = "你好啊\n\n<system-reminder>\nCurrent date: 2026-09-09 (Wed)\n</system-reminder>";
+        let text1 =
+            "你好啊\n\n<system-reminder>\nCurrent date: 2026-09-08 (Tue)\n</system-reminder>";
+        let text2 =
+            "你好啊\n\n<system-reminder>\nCurrent date: 2026-09-09 (Wed)\n</system-reminder>";
         let text3 = "你好啊 [System: Tool execution completed successfully]";
 
         assert_eq!(sanitize_user_text_for_fingerprint(text1), "你好啊");
@@ -373,7 +386,9 @@ mod tests {
                 role: "user".to_string(),
                 content: MessageContent::String("你好".to_string()),
             }],
-            system: Some(SystemPrompt::String("Project A Workspace: /src/backend".to_string())),
+            system: Some(SystemPrompt::String(
+                "Project A Workspace: /src/backend".to_string(),
+            )),
             tools: None,
             stream: false,
             max_tokens: None,
@@ -393,7 +408,9 @@ mod tests {
                 role: "user".to_string(),
                 content: MessageContent::String("你好".to_string()),
             }],
-            system: Some(SystemPrompt::String("Project B Workspace: /src/frontend".to_string())),
+            system: Some(SystemPrompt::String(
+                "Project B Workspace: /src/frontend".to_string(),
+            )),
             tools: None,
             stream: false,
             max_tokens: None,
@@ -504,5 +521,89 @@ mod tests {
 
         // Within the same conversation, multi-turn session ID remains 100% stable!
         assert_eq!(sid1, sid2);
+    }
+
+    #[test]
+    fn test_utf8_char_boundary_at_512_bytes_never_panics() {
+        // Construct a system prompt where byte index 512 lands exactly inside a 3-byte Chinese character '单' (bytes 511..514)
+        let prefix = "a".repeat(511);
+        let malicious_sys = format!("{}单清单清单", prefix);
+        assert!(
+            !malicious_sys.is_char_boundary(512),
+            "Byte 512 must be inside '单' to test the regression"
+        );
+
+        // 1. Claude Request
+        let claude_req = ClaudeRequest {
+            model: "claude-3-7-sonnet".to_string(),
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: MessageContent::String("你好".to_string()),
+            }],
+            system: Some(SystemPrompt::String(malicious_sys.clone())),
+            tools: None,
+            stream: false,
+            max_tokens: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            thinking: None,
+            metadata: None,
+            output_config: None,
+            size: None,
+            quality: None,
+        };
+        let sid_claude = SessionManager::extract_session_id(&claude_req);
+        assert!(sid_claude.starts_with("sid-"));
+
+        // 2. OpenAI Request
+        let openai_req: OpenAIRequest = serde_json::from_value(serde_json::json!({
+            "model": "gpt-4o",
+            "messages": [
+                { "role": "system", "content": malicious_sys },
+                { "role": "user", "content": "你好" }
+            ]
+        }))
+        .unwrap();
+        let sid_openai = SessionManager::extract_openai_session_id(&openai_req);
+        assert!(sid_openai.starts_with("sid-"));
+
+        // 3. Gemini Native Request
+        let gemini_req = serde_json::json!({
+            "contents": [{
+                "role": "user",
+                "parts": [{ "text": "你好" }]
+            }],
+            "system_instruction": {
+                "parts": [{ "text": malicious_sys }]
+            }
+        });
+        let sid_gemini = SessionManager::extract_gemini_session_id(&gemini_req, "gemini-2.5-pro");
+        assert!(sid_gemini.starts_with("sid-"));
+
+        // 4. Real User Prompt reported in issue
+        let user_prompt =
+            "你是一个远程服务器运维专家。\n\n当前纳管的 LXC 容器清单如下....".repeat(20);
+        let claude_user_req = ClaudeRequest {
+            model: "claude-3-7-sonnet".to_string(),
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: MessageContent::String("你好".to_string()),
+            }],
+            system: Some(SystemPrompt::String(user_prompt)),
+            tools: None,
+            stream: false,
+            max_tokens: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            thinking: None,
+            metadata: None,
+            output_config: None,
+            size: None,
+            quality: None,
+        };
+        let sid_real = SessionManager::extract_session_id(&claude_user_req);
+        assert!(sid_real.starts_with("sid-"));
     }
 }

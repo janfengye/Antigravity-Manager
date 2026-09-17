@@ -29,7 +29,10 @@ fn embed_windows_manifest() {
 </assembly>"#;
 
     if std::fs::write(&manifest_path, manifest).is_ok() {
-        let rc_content = format!("1 24 \"{}\"", manifest_path.display().to_string().replace('\\', "/"));
+        let rc_content = format!(
+            "1 24 \"{}\"",
+            manifest_path.display().to_string().replace('\\', "/")
+        );
         if std::fs::write(&rc_path, rc_content).is_ok() {
             let status = std::process::Command::new("windres")
                 .args(&[

@@ -34,7 +34,11 @@ impl AdminServerInstance {
     /// 优雅停止管理服务器并等待监听任务退出释放端口
     pub async fn stop(mut self) {
         self.axum_server.stop();
-        let _ = tokio::time::timeout(std::time::Duration::from_millis(1000), &mut self.server_handle).await;
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_millis(1000),
+            &mut self.server_handle,
+        )
+        .await;
         if !self.server_handle.is_finished() {
             self.server_handle.abort();
         }
@@ -651,7 +655,11 @@ pub async fn fetch_zai_models(
 
     if !status.is_success() {
         let preview = if text.len() > 4000 {
-            &text[..4000]
+            let mut end = 4000;
+            while end > 0 && !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            &text[..end]
         } else {
             &text
         };

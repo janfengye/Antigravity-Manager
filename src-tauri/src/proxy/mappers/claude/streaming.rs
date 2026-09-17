@@ -379,9 +379,12 @@ impl StreamingState {
             let signature = if self.signatures.has_pending() {
                 self.signatures.consume()
             } else {
-                self.session_id.as_deref().and_then(|sid| {
-                    crate::proxy::SignatureCache::global().get_session_signature(sid)
-                }).or_else(|| Some("skip_thought_signature_validator".to_string()))
+                self.session_id
+                    .as_deref()
+                    .and_then(|sid| {
+                        crate::proxy::SignatureCache::global().get_session_signature(sid)
+                    })
+                    .or_else(|| Some("skip_thought_signature_validator".to_string()))
             };
 
             if let Some(sig) = signature {
@@ -1007,9 +1010,7 @@ impl<'a> PartProcessor<'a> {
         }
         let rest = &trimmed[PREFIX.len()..];
         // Tool name ends at the first `{` or `(` delimiter
-        let tool_end = rest
-            .find(|c| c == '{' || c == '(')
-            .unwrap_or(rest.len());
+        let tool_end = rest.find(|c| c == '{' || c == '(').unwrap_or(rest.len());
         let tool_name = rest[..tool_end].trim().to_string();
         if tool_name.is_empty() {
             return None;
@@ -1152,7 +1153,10 @@ impl<'a> PartProcessor<'a> {
         // After the tool name and args there must be nothing else (ignore trailing whitespace)
         let after_tool_name = &trimmed_text["call:default_api:".len() + tool_name.len()..].trim();
         // after_tool_name is either empty (no args) or is the args string itself
-        if !after_tool_name.is_empty() && !after_tool_name.starts_with('{') && !after_tool_name.starts_with('(') {
+        if !after_tool_name.is_empty()
+            && !after_tool_name.starts_with('{')
+            && !after_tool_name.starts_with('(')
+        {
             // There is non-arg text after the tool name — reject
             return None;
         }
@@ -1726,15 +1730,15 @@ mod tests {
             "Expected tool_use block_start, got: {}",
             output
         );
-        assert!(output.contains(r#""name":"Read""#), "Expected tool name Read");
+        assert!(
+            output.contains(r#""name":"Read""#),
+            "Expected tool name Read"
+        );
         assert!(
             !output.contains("text_delta"),
             "Must NOT produce text_delta for recovered call"
         );
-        assert!(
-            state.used_tool,
-            "used_tool must be true after recovery"
-        );
+        assert!(state.used_tool, "used_tool must be true after recovery");
     }
 
     #[test]
@@ -1790,8 +1794,7 @@ mod tests {
     fn test_3379_negative_surrounding_prose() {
         // G5 guard: text not solely the call expression → text_delta
         let mut state = StreamingState::new();
-        let mut processor =
-            make_processor_with_tools(&mut state, vec!["Read"]);
+        let mut processor = make_processor_with_tools(&mut state, vec!["Read"]);
 
         let text = "Here is what I am doing: call:default_api:Read{\"file_path\":\"/tmp/foo.txt\"}";
         let part = GeminiPart {
@@ -1868,7 +1871,8 @@ mod tests {
     #[test]
     fn test_3379_parse_loose_json_standard() {
         // parse_loose_json_args: standard JSON passes Phase 1
-        let result = PartProcessor::parse_loose_json_args(r#"{"file_path":"/tmp/foo","limit":100}"#);
+        let result =
+            PartProcessor::parse_loose_json_args(r#"{"file_path":"/tmp/foo","limit":100}"#);
         assert!(result.is_some());
         let v = result.unwrap();
         assert_eq!(v["file_path"], "/tmp/foo");

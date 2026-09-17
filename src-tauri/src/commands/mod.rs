@@ -926,10 +926,7 @@ fn copy_dir_all_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::
 
 /// 迁移全量数据目录到新路径
 #[tauri::command]
-pub async fn migrate_data_dir(
-    new_path: String,
-    clean_source: bool,
-) -> Result<(), String> {
+pub async fn migrate_data_dir(new_path: String, clean_source: bool) -> Result<(), String> {
     let source_dir = modules::account::get_data_dir()?;
     let target_dir = std::path::PathBuf::from(new_path.trim());
 
@@ -938,7 +935,8 @@ pub async fn migrate_data_dir(
     }
 
     // 规范化路径以防比较失误
-    let canonical_source = std::fs::canonicalize(&source_dir).unwrap_or_else(|_| source_dir.clone());
+    let canonical_source =
+        std::fs::canonicalize(&source_dir).unwrap_or_else(|_| source_dir.clone());
     let canonical_target = if target_dir.exists() {
         std::fs::canonicalize(&target_dir).unwrap_or_else(|_| target_dir.clone())
     } else {
@@ -955,8 +953,7 @@ pub async fn migrate_data_dir(
     }
 
     // 确保目标目录存在
-    std::fs::create_dir_all(&target_dir)
-        .map_err(|e| format!("创建目标目录失败: {}", e))?;
+    std::fs::create_dir_all(&target_dir).map_err(|e| format!("创建目标目录失败: {}", e))?;
 
     // 执行递归全量复制
     copy_dir_all_recursive(&source_dir, &target_dir)
@@ -977,7 +974,8 @@ pub async fn migrate_data_dir(
     if clean_source && source_dir.exists() {
         // 安全检查：确保 source_dir 的文件名是 .antigravity_tools 或存在 accounts.json
         let has_accounts = source_dir.join("accounts.json").exists();
-        let is_default_name = source_dir.file_name().and_then(|n| n.to_str()) == Some(".antigravity_tools");
+        let is_default_name =
+            source_dir.file_name().and_then(|n| n.to_str()) == Some(".antigravity_tools");
         if has_accounts || is_default_name {
             if let Err(e) = std::fs::remove_dir_all(&source_dir) {
                 tracing::warn!("迁移后清理原数据目录失败 (可能部分文件被占用): {}", e);

@@ -776,12 +776,16 @@ impl TokenManager {
 
         if !config.enabled {
             // [FIX] 当配额保护在全局关闭时，清空受保护模型列表，避免遗留锁定显示与调度过滤
-            if let Some(arr) = account_json.get_mut("protected_models").and_then(|v| v.as_array_mut()) {
+            if let Some(arr) = account_json
+                .get_mut("protected_models")
+                .and_then(|v| v.as_array_mut())
+            {
                 if !arr.is_empty() {
                     arr.clear();
                     let _ = update_account_json(account_path, |latest| {
                         latest["protected_models"] = serde_json::Value::Array(Vec::new());
-                    }).await;
+                    })
+                    .await;
                 }
             }
             return false; // 配额保护未启用
@@ -856,7 +860,10 @@ impl TokenManager {
                 .unwrap_or_else(|| std_id.clone());
 
             // 获取该组的最高百分比，如果账号没该组型号则视为 100%
-            let max_pct = group_max_percentage.get(&lookup_key).cloned().unwrap_or(100);
+            let max_pct = group_max_percentage
+                .get(&lookup_key)
+                .cloned()
+                .unwrap_or(100);
 
             if max_pct < threshold {
                 // 只有组内所有模型都不行，才触发全组保护
@@ -886,7 +893,12 @@ impl TokenManager {
 
                 if is_protected {
                     if self
-                        .restore_quota_protection(account_json, &account_id, account_path, &lookup_key)
+                        .restore_quota_protection(
+                            account_json,
+                            &account_id,
+                            account_path,
+                            &lookup_key,
+                        )
                         .await
                         .unwrap_or(false)
                     {
@@ -1201,10 +1213,18 @@ impl TokenManager {
             }
 
             for std_id in &config.monitored_models {
-                let lookup_key = crate::proxy::common::model_mapping::normalize_to_standard_id(std_id)
-                    .unwrap_or_else(|| std_id.clone());
-                let max_pct = group_max_percentage.get(&lookup_key).cloned().unwrap_or(100);
-                if max_pct < threshold && !protected_list.iter().any(|v| v.as_str() == Some(lookup_key.as_str())) {
+                let lookup_key =
+                    crate::proxy::common::model_mapping::normalize_to_standard_id(std_id)
+                        .unwrap_or_else(|| std_id.clone());
+                let max_pct = group_max_percentage
+                    .get(&lookup_key)
+                    .cloned()
+                    .unwrap_or(100);
+                if max_pct < threshold
+                    && !protected_list
+                        .iter()
+                        .any(|v| v.as_str() == Some(lookup_key.as_str()))
+                {
                     protected_list.push(serde_json::Value::String(lookup_key));
                 }
             }
@@ -1785,21 +1805,45 @@ impl TokenManager {
                                                 // 内存已更新完毕，将磁盘持久化 spawn 到 blocking 线程池
                                                 {
                                                     let write_path = token.account_path.clone();
-                                                    let access_token = token_response.access_token.clone();
+                                                    let access_token =
+                                                        token_response.access_token.clone();
                                                     let expires_in = token_response.expires_in;
                                                     let id_token = token_response.id_token.clone();
-                                                    let new_rt = token_response.refresh_token.clone();
+                                                    let new_rt =
+                                                        token_response.refresh_token.clone();
                                                     let write_ts = now + token_response.expires_in;
                                                     tokio::task::spawn_blocking(move || {
                                                         let Ok(_lk) = crate::modules::account::lock_account_file_updates() else { return; };
-                                                        let Ok(raw) = std::fs::read_to_string(&write_path) else { return; };
-                                                        let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&raw) else { return; };
-                                                        val["token"]["access_token"] = access_token.into();
-                                                        val["token"]["expires_in"] = expires_in.into();
-                                                        val["token"]["expiry_timestamp"] = write_ts.into();
-                                                        if let Some(it) = id_token { val["token"]["id_token"] = it.into(); }
-                                                        if let Some(rt) = new_rt { val["token"]["refresh_token"] = rt.into(); }
-                                                        if let Ok(s) = serde_json::to_string_pretty(&val) { let _ = std::fs::write(&write_path, s); }
+                                                        let Ok(raw) =
+                                                            std::fs::read_to_string(&write_path)
+                                                        else {
+                                                            return;
+                                                        };
+                                                        let Ok(mut val) = serde_json::from_str::<
+                                                            serde_json::Value,
+                                                        >(
+                                                            &raw
+                                                        ) else {
+                                                            return;
+                                                        };
+                                                        val["token"]["access_token"] =
+                                                            access_token.into();
+                                                        val["token"]["expires_in"] =
+                                                            expires_in.into();
+                                                        val["token"]["expiry_timestamp"] =
+                                                            write_ts.into();
+                                                        if let Some(it) = id_token {
+                                                            val["token"]["id_token"] = it.into();
+                                                        }
+                                                        if let Some(rt) = new_rt {
+                                                            val["token"]["refresh_token"] =
+                                                                rt.into();
+                                                        }
+                                                        if let Ok(s) =
+                                                            serde_json::to_string_pretty(&val)
+                                                        {
+                                                            let _ = std::fs::write(&write_path, s);
+                                                        }
                                                     });
                                                 }
                                             }
@@ -1845,10 +1889,19 @@ impl TokenManager {
                                             let pid_clone = pid.clone();
                                             tokio::task::spawn_blocking(move || {
                                                 let Ok(_lk) = crate::modules::account::lock_account_file_updates() else { return; };
-                                                let Ok(raw) = std::fs::read_to_string(&write_path) else { return; };
-                                                let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&raw) else { return; };
+                                                let Ok(raw) = std::fs::read_to_string(&write_path)
+                                                else {
+                                                    return;
+                                                };
+                                                let Ok(mut val) =
+                                                    serde_json::from_str::<serde_json::Value>(&raw)
+                                                else {
+                                                    return;
+                                                };
                                                 val["token"]["project_id"] = pid_clone.into();
-                                                if let Ok(s) = serde_json::to_string_pretty(&val) { let _ = std::fs::write(&write_path, s); }
+                                                if let Ok(s) = serde_json::to_string_pretty(&val) {
+                                                    let _ = std::fs::write(&write_path, s);
+                                                }
                                             });
                                         }
                                         pid
@@ -1921,7 +1974,9 @@ impl TokenManager {
                             .email_to_account_id(&bound_token.email)
                             .unwrap_or_else(|| bound_token.account_id.clone());
                         // [FIX] 传入目标模型标准化 ID，检查该模型是否已被熔断器精准锁定
-                        let reset_sec = self.rate_limit_tracker.get_remaining_wait(&key, Some(&normalized_target));
+                        let reset_sec = self
+                            .rate_limit_tracker
+                            .get_remaining_wait(&key, Some(&normalized_target));
                         if reset_sec > 0 {
                             // 【修复 Issue #284】立即解绑并切换账号，不再阻塞等待
                             // 原因：阻塞等待会导致并发请求时客户端 socket 超时 (UND_ERR_SOCKET)
@@ -2240,15 +2295,31 @@ impl TokenManager {
                                     let new_rt = token_response.refresh_token.clone();
                                     let write_ts = now + token_response.expires_in;
                                     tokio::task::spawn_blocking(move || {
-                                        let Ok(_lk) = crate::modules::account::lock_account_file_updates() else { return; };
-                                        let Ok(raw) = std::fs::read_to_string(&write_path) else { return; };
-                                        let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&raw) else { return; };
+                                        let Ok(_lk) =
+                                            crate::modules::account::lock_account_file_updates()
+                                        else {
+                                            return;
+                                        };
+                                        let Ok(raw) = std::fs::read_to_string(&write_path) else {
+                                            return;
+                                        };
+                                        let Ok(mut val) =
+                                            serde_json::from_str::<serde_json::Value>(&raw)
+                                        else {
+                                            return;
+                                        };
                                         val["token"]["access_token"] = access_token.into();
                                         val["token"]["expires_in"] = expires_in.into();
                                         val["token"]["expiry_timestamp"] = write_ts.into();
-                                        if let Some(it) = id_token { val["token"]["id_token"] = it.into(); }
-                                        if let Some(rt) = new_rt { val["token"]["refresh_token"] = rt.into(); }
-                                        if let Ok(s) = serde_json::to_string_pretty(&val) { let _ = std::fs::write(&write_path, s); }
+                                        if let Some(it) = id_token {
+                                            val["token"]["id_token"] = it.into();
+                                        }
+                                        if let Some(rt) = new_rt {
+                                            val["token"]["refresh_token"] = rt.into();
+                                        }
+                                        if let Ok(s) = serde_json::to_string_pretty(&val) {
+                                            let _ = std::fs::write(&write_path, s);
+                                        }
                                     });
                                 }
                             }
@@ -2390,16 +2461,36 @@ impl TokenManager {
                                     }
                                     // [FIX] 写盘后台化：project_id 已写入内存，磁盘持久化不阻塞热路径
                                     {
-                                        let write_path = self.tokens.get(&token.account_id)
+                                        let write_path = self
+                                            .tokens
+                                            .get(&token.account_id)
                                             .map(|e| e.account_path.clone())
-                                            .unwrap_or_else(|| self.resolved_data_dir().join("accounts").join(format!("{}.json", token.account_id)));
+                                            .unwrap_or_else(|| {
+                                                self.resolved_data_dir()
+                                                    .join("accounts")
+                                                    .join(format!("{}.json", token.account_id))
+                                            });
                                         let pid_clone = pid.clone();
                                         tokio::task::spawn_blocking(move || {
-                                            let Ok(_lk) = crate::modules::account::lock_account_file_updates() else { return; };
-                                            let Ok(raw) = std::fs::read_to_string(&write_path) else { return; };
-                                            let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&raw) else { return; };
+                                            let Ok(_lk) =
+                                                crate::modules::account::lock_account_file_updates(
+                                                )
+                                            else {
+                                                return;
+                                            };
+                                            let Ok(raw) = std::fs::read_to_string(&write_path)
+                                            else {
+                                                return;
+                                            };
+                                            let Ok(mut val) =
+                                                serde_json::from_str::<serde_json::Value>(&raw)
+                                            else {
+                                                return;
+                                            };
                                             val["token"]["project_id"] = pid_clone.into();
-                                            if let Ok(s) = serde_json::to_string_pretty(&val) { let _ = std::fs::write(&write_path, s); }
+                                            if let Ok(s) = serde_json::to_string_pretty(&val) {
+                                                let _ = std::fs::write(&write_path, s);
+                                            }
                                         });
                                     }
                                     pid
@@ -2465,7 +2556,8 @@ impl TokenManager {
         update_account_json(&path, move |content| {
             content["disabled"] = serde_json::Value::Bool(true);
             content["disabled_at"] = serde_json::Value::Number(now.into());
-            content["disabled_reason"] = serde_json::Value::String(truncate_reason(&reason_owned, 800));
+            content["disabled_reason"] =
+                serde_json::Value::String(truncate_reason(&reason_owned, 800));
         })
         .await?;
 
@@ -2515,7 +2607,8 @@ impl TokenManager {
         update_account_json(&path, move |content| {
             content["token"]["access_token"] = serde_json::Value::String(access_token);
             content["token"]["expires_in"] = serde_json::Value::Number(expires_in.into());
-            content["token"]["expiry_timestamp"] = serde_json::Value::Number(expiry_timestamp.into());
+            content["token"]["expiry_timestamp"] =
+                serde_json::Value::Number(expiry_timestamp.into());
 
             // 如果获取到了新的 id_token，则保存它
             if let Some(it) = id_token {
@@ -2880,7 +2973,12 @@ impl TokenManager {
         };
 
         if let Some(reset_time_str) = self.get_quota_reset_time(account_id) {
-            tracing::info!("找到账号 {} 的配额刷新时间: {} (cap_to_max: {})", account_id, reset_time_str, cap);
+            tracing::info!(
+                "找到账号 {} 的配额刷新时间: {} (cap_to_max: {})",
+                account_id,
+                reset_time_str,
+                cap
+            );
             self.rate_limit_tracker.set_lockout_until_iso_with_cap(
                 account_id,
                 &reset_time_str,
@@ -3621,8 +3719,12 @@ impl TokenManager {
         // 1. 优先检查 quota_groups 中的 5h 和 weekly buckets，按模型组精准隔离，杜绝全账号误杀
         if let Some(groups) = quota.get("quota_groups").and_then(|g| g.as_array()) {
             for group in groups {
-                let group_name = group.get("display_name").and_then(|v| v.as_str()).unwrap_or("");
-                let is_claude_group = group_name.to_lowercase().contains("claude") || group_name.to_lowercase().contains("gpt");
+                let group_name = group
+                    .get("display_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let is_claude_group = group_name.to_lowercase().contains("claude")
+                    || group_name.to_lowercase().contains("gpt");
                 let is_gemini_group = group_name.to_lowercase().contains("gemini");
 
                 if let Some(buckets) = group.get("buckets").and_then(|b| b.as_array()) {
@@ -3677,11 +3779,9 @@ impl TokenManager {
         // 2. 回退到 models 配额检查
         if let Some(models) = quota.get("models").and_then(|m| m.as_array()) {
             // 只要受监控核心模型或全部模型为 0%，且有有效 reset_time
-            let all_zero = models.iter().all(|m| {
-                m.get("percentage")
-                    .and_then(|p| p.as_i64())
-                    .unwrap_or(100) == 0
-            });
+            let all_zero = models
+                .iter()
+                .all(|m| m.get("percentage").and_then(|p| p.as_i64()).unwrap_or(100) == 0);
 
             if all_zero && !models.is_empty() {
                 if let Some(reset_time_str) = self.get_quota_reset_time(account_id) {

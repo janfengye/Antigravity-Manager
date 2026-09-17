@@ -3,12 +3,13 @@ use crate::proxy::monitor::ProxyRequestLog;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OpenFlags};
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 static LOG_WRITE_LOCK: Mutex<()> = Mutex::new(());
+static TOOL_SIGNATURE_DB: OnceLock<Mutex<Option<(PathBuf, Connection)>>> = OnceLock::new();
 
 const THOUGHT_RAW_MAGIC: &[u8] = b"RAW1";
 const THOUGHT_GZIP_MAGIC: &[u8] = b"AGZ1";
@@ -90,10 +91,6 @@ fn apply_fast_pragmas(conn: &Connection) -> Result<(), String> {
 fn connect_db() -> Result<Connection, String> {
     let db_path = get_proxy_db_path()?;
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
-
-    // Must precede WAL for new databases. Existing databases are not fully VACUUMed.
-    let _ = conn.pragma_update(None, "auto_vacuum", "INCREMENTAL");
-
     apply_fast_pragmas(&conn)?;
     Ok(conn)
 }
@@ -248,14 +245,16 @@ fn migrate_thinking_from_logs() -> Result<(), String> {
              )";
     let copied = match conn.execute(copy_with_accessed, []) {
         Ok(n) => n,
-        Err(_) => match conn.execute(copy_basic, []) {
-            Ok(n) => n,
-            Err(e) => {
-                let _ = conn.execute("DETACH DATABASE logs", []);
-                tracing::warn!("[ThinkingStore] Import from proxy_logs.db failed (will retry next start): {e}");
-                return Ok(());
+        Err(_) => {
+            match conn.execute(copy_basic, []) {
+                Ok(n) => n,
+                Err(e) => {
+                    let _ = conn.execute("DETACH DATABASE logs", []);
+                    tracing::warn!("[ThinkingStore] Import from proxy_logs.db failed (will retry next start): {e}");
+                    return Ok(());
+                }
             }
-        },
+        }
     };
     let _ = conn.execute(
         "INSERT OR IGNORE INTO thinking_sessions (session_key, last_accessed)
@@ -274,8 +273,11 @@ fn migrate_thinking_from_logs() -> Result<(), String> {
 }
 
 pub fn init_db() -> Result<(), String> {
-    // connect_db will initialize WAL mode and other pragmas
-    let conn = connect_db()?;
+    let conn = Connection::open(get_proxy_db_path()?).map_err(|e| e.to_string())?;
+    // Must precede WAL for new databases. Existing databases are not fully VACUUMed.
+    // Keep this out of ordinary connections: even an unchanged mode can write.
+    let _ = conn.pragma_update(None, "auto_vacuum", "INCREMENTAL");
+    apply_fast_pragmas(&conn)?;
 
     conn.execute(
         "CREATE TABLE IF NOT EXISTS request_logs (
@@ -294,7 +296,10 @@ pub fn init_db() -> Result<(), String> {
 
     // Try to add new columns (ignore errors if they exist)
     let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN request_body TEXT", []);
-    let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN upstream_request_body TEXT", []);
+    let _ = conn.execute(
+        "ALTER TABLE request_logs ADD COLUMN upstream_request_body TEXT",
+        [],
+    );
     let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN response_body TEXT", []);
     let _ = conn.execute(
         "ALTER TABLE request_logs ADD COLUMN input_tokens INTEGER",
@@ -313,9 +318,18 @@ pub fn init_db() -> Result<(), String> {
     let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN protocol TEXT", []);
     let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN client_ip TEXT", []);
     let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN username TEXT", []);
-    let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN request_headers TEXT", []);
-    let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN upstream_request_headers TEXT", []);
-    let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN response_headers TEXT", []);
+    let _ = conn.execute(
+        "ALTER TABLE request_logs ADD COLUMN request_headers TEXT",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE request_logs ADD COLUMN upstream_request_headers TEXT",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE request_logs ADD COLUMN response_headers TEXT",
+        [],
+    );
 
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_timestamp ON request_logs (timestamp DESC)",
@@ -382,7 +396,10 @@ pub fn init_db() -> Result<(), String> {
         [],
     )
     .map_err(|e| e.to_string())?;
-    let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_tool_sig_created ON tool_signatures (created_at DESC)", []);
+    let _ = conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tool_sig_created ON tool_signatures (created_at DESC)",
+        [],
+    );
 
     drop(conn);
     migrate_thinking_from_logs()?;
@@ -435,9 +452,25 @@ pub fn load_tool_signature(tool_id: &str) -> Result<Option<String>, String> {
     if tool_id.is_empty() {
         return Ok(None);
     }
-    let conn = connect_db()?;
+    let db_path = get_proxy_db_path()?;
+    let mut db = TOOL_SIGNATURE_DB
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .map_err(|e| format!("tool signature db lock: {e}"))?;
+    if db.as_ref().map(|(path, _)| path) != Some(&db_path) {
+        let conn = Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|e| e.to_string())?;
+        conn.busy_timeout(std::time::Duration::from_secs(5))
+            .map_err(|e| e.to_string())?;
+        *db = Some((db_path, conn));
+    }
+    let conn = &db
+        .as_ref()
+        .ok_or("tool signature db was not initialized")?
+        .1;
+    // Dropping rows and the cached statement ends the read before releasing the lock.
     let mut stmt = conn
-        .prepare("SELECT signature FROM tool_signatures WHERE tool_id = ?1 LIMIT 1")
+        .prepare_cached("SELECT signature FROM tool_signatures WHERE tool_id = ?1 LIMIT 1")
         .map_err(|e| e.to_string())?;
     let mut rows = stmt.query(params![tool_id]).map_err(|e| e.to_string())?;
     if let Some(row) = rows.next().map_err(|e| e.to_string())? {
@@ -556,7 +589,14 @@ pub fn load_thinking_records(session_key: &str) -> Result<Vec<PersistedThinkingR
             let tool_ids_str: String = row.get(3)?;
             let tool_names_str: String = row.get(4)?;
             let visible: String = row.get(5)?;
-            Ok((fp, thought_raw, signature, tool_ids_str, tool_names_str, visible))
+            Ok((
+                fp,
+                thought_raw,
+                signature,
+                tool_ids_str,
+                tool_names_str,
+                visible,
+            ))
         })
         .map_err(|e| e.to_string())?;
 
@@ -961,7 +1001,7 @@ pub fn get_log_detail(log_id: &str) -> Result<ProxyRequestLog, String> {
         .map_err(|e| e.to_string())?;
 
     stmt.query_row([log_id], map_request_log_row)
-    .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -991,8 +1031,96 @@ mod thinking_pack_tests {
 
     #[test]
     fn persist_visible_drops_tool_turns() {
-        assert_eq!(persist_visible(&["call_1".to_string()], "I will run the tool"), "");
+        assert_eq!(
+            persist_visible(&["call_1".to_string()], "I will run the tool"),
+            ""
+        );
         assert_eq!(persist_visible(&[], "hello"), "hello");
+    }
+}
+
+#[cfg(test)]
+mod tool_signature_tests {
+    use super::*;
+    use crate::proxy::monitor::prompt_log_tests::TestDataDir;
+
+    static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn tool_signature_misses_reuse_readonly_connection() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        let _dir = TestDataDir::new();
+        assert!(load_tool_signature("missing").is_err());
+        assert!(!get_proxy_db_path().unwrap().exists());
+        init_db().unwrap();
+        let writer = connect_db().unwrap();
+        assert_eq!(
+            writer
+                .pragma_query_value::<i64, _>(None, "auto_vacuum", |r| r.get(0))
+                .unwrap(),
+            2
+        );
+        let before: i64 = writer
+            .pragma_query_value(None, "data_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(load_tool_signature("missing").unwrap(), None);
+        {
+            let db = TOOL_SIGNATURE_DB.get().unwrap().lock().unwrap();
+            let conn = &db.as_ref().unwrap().1;
+            assert!(conn.is_readonly(rusqlite::DatabaseName::Main).unwrap());
+            // A connection-local setting detects accidental reopening on a miss.
+            conn.pragma_update(None, "cache_size", -1234).unwrap();
+        }
+        for _ in 0..32 {
+            assert_eq!(load_tool_signature("missing").unwrap(), None);
+        }
+        {
+            let db = TOOL_SIGNATURE_DB.get().unwrap().lock().unwrap();
+            let conn = &db.as_ref().unwrap().1;
+            assert_eq!(
+                conn.pragma_query_value::<i64, _>(None, "cache_size", |r| r.get(0))
+                    .unwrap(),
+                -1234
+            );
+            assert!(conn.is_autocommit());
+            assert_eq!(conn.total_changes(), 0);
+        }
+        let after: i64 = writer
+            .pragma_query_value(None, "data_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(after, before);
+        TOOL_SIGNATURE_DB.get().unwrap().lock().unwrap().take();
+    }
+
+    #[test]
+    fn tool_signature_reads_follow_writes_and_data_dir_changes() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        let _dir = TestDataDir::new();
+        init_db().unwrap();
+        let signature = "s".repeat(60);
+        assert_eq!(load_tool_signature("tool").unwrap(), None);
+        save_tool_signature("tool", &signature).unwrap();
+        assert_eq!(
+            load_tool_signature("tool").unwrap(),
+            Some(signature.clone())
+        );
+        let replacement = "r".repeat(60);
+        save_tool_signature("tool", &replacement).unwrap();
+        assert_eq!(
+            load_tool_signature("tool").unwrap(),
+            Some(replacement.clone())
+        );
+        {
+            let _other_dir = TestDataDir::new();
+            assert!(load_tool_signature("tool").is_err());
+            init_db().unwrap();
+            assert_eq!(load_tool_signature("tool").unwrap(), None);
+            save_tool_signature("tool", &signature).unwrap();
+            assert_eq!(load_tool_signature("tool").unwrap(), Some(signature));
+            TOOL_SIGNATURE_DB.get().unwrap().lock().unwrap().take();
+        }
+        assert_eq!(load_tool_signature("tool").unwrap(), Some(replacement));
+        TOOL_SIGNATURE_DB.get().unwrap().lock().unwrap().take();
     }
 }
 
@@ -1036,7 +1164,10 @@ mod retention_tests {
             max_disk_mb: 0,
             ..config.proxy.log_retention
         };
-        assert!(save_log_with_connection(&conn, sample_log("no-room", 100), &zero_budget_policy).is_err());
+        assert!(
+            save_log_with_connection(&conn, sample_log("no-room", 100), &zero_budget_policy)
+                .is_err()
+        );
         assert!(get_log_detail("no-room").is_err());
     }
 
@@ -1318,7 +1449,10 @@ pub fn get_logs_filtered(
     } else {
         let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
         let logs_iter = stmt
-            .query_map(rusqlite::params![limit, offset, filter_pattern], map_request_log_row)
+            .query_map(
+                rusqlite::params![limit, offset, filter_pattern],
+                map_request_log_row,
+            )
             .map_err(|e| e.to_string())?;
         logs_iter.filter_map(|r| r.ok()).collect()
     };

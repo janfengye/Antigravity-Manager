@@ -69,9 +69,11 @@ pub fn redact_header_value(name: &str, value: &str) -> String {
 }
 
 pub fn headers_to_redacted_json(headers: &HeaderMap) -> String {
-    header_pairs_to_redacted_json(headers.iter().filter_map(|(k, v)| {
-        v.to_str().ok().map(|s| (k.as_str(), s))
-    }))
+    header_pairs_to_redacted_json(
+        headers
+            .iter()
+            .filter_map(|(k, v)| v.to_str().ok().map(|s| (k.as_str(), s))),
+    )
 }
 
 pub fn header_pairs_to_redacted_json<'a, I>(pairs: I) -> String
@@ -115,7 +117,12 @@ fn simplify_part(part: &Value) -> Value {
     if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
         obj.insert("text".into(), json!(text));
     }
-    for sig_key in ["thoughtSignature", "thought_signature", "signature", "thinking_signature"] {
+    for sig_key in [
+        "thoughtSignature",
+        "thought_signature",
+        "signature",
+        "thinking_signature",
+    ] {
         if let Some(sig) = part.get(sig_key) {
             obj.insert(sig_key.to_string(), sig.clone());
         }
@@ -147,8 +154,16 @@ fn simplify_part(part: &Value) -> Value {
         obj.insert("functionResponse".into(), Value::Object(fr_out));
     }
     if let Some(inline) = part.get("inlineData").or_else(|| part.get("inline_data")) {
-        let mime = inline.get("mimeType").or_else(|| inline.get("mime_type")).cloned().unwrap_or(json!("unknown"));
-        let data_len = inline.get("data").and_then(|d| d.as_str()).map(|s| s.len()).unwrap_or(0);
+        let mime = inline
+            .get("mimeType")
+            .or_else(|| inline.get("mime_type"))
+            .cloned()
+            .unwrap_or(json!("unknown"));
+        let data_len = inline
+            .get("data")
+            .and_then(|d| d.as_str())
+            .map(|s| s.len())
+            .unwrap_or(0);
         obj.insert(
             "inlineData".into(),
             json!({
@@ -189,7 +204,12 @@ fn simplify_message(msg: &Value) -> Value {
     if let Some(rc) = msg.get("reasoning_content") {
         out.insert("reasoning_content".into(), rc.clone());
     }
-    for sig_key in ["thinking_signature", "thought_signature", "signature", "thoughtSignature"] {
+    for sig_key in [
+        "thinking_signature",
+        "thought_signature",
+        "signature",
+        "thoughtSignature",
+    ] {
         if let Some(sig) = msg.get(sig_key) {
             out.insert(sig_key.to_string(), sig.clone());
         }
@@ -197,17 +217,22 @@ fn simplify_message(msg: &Value) -> Value {
     if let Some(tool_calls) = msg.get("tool_calls").and_then(|t| t.as_array()) {
         out.insert(
             "tool_calls".into(),
-            Value::Array(tool_calls.iter().map(|tc| {
-                if let Some(tc_obj) = tc.as_object() {
-                    let mut tc_out = tc_obj.clone();
-                    if let Some(func) = tc_obj.get("function") {
-                        tc_out.insert("function".into(), func.clone());
-                    }
-                    Value::Object(tc_out)
-                } else {
-                    tc.clone()
-                }
-            }).collect()),
+            Value::Array(
+                tool_calls
+                    .iter()
+                    .map(|tc| {
+                        if let Some(tc_obj) = tc.as_object() {
+                            let mut tc_out = tc_obj.clone();
+                            if let Some(func) = tc_obj.get("function") {
+                                tc_out.insert("function".into(), func.clone());
+                            }
+                            Value::Object(tc_out)
+                        } else {
+                            tc.clone()
+                        }
+                    })
+                    .collect(),
+            ),
         );
     }
     Value::Object(out)
@@ -230,7 +255,12 @@ fn simplify_content(content: &Value) -> Value {
                         if let Some(thinking) = obj.get("thinking") {
                             slim.insert("thinking".into(), thinking.clone());
                         }
-                        for sig_key in ["signature", "thoughtSignature", "thinking_signature", "thought_signature"] {
+                        for sig_key in [
+                            "signature",
+                            "thoughtSignature",
+                            "thinking_signature",
+                            "thought_signature",
+                        ] {
                             if let Some(sig) = obj.get(sig_key) {
                                 slim.insert(sig_key.to_string(), sig.clone());
                             }
@@ -252,13 +282,23 @@ fn simplify_content(content: &Value) -> Value {
                         }
                         if let Some(source) = obj.get("source") {
                             if source.get("type").and_then(|t| t.as_str()) == Some("base64") {
-                                let media_type = source.get("media_type").cloned().unwrap_or(json!("unknown"));
-                                let len = source.get("data").and_then(|d| d.as_str()).map(|s| s.len()).unwrap_or(0);
-                                slim.insert("source".into(), json!({
-                                    "type": "base64",
-                                    "media_type": media_type,
-                                    "data": format!("[base64 image: {} bytes]", len)
-                                }));
+                                let media_type = source
+                                    .get("media_type")
+                                    .cloned()
+                                    .unwrap_or(json!("unknown"));
+                                let len = source
+                                    .get("data")
+                                    .and_then(|d| d.as_str())
+                                    .map(|s| s.len())
+                                    .unwrap_or(0);
+                                slim.insert(
+                                    "source".into(),
+                                    json!({
+                                        "type": "base64",
+                                        "media_type": media_type,
+                                        "data": format!("[base64 image: {} bytes]", len)
+                                    }),
+                                );
                             } else {
                                 slim.insert("source".into(), source.clone());
                             }
@@ -334,7 +374,12 @@ pub fn simplify_payload_json(value: &Value) -> Value {
     }
 
     // 2. 思考签名与 Thinking
-    for sig_key in ["thinking_signature", "thought_signature", "signature", "thoughtSignature"] {
+    for sig_key in [
+        "thinking_signature",
+        "thought_signature",
+        "signature",
+        "thoughtSignature",
+    ] {
         if let Some(v) = inner.get(sig_key).or_else(|| value.get(sig_key)) {
             concise.insert(sig_key.to_string(), v.clone());
         }
@@ -350,17 +395,21 @@ pub fn simplify_payload_json(value: &Value) -> Value {
         if let Some(arr) = tool_calls.as_array() {
             concise.insert(
                 "tool_calls".into(),
-                Value::Array(arr.iter().map(|tc| {
-                    if let Some(tc_obj) = tc.as_object() {
-                        let mut tc_out = tc_obj.clone();
-                        if let Some(func) = tc_obj.get("function") {
-                            tc_out.insert("function".into(), func.clone());
-                        }
-                        Value::Object(tc_out)
-                    } else {
-                        tc.clone()
-                    }
-                }).collect()),
+                Value::Array(
+                    arr.iter()
+                        .map(|tc| {
+                            if let Some(tc_obj) = tc.as_object() {
+                                let mut tc_out = tc_obj.clone();
+                                if let Some(func) = tc_obj.get("function") {
+                                    tc_out.insert("function".into(), func.clone());
+                                }
+                                Value::Object(tc_out)
+                            } else {
+                                tc.clone()
+                            }
+                        })
+                        .collect(),
+                ),
             );
         } else {
             concise.insert("tool_calls".into(), tool_calls.clone());
@@ -391,10 +440,7 @@ pub fn simplify_payload_json(value: &Value) -> Value {
     {
         concise.insert("generation_config".into(), cfg.clone());
     }
-    if let Some(cfg) = inner
-        .get("toolConfig")
-        .or_else(|| value.get("toolConfig"))
-    {
+    if let Some(cfg) = inner.get("toolConfig").or_else(|| value.get("toolConfig")) {
         concise.insert("toolConfig".into(), cfg.clone());
     }
     if let Some(cfg) = inner
@@ -455,43 +501,48 @@ pub fn simplify_payload_json(value: &Value) -> Value {
         if let Some(arr) = choices.as_array() {
             concise.insert(
                 "choices".into(),
-                Value::Array(arr.iter().map(|choice| {
-                    if let Some(obj) = choice.as_object() {
-                        let mut choice_out = obj.clone();
-                        if let Some(msg) = obj.get("message") {
-                            choice_out.insert("message".into(), simplify_message(msg));
-                        }
-                        if let Some(delta) = obj.get("delta") {
-                            choice_out.insert("delta".into(), simplify_message(delta));
-                        }
-                        Value::Object(choice_out)
-                    } else {
-                        choice.clone()
-                    }
-                }).collect()),
+                Value::Array(
+                    arr.iter()
+                        .map(|choice| {
+                            if let Some(obj) = choice.as_object() {
+                                let mut choice_out = obj.clone();
+                                if let Some(msg) = obj.get("message") {
+                                    choice_out.insert("message".into(), simplify_message(msg));
+                                }
+                                if let Some(delta) = obj.get("delta") {
+                                    choice_out.insert("delta".into(), simplify_message(delta));
+                                }
+                                Value::Object(choice_out)
+                            } else {
+                                choice.clone()
+                            }
+                        })
+                        .collect(),
+                ),
             );
         } else {
             concise.insert("choices".into(), choices.clone());
         }
     }
-    if let Some(candidates) = inner
-        .get("candidates")
-        .or_else(|| value.get("candidates"))
-    {
+    if let Some(candidates) = inner.get("candidates").or_else(|| value.get("candidates")) {
         if let Some(arr) = candidates.as_array() {
             concise.insert(
                 "candidates".into(),
-                Value::Array(arr.iter().map(|cand| {
-                    if let Some(obj) = cand.as_object() {
-                        let mut cand_out = obj.clone();
-                        if let Some(content) = obj.get("content") {
-                            cand_out.insert("content".into(), simplify_message(content));
-                        }
-                        Value::Object(cand_out)
-                    } else {
-                        cand.clone()
-                    }
-                }).collect()),
+                Value::Array(
+                    arr.iter()
+                        .map(|cand| {
+                            if let Some(obj) = cand.as_object() {
+                                let mut cand_out = obj.clone();
+                                if let Some(content) = obj.get("content") {
+                                    cand_out.insert("content".into(), simplify_message(content));
+                                }
+                                Value::Object(cand_out)
+                            } else {
+                                cand.clone()
+                            }
+                        })
+                        .collect(),
+                ),
             );
         } else {
             concise.insert("candidates".into(), candidates.clone());
@@ -525,7 +576,9 @@ pub fn apply_storage_mode_to_body(raw: Option<String>, mode: &str) -> Option<Str
         return Some(raw);
     }
     match serde_json::from_str::<Value>(&raw) {
-        Ok(json) => serde_json::to_string(&simplify_payload_json(&json)).ok().or(Some(raw)),
+        Ok(json) => serde_json::to_string(&simplify_payload_json(&json))
+            .ok()
+            .or(Some(raw)),
         Err(_) => Some(truncate_chars(&raw, 8000)),
     }
 }
@@ -538,10 +591,19 @@ mod tests {
     #[test]
     fn redacts_api_keys_but_keeps_session_markers() {
         let mut headers = HeaderMap::new();
-        headers.insert("authorization", HeaderValue::from_static("Bearer sk-secret-customer-key"));
+        headers.insert(
+            "authorization",
+            HeaderValue::from_static("Bearer sk-secret-customer-key"),
+        );
         headers.insert("x-api-key", HeaderValue::from_static("sk-another"));
-        headers.insert("x-session-id", HeaderValue::from_static("sess-ops-compare-001"));
-        headers.insert("x-antigravity-session-id", HeaderValue::from_static("ag-think-42"));
+        headers.insert(
+            "x-session-id",
+            HeaderValue::from_static("sess-ops-compare-001"),
+        );
+        headers.insert(
+            "x-antigravity-session-id",
+            HeaderValue::from_static("ag-think-42"),
+        );
         headers.insert("user-agent", HeaderValue::from_static("claude-code/1.0"));
 
         let json = headers_to_redacted_json(&headers);
@@ -589,7 +651,10 @@ mod tests {
         });
 
         let simplified = simplify_payload_json(&req);
-        assert_eq!(simplified["tools"], tools, "Tools schema should be completely preserved!");
+        assert_eq!(
+            simplified["tools"], tools,
+            "Tools schema should be completely preserved!"
+        );
         assert_eq!(simplified["model"], "gemini-2.5-pro");
     }
 
@@ -620,12 +685,27 @@ mod tests {
         });
 
         let simplified = simplify_payload_json(&consolidated);
-        assert_eq!(simplified["_session_thinking_id"], "f4379d8e-02a3-4e44-902b-1a87c4a1b30c");
+        assert_eq!(
+            simplified["_session_thinking_id"],
+            "f4379d8e-02a3-4e44-902b-1a87c4a1b30c"
+        );
         assert_eq!(simplified["content"], "Here is the result of your query.");
-        assert_eq!(simplified["thinking"], "First, let's consider the problem deeply...");
-        assert_eq!(simplified["thinking_signature"], "sig_abcd_1234567890_very_long_valid_signature");
-        assert_eq!(simplified["tool_calls"][0]["function"]["name"], "get_weather");
-        assert_eq!(simplified["tool_calls"][0]["function"]["arguments"], "{\"location\":\"Beijing\"}");
+        assert_eq!(
+            simplified["thinking"],
+            "First, let's consider the problem deeply..."
+        );
+        assert_eq!(
+            simplified["thinking_signature"],
+            "sig_abcd_1234567890_very_long_valid_signature"
+        );
+        assert_eq!(
+            simplified["tool_calls"][0]["function"]["name"],
+            "get_weather"
+        );
+        assert_eq!(
+            simplified["tool_calls"][0]["function"]["arguments"],
+            "{\"location\":\"Beijing\"}"
+        );
         assert_eq!(simplified["usage"]["input_tokens"], 33724);
         assert_eq!(simplified["usage"]["output_tokens"], 35);
     }

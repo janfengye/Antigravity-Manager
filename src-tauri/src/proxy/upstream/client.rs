@@ -415,7 +415,9 @@ impl UpstreamClient {
                 .iter()
                 .filter_map(|(k, v)| v.to_str().ok().map(|s| (k.as_str(), s)))
                 .collect();
-            holder.set_headers_json(crate::proxy::payload_audit::header_pairs_to_redacted_json(pairs));
+            holder.set_headers_json(crate::proxy::payload_audit::header_pairs_to_redacted_json(
+                pairs,
+            ));
         });
 
         let mut has_triggered_downgrade = false;

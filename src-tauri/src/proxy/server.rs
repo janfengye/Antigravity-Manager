@@ -883,7 +883,10 @@ impl AxumServer {
             )
             .route("/accounts/warmup", post(admin_warm_up_all_accounts))
             .route("/accounts/:accountId/warmup", post(admin_warm_up_account))
-            .route("/system/data-dir", get(admin_get_data_dir_path).post(admin_set_data_dir))
+            .route(
+                "/system/data-dir",
+                get(admin_get_data_dir_path).post(admin_set_data_dir),
+            )
             .route("/system/updates/settings", get(admin_get_update_settings))
             .route(
                 "/system/updates/check-status",
@@ -2033,10 +2036,11 @@ async fn admin_set_proxy_monitor_enabled(
 async fn admin_get_proxy_logs_count_filtered(
     Query(params): Query<LogsRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-    let res: Result<Result<u64, String>, tokio::task::JoinError> = tokio::task::spawn_blocking(move || {
-        proxy_db::get_logs_count_filtered(&params.filter, params.errors_only)
-    })
-    .await;
+    let res: Result<Result<u64, String>, tokio::task::JoinError> =
+        tokio::task::spawn_blocking(move || {
+            proxy_db::get_logs_count_filtered(&params.filter, params.errors_only)
+        })
+        .await;
 
     match res {
         Ok(Ok(count)) => Ok(Json(count)),
@@ -2067,9 +2071,11 @@ async fn admin_clear_proxy_logs() -> impl IntoResponse {
 async fn admin_get_proxy_log_detail(
     Path(log_id): Path<String>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-    let res: Result<Result<crate::proxy::monitor::ProxyRequestLog, String>, tokio::task::JoinError> =
-        tokio::task::spawn_blocking(move || crate::modules::proxy_db::get_log_detail(&log_id))
-            .await;
+    let res: Result<
+        Result<crate::proxy::monitor::ProxyRequestLog, String>,
+        tokio::task::JoinError,
+    > = tokio::task::spawn_blocking(move || crate::modules::proxy_db::get_log_detail(&log_id))
+        .await;
 
     match res {
         Ok(Ok(log)) => Ok(Json(log)),
@@ -2102,7 +2108,10 @@ struct LogsFilterQuery {
 async fn admin_get_proxy_logs_filtered(
     Query(params): Query<LogsFilterQuery>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-    let res: Result<Result<Vec<crate::proxy::monitor::ProxyRequestLog>, String>, tokio::task::JoinError> = tokio::task::spawn_blocking(move || {
+    let res: Result<
+        Result<Vec<crate::proxy::monitor::ProxyRequestLog>, String>,
+        tokio::task::JoinError,
+    > = tokio::task::spawn_blocking(move || {
         crate::modules::proxy_db::get_logs_filtered(
             &params.filter,
             params.errors_only,
@@ -2168,7 +2177,9 @@ async fn admin_set_data_dir(
             Json(ErrorResponse { error: e }),
         )
     })?;
-    Ok(Json(crate::modules::account::format_data_dir_path(&new_path)))
+    Ok(Json(crate::modules::account::format_data_dir_path(
+        &new_path,
+    )))
 }
 
 // --- User Token Handlers ---
@@ -4289,7 +4300,8 @@ mod image_scheduler_tests {
     #[test]
     fn test_switch_request_deserialization_with_and_without_target_ide() {
         use super::SwitchRequest;
-        let with_ide: SwitchRequest = serde_json::from_str(r#"{"accountId": "acc_1", "targetIde": "agy"}"#).unwrap();
+        let with_ide: SwitchRequest =
+            serde_json::from_str(r#"{"accountId": "acc_1", "targetIde": "agy"}"#).unwrap();
         assert_eq!(with_ide.account_id, "acc_1");
         assert_eq!(with_ide.target_ide.as_deref(), Some("agy"));
 
@@ -4301,9 +4313,11 @@ mod image_scheduler_tests {
     #[tokio::test]
     async fn test_bind_tcp_listener_and_reuse() {
         let port = 18099;
-        let listener1 = super::bind_tcp_listener("127.0.0.1", port).expect("first bind should succeed");
+        let listener1 =
+            super::bind_tcp_listener("127.0.0.1", port).expect("first bind should succeed");
         drop(listener1);
-        let listener2 = super::bind_tcp_listener("127.0.0.1", port).expect("immediate re-bind must succeed with SO_REUSEADDR");
+        let listener2 = super::bind_tcp_listener("127.0.0.1", port)
+            .expect("immediate re-bind must succeed with SO_REUSEADDR");
         drop(listener2);
     }
 }

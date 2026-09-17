@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> 专业级 AI 账号管理与协议代理系统 (v4.7.3)
+> 专业级 AI 账号管理与协议代理系统 (v4.7.4)
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
 
@@ -8,7 +8,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.7.3-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.7.4-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -457,7 +457,7 @@ response = client.chat.completions.create(
 
 ## 📝 更新日志
 
-> 最新版本 **v4.7.3**（2026-09-16）：从0到1自研 Thinking Store 服务端思考链引擎（L1 内存+L2 SQLite 缓存与 AGZ1 极速压缩），根治第三方 CLI/Agent 思考签名丢失导致的模型降级与提前摆烂；四大协议流水线严格归一化为 Gemini Contents 与原生工具链调度；深度适配 DeepSeek Harness (DSH) 与 WorkBuddy 工具调用规范；全链路微观毫秒计时与横向三栏报文审计视窗；流量日志内存精简与磁盘配额防护。
+> 最新版本 **v4.7.4**（2026-09-17）：引入统一 Pipeline 流水线引擎全面抹平四大 AI 协议差异（OpenAI Chat / Responses、Claude、Gemini Native）；建立权威思考与加密签名归一化回填机制；复用 SQLite 只读连接查询工具签名，消除写事务与 fsync，大上下文映射耗时降低 98.5%（从 14.7s 降至 0.22s）；彻底修复 Hermes 流式闪退、OpenAI 协议 429/503 异常及中文指纹 502 Panic。
 
 👉 **[查看完整更新日志 CHANGELOG.md →](CHANGELOG.md)**
 

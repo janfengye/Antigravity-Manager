@@ -53,7 +53,12 @@ pub fn model_forces_server_thinking(model: &str) -> bool {
     if m.is_empty() {
         return false;
     }
-    if m.contains("image") || m.contains("imagen") || m.contains("embed") || m.contains("lite") || m.contains("preview") {
+    if m.contains("image")
+        || m.contains("imagen")
+        || m.contains("embed")
+        || m.contains("lite")
+        || m.contains("preview")
+    {
         return false;
     }
     m.contains("claude")
@@ -158,6 +163,18 @@ impl ThinkingStore {
 
         self.maybe_evict(store_key);
 
+        // Always hydrate L2 before appending. Otherwise the first capture after a
+        // process start can mark l2_loaded=true with only the new turn and permanently
+        // shadow older SQLite history on subsequent hydrate/restore calls.
+        let needs_l2 = self
+            .sessions
+            .get(store_key)
+            .map(|e| !e.l2_loaded)
+            .unwrap_or(true);
+        if needs_l2 {
+            let _ = self.load_turns(store_key);
+        }
+
         let persist = {
             let mut entry = self
                 .sessions
@@ -247,7 +264,9 @@ impl ThinkingStore {
 
     fn load_turns(&self, store_key: &str) -> Vec<Arc<ThinkingRecord>> {
         if let Some(e) = self.sessions.get(store_key) {
-            if e.l2_loaded {
+            // Trust warm non-empty memory. An empty l2_loaded entry is treated as
+            // stale (e.g. first hydrate before any capture) and reloads from SQLite.
+            if e.l2_loaded && !e.turns.is_empty() {
                 let turns = e.turns.clone();
                 drop(e);
                 if let Some(mut entry) = self.sessions.get_mut(store_key) {
@@ -257,13 +276,14 @@ impl ThinkingStore {
             }
         }
 
-        let persisted = crate::modules::proxy_db::load_thinking_records(store_key).unwrap_or_default();
+        let persisted =
+            crate::modules::proxy_db::load_thinking_records(store_key).unwrap_or_default();
         let loaded_len = persisted.len();
         let mut entry = self
             .sessions
             .entry(store_key.to_string())
             .or_insert_with(SessionEntry::new);
-        if !entry.l2_loaded && entry.turns.is_empty() && !persisted.is_empty() {
+        if entry.turns.is_empty() && !persisted.is_empty() {
             for p in persisted {
                 let rec = ThinkingRecord {
                     fingerprint: p.fingerprint,
@@ -402,10 +422,7 @@ impl ThinkingStore {
 
         let mut model_turns: Vec<ModelTurnMeta> = Vec::new();
         for (c_idx, content) in contents.iter().enumerate() {
-            let role = content
-                .get("role")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let role = content.get("role").and_then(|v| v.as_str()).unwrap_or("");
             if role != "model" && role != "assistant" {
                 continue;
             }
@@ -440,7 +457,10 @@ impl ThinkingStore {
             for id in &rec.tool_ids {
                 by_tool.entry(id.as_str()).or_default().push(rec_idx);
             }
-            by_fp.entry(rec.fingerprint.as_str()).or_default().push(rec_idx);
+            by_fp
+                .entry(rec.fingerprint.as_str())
+                .or_default()
+                .push(rec_idx);
         }
 
         // 从尾部往回匹配：最新 model 轮次优先吃最新记录，避免早期短回复抢走后轮思考。
@@ -528,6 +548,7 @@ impl ThinkingStore {
                     if norm_rec == norm_vis
                         || norm_rec.starts_with(norm_vis)
                         || norm_vis.starts_with(norm_rec)
+                        || (norm_rec.len() >= 20 && norm_vis.ends_with(norm_rec))
                     {
                         turn.matched_record_idx = Some(rec_idx);
                         used[rec_idx] = true;
@@ -541,11 +562,10 @@ impl ThinkingStore {
         // 仅对对话中【最后一个 model 轮次】进行保底匹配，绝不污染历史早期轮次！
         if let Some(last_turn) = model_turns.last_mut() {
             if !last_turn.already_complete && last_turn.matched_record_idx.is_none() {
-                let last_turn_has_tools = !last_turn.tool_ids.is_empty() || !last_turn.tool_names.is_empty();
-                if let Some((last_unused_rec_idx, _)) = records
-                    .iter()
-                    .enumerate()
-                    .rfind(|(idx, r)| {
+                let last_turn_has_tools =
+                    !last_turn.tool_ids.is_empty() || !last_turn.tool_names.is_empty();
+                if let Some((last_unused_rec_idx, _)) =
+                    records.iter().enumerate().rfind(|(idx, r)| {
                         if used[*idx] {
                             return false;
                         }
@@ -594,11 +614,12 @@ impl ThinkingStore {
 
             parts.retain(|p| p.get("thought").and_then(|t| t.as_bool()) != Some(true));
 
-            let thought_text = if is_placeholder_thought(&rec.thought) || rec.thought.trim().is_empty() {
-                "..."
-            } else {
-                rec.thought.as_str()
-            };
+            let thought_text =
+                if is_placeholder_thought(&rec.thought) || rec.thought.trim().is_empty() {
+                    "..."
+                } else {
+                    rec.thought.as_str()
+                };
 
             let mut thought_part = json!({
                 "text": thought_text,
@@ -653,7 +674,11 @@ impl ThinkingStore {
             return;
         }
 
-        let mem_turns = self.sessions.get(store_key).map(|e| e.turns.len()).unwrap_or(0);
+        let mem_turns = self
+            .sessions
+            .get(store_key)
+            .map(|e| e.turns.len())
+            .unwrap_or(0);
         if mem_turns == 0 {
             return;
         }
@@ -732,8 +757,7 @@ impl ThinkingStore {
 
         // Delete orphans by fingerprint. Never DELETE+re-INSERT the kept blobs.
         let _ = crate::modules::proxy_db::delete_thinking_records_except_fingerprints(
-            store_key,
-            &keep_fps,
+            store_key, &keep_fps,
         );
     }
 
@@ -811,7 +835,10 @@ impl TurnAccumulator {
     }
 
     pub fn ingest_part(&mut self, part: &Value) {
-        let is_thought = part.get("thought").and_then(|v| v.as_bool()).unwrap_or(false);
+        let is_thought = part
+            .get("thought")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
             if is_thought {
                 self.thought.push_str(text);
@@ -946,7 +973,10 @@ fn contents_have_capturable_thought(contents: &[Value]) -> bool {
             continue;
         };
         for part in parts {
-            let is_thought = part.get("thought").and_then(|v| v.as_bool()).unwrap_or(false);
+            let is_thought = part
+                .get("thought")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             if !is_thought {
                 continue;
             }
@@ -985,15 +1015,29 @@ pub fn capture_gemini_response(store_key: &str, response: &Value) {
 }
 
 /// 四大协议统一思考补齐管线：确保所有 Gemini contents 中的 model 轮次在开启思考时，必须具备合法的思考块与签名
-pub fn finalize_gemini_contents_thinking(
-    contents: &mut [Value],
-    is_thinking_enabled: bool,
-) {
+pub fn finalize_gemini_contents_thinking(contents: &mut [Value], is_thinking_enabled: bool) {
     for msg in contents.iter_mut() {
-        let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
-        if role != "model" && role != "assistant" {
+        let is_model = matches!(
+            msg.get("role").and_then(|r| r.as_str()),
+            Some("model") | Some("assistant")
+        );
+
+        if !is_thinking_enabled {
+            // 当思考模式为关时，清洗所有角色部件（包括 functionResponse）上的签名
+            if let Some(parts) = msg.get_mut("parts").and_then(|p| p.as_array_mut()) {
+                for part in parts.iter_mut() {
+                    if let Some(obj) = part.as_object_mut() {
+                        obj.remove("thought_signature");
+                        obj.remove("thoughtSignature");
+                    }
+                }
+            }
+        }
+
+        if !is_model {
             continue;
         }
+
         if let Some(parts) = msg.get_mut("parts").and_then(|p| p.as_array_mut()) {
             let mut thinking_parts = Vec::new();
             let mut other_parts = Vec::new();
@@ -1003,8 +1047,15 @@ pub fn finalize_gemini_contents_thinking(
                     // 统一清洗向 Google 发送的非标准蛇形字段
                     obj.remove("thought_signature");
                 }
-                let is_thought = part.get("thought").and_then(|v| v.as_bool()).unwrap_or(false)
-                    || part.get("thoughtSignature").is_some();
+                // 严格排除工具调用/返回：functionCall 也会带 thoughtSignature，
+                // 绝不能仅凭签名就判定为思考块，否则会漏补首位 thought、关思考时误删工具。
+                let is_thought = part
+                    .get("thought")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+                    || (part.get("thoughtSignature").is_some()
+                        && part.get("functionCall").is_none()
+                        && part.get("functionResponse").is_none());
                 if is_thought {
                     thinking_parts.push(part);
                 } else {
@@ -1013,30 +1064,51 @@ pub fn finalize_gemini_contents_thinking(
             }
 
             if is_thinking_enabled {
+                // Prefer a real tool signature from this turn when aligning placeholder thoughts.
+                let turn_real_sig: Option<String> = other_parts.iter().find_map(|p| {
+                    if p.get("functionCall").is_some() {
+                        p.get("thoughtSignature")
+                            .and_then(|s| s.as_str())
+                            .filter(|s| is_real_signature(s))
+                            .map(|s| s.to_string())
+                    } else {
+                        None
+                    }
+                });
+
                 if thinking_parts.is_empty() {
                     // 优先继承本轮工具调用身上的真实加密签名
-                    let turn_sig = other_parts
-                        .iter()
-                        .find_map(|p| {
-                            if p.get("functionCall").is_some() {
-                                p.get("thoughtSignature").and_then(|s| s.as_str())
-                            } else {
-                                None
-                            }
-                        })
-                        .unwrap_or(SENTINEL_SIGNATURE);
+                    let turn_sig = turn_real_sig.as_deref().unwrap_or(SENTINEL_SIGNATURE);
 
                     thinking_parts.push(json!({
                         "text": "...",
                         "thought": true,
                         "thoughtSignature": turn_sig,
                     }));
+                } else if let Some(ref real_sig) = turn_real_sig {
+                    // Thought placeholder/sentinel must not block a real tool signature that
+                    // SignatureCache or ThinkingStore already placed on functionCall.
+                    for tp in thinking_parts.iter_mut() {
+                        let valid = tp
+                            .get("thoughtSignature")
+                            .and_then(|s| s.as_str())
+                            .map(is_real_signature)
+                            .unwrap_or(false);
+                        if !valid {
+                            tp["thoughtSignature"] = json!(real_sig);
+                        }
+                    }
+                } else {
+                    for tp in thinking_parts.iter_mut() {
+                        if tp.get("thoughtSignature").is_none() {
+                            tp["thoughtSignature"] = json!(SENTINEL_SIGNATURE);
+                        }
+                    }
                 }
 
                 // 为所有缺失签名的工具调用打上保底哨兵
                 for part in other_parts.iter_mut() {
-                    if part.get("functionCall").is_some()
-                        && part.get("thoughtSignature").is_none()
+                    if part.get("functionCall").is_some() && part.get("thoughtSignature").is_none()
                     {
                         part["thoughtSignature"] = json!(SENTINEL_SIGNATURE);
                     }
@@ -1045,10 +1117,17 @@ pub fn finalize_gemini_contents_thinking(
                 // 思考块始终强制排在最前面，其他部件紧随其后
                 parts.extend(thinking_parts);
             } else {
-                // 当思考模式为关时，不应补充或保留任何思考块，清洗所有 functionCall 上的 thoughtSignature
+                // 当思考模式为关时，清洗所有 functionCall 上的 thoughtSignature
                 for part in other_parts.iter_mut() {
                     if let Some(obj) = part.as_object_mut() {
                         obj.remove("thoughtSignature");
+                    }
+                }
+                // 若含有实质性思考内容的思考块，单次出站降级为普通文本以防丢失语义；纯占位符（如 "..."）则直接剔除
+                for tp in thinking_parts {
+                    let text = tp.get("text").and_then(|t| t.as_str()).unwrap_or("");
+                    if is_meaningful_thought(text) {
+                        parts.push(json!({ "text": text }));
                     }
                 }
             }
@@ -1057,7 +1136,6 @@ pub fn finalize_gemini_contents_thinking(
         }
     }
 }
-
 
 /// 从 URL Query 字符串中提取 session / conversation 标识符
 pub fn extract_session_from_query_str(query: &str) -> Option<String> {
@@ -1186,14 +1264,17 @@ const ALIAS_SESSION_HEADERS: &[&str] = &[
 ];
 
 fn header_session_value(headers: &HeaderMap, name: &str) -> Option<String> {
-    headers.get(name).and_then(|h| h.to_str().ok()).and_then(|v| {
-        let v = v.trim();
-        if v.is_empty() {
-            None
-        } else {
-            Some(sanitize_session_id(v))
-        }
-    })
+    headers
+        .get(name)
+        .and_then(|h| h.to_str().ok())
+        .and_then(|v| {
+            let v = v.trim();
+            if v.is_empty() {
+                None
+            } else {
+                Some(sanitize_session_id(v))
+            }
+        })
 }
 
 fn is_generic_x_session_id(name: &str) -> bool {
@@ -1282,7 +1363,10 @@ pub fn sanitize_session_id(raw: &str) -> String {
 }
 
 fn client_id_from_store_key(store_key: &str) -> &str {
-    store_key.split_once(':').map(|(_, rest)| rest).unwrap_or(store_key)
+    store_key
+        .split_once(':')
+        .map(|(_, rest)| rest)
+        .unwrap_or(store_key)
 }
 
 fn is_real_signature(sig: &str) -> bool {
@@ -1296,17 +1380,39 @@ pub fn is_placeholder_thought(s: &str) -> bool {
         || t.chars().all(|c| c == '.' || c == '·' || c == '…')
 }
 
+pub fn is_meaningful_thought(thought: &str) -> bool {
+    let t = thought.trim();
+    if t.is_empty() || is_placeholder_thought(t) {
+        return false;
+    }
+    // 拦截伪思考标签与客户端占位脏数据
+    let stripped = t
+        .trim_start_matches("<think>")
+        .trim_end_matches("</think>")
+        .trim_start_matches("Thinking Process:")
+        .trim_start_matches("Thinking Process")
+        .trim_start_matches("[Thinking]")
+        .trim();
+    if stripped.is_empty()
+        || stripped.eq_ignore_ascii_case("none")
+        || stripped.eq_ignore_ascii_case("null")
+        || stripped.eq_ignore_ascii_case("undefined")
+        || is_placeholder_thought(stripped)
+    {
+        return false;
+    }
+    true
+}
+
 fn is_capturable_thought(thought: &str, signature: Option<&str>) -> bool {
     if signature.is_some_and(is_real_signature) {
         return true;
     }
-    !is_placeholder_thought(thought)
+    is_meaningful_thought(thought)
 }
 
 fn record_bytes(rec: &ThinkingRecord) -> usize {
-    rec.thought.len()
-        + rec.signature.as_ref().map(|s| s.len()).unwrap_or(0)
-        + rec.visible.len()
+    rec.thought.len() + rec.signature.as_ref().map(|s| s.len()).unwrap_or(0) + rec.visible.len()
 }
 
 fn is_stronger_record(new: &ThinkingRecord, old: &ThinkingRecord) -> bool {
@@ -1325,7 +1431,11 @@ fn match_existing_record(
             if used[i] {
                 continue;
             }
-            if rec.tool_ids.iter().any(|id| ex.tool_ids.iter().any(|x| x == id)) {
+            if rec
+                .tool_ids
+                .iter()
+                .any(|id| ex.tool_ids.iter().any(|x| x == id))
+            {
                 return Some(i);
             }
         }
@@ -1374,6 +1484,17 @@ fn turn_needs_restore(parts: &[Value], existing_thought: &str) -> bool {
     if is_placeholder_thought(existing_thought) {
         return true;
     }
+    // Sentinel / missing thought signature still needs ThinkingStore or tool-sig alignment.
+    let thought_sig_ok = parts.iter().any(|p| {
+        p.get("thought").and_then(|v| v.as_bool()).unwrap_or(false)
+            && p.get("thoughtSignature")
+                .or_else(|| p.get("thought_signature"))
+                .and_then(|s| s.as_str())
+                .is_some_and(is_real_signature)
+    });
+    if !thought_sig_ok {
+        return true;
+    }
     let mut saw_function_call = false;
     for part in parts {
         if part.get("functionCall").is_some() {
@@ -1402,7 +1523,10 @@ fn inspect_parts(parts: &[Value]) -> (String, Vec<String>, Vec<String>, String) 
     let mut tool_ids = Vec::new();
     let mut tool_names = Vec::new();
     for part in parts {
-        let is_thought = part.get("thought").and_then(|v| v.as_bool()).unwrap_or(false);
+        let is_thought = part
+            .get("thought")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
             if is_thought {
                 thought.push_str(text);
@@ -1452,9 +1576,7 @@ mod tests {
     use super::*;
 
     fn rec(thought: &str, visible: &str, tool_id: Option<&str>) -> ThinkingRecord {
-        let tool_ids = tool_id
-            .map(|id| vec![id.to_string()])
-            .unwrap_or_default();
+        let tool_ids = tool_id.map(|id| vec![id.to_string()]).unwrap_or_default();
         let tool_names = if tool_id.is_some() {
             vec!["shell".to_string()]
         } else {
@@ -1482,10 +1604,16 @@ mod tests {
         })];
         let n = store.restore_gemini_contents("t:s1", &mut contents);
         assert_eq!(n, 1);
-        assert_eq!(contents[0]["parts"][0]["text"].as_str().unwrap().len(), 50_000);
+        assert_eq!(
+            contents[0]["parts"][0]["text"].as_str().unwrap().len(),
+            50_000
+        );
         assert_eq!(contents[0]["parts"][0]["thought"], true);
         assert_eq!(
-            contents[0]["parts"][0]["thoughtSignature"].as_str().unwrap().len(),
+            contents[0]["parts"][0]["thoughtSignature"]
+                .as_str()
+                .unwrap()
+                .len(),
             60
         );
     }
@@ -1519,7 +1647,10 @@ mod tests {
         assert_eq!(contents[0]["parts"][0]["thought"], true);
         assert_eq!(contents[0]["parts"][0]["text"], "plan");
         assert_eq!(
-            contents[0]["parts"][1]["thoughtSignature"].as_str().unwrap().len(),
+            contents[0]["parts"][1]["thoughtSignature"]
+                .as_str()
+                .unwrap()
+                .len(),
             60
         );
     }
@@ -1581,13 +1712,15 @@ mod tests {
     #[test]
     fn same_fingerprint_updates_in_place() {
         let store = ThinkingStore::new();
-        store.record("t:s1", rec("short", "same", None));
-        store.record("t:s1", rec("much longer thought", "same", None));
-        let stats = store.session_stats("t:s1").unwrap();
+        let key = format!("t:s1-{}", uuid::Uuid::new_v4());
+        store.record(&key, rec("short", "same", None));
+        store.record(&key, rec("much longer thought", "same", None));
+        let stats = store.session_stats(&key).unwrap();
         assert_eq!(stats.0, 1);
         let mut contents = vec![json!({"role":"model","parts":[{"text":"same"}]})];
-        store.restore_gemini_contents("t:s1", &mut contents);
+        store.restore_gemini_contents(&key, &mut contents);
         assert_eq!(contents[0]["parts"][0]["text"], "much longer thought");
+        store.end_session(&key);
     }
 
     #[test]
@@ -1596,11 +1729,7 @@ mod tests {
         // Turn 2 generated thinking + tool call
         store.record(
             "t:s1",
-            rec(
-                "**Inferring User's Intention**",
-                "",
-                Some("call_54421"),
-            ),
+            rec("**Inferring User's Intention**", "", Some("call_54421")),
         );
 
         // Turn 0: "你好！" (pure text, no thought)
@@ -1628,7 +1757,10 @@ mod tests {
 
         // Turn 0 must NOT have thinking injected
         assert_eq!(contents[0]["parts"].as_array().unwrap().len(), 1);
-        assert_eq!(contents[0]["parts"][0]["text"], "你好！我是 JeikCode AI 编程助手。");
+        assert_eq!(
+            contents[0]["parts"][0]["text"],
+            "你好！我是 JeikCode AI 编程助手。"
+        );
         assert!(contents[0]["parts"][0].get("thought").is_none());
 
         // Turn 1 must NOT have thinking injected
@@ -1638,11 +1770,11 @@ mod tests {
 
         // Turn 2 MUST have thinking injected and matched with call_54421
         assert_eq!(contents[2]["parts"][0]["thought"], true);
-        assert_eq!(contents[2]["parts"][0]["text"], "**Inferring User's Intention**");
         assert_eq!(
-            contents[2]["parts"][1]["functionCall"]["id"],
-            "call_54421"
+            contents[2]["parts"][0]["text"],
+            "**Inferring User's Intention**"
         );
+        assert_eq!(contents[2]["parts"][1]["functionCall"]["id"], "call_54421");
     }
 
     #[test]
@@ -1658,7 +1790,9 @@ mod tests {
             ThinkingRecord {
                 fingerprint: fp,
                 thought: "Parallel execution planned".to_string(),
-                signature: Some("sig_parallel_12345678901234567890123456789012345678901234567890".to_string()),
+                signature: Some(
+                    "sig_parallel_12345678901234567890123456789012345678901234567890".to_string(),
+                ),
                 tool_ids: tool_ids.clone(),
                 tool_names: tool_names.clone(),
                 visible: "I will read both files in parallel".to_string(),
@@ -1681,24 +1815,37 @@ mod tests {
         // Index 0: thought block
         assert_eq!(parts[0]["thought"], true);
         assert_eq!(parts[0]["text"], "Parallel execution planned");
-        assert_eq!(parts[0]["thoughtSignature"], "sig_parallel_12345678901234567890123456789012345678901234567890");
+        assert_eq!(
+            parts[0]["thoughtSignature"],
+            "sig_parallel_12345678901234567890123456789012345678901234567890"
+        );
 
         // Index 1: visible text preserved
         assert_eq!(parts[1]["text"], "I will read both files in parallel");
 
         // Index 2: tool 1 has signature
         assert_eq!(parts[2]["functionCall"]["id"], "call_batch_1");
-        assert_eq!(parts[2]["thoughtSignature"], "sig_parallel_12345678901234567890123456789012345678901234567890");
+        assert_eq!(
+            parts[2]["thoughtSignature"],
+            "sig_parallel_12345678901234567890123456789012345678901234567890"
+        );
 
         // Index 3: tool 2 has signature
         assert_eq!(parts[3]["functionCall"]["id"], "call_batch_2");
-        assert_eq!(parts[3]["thoughtSignature"], "sig_parallel_12345678901234567890123456789012345678901234567890");
+        assert_eq!(
+            parts[3]["thoughtSignature"],
+            "sig_parallel_12345678901234567890123456789012345678901234567890"
+        );
     }
 
     #[test]
     fn test_sqlite_persistence_and_recovery() {
         let store_key = "test_session_sqlite_recovery_unique";
-        let fp = fingerprint("Persisted visible text", &["call_persisted_999".to_string()], &["bash".to_string()]);
+        let fp = fingerprint(
+            "Persisted visible text",
+            &["call_persisted_999".to_string()],
+            &["bash".to_string()],
+        );
         let rec = ThinkingRecord {
             fingerprint: fp,
             thought: "Thought restored from SQLite".to_string(),
@@ -1738,8 +1885,14 @@ mod tests {
         let parts = contents[0]["parts"].as_array().unwrap();
         assert_eq!(parts[0]["thought"], true);
         assert_eq!(parts[0]["text"], "Thought restored from SQLite");
-        assert_eq!(parts[0]["thoughtSignature"], "sig_persisted_1234567890123456789012345678901234567890");
-        assert_eq!(parts[2]["thoughtSignature"], "sig_persisted_1234567890123456789012345678901234567890");
+        assert_eq!(
+            parts[0]["thoughtSignature"],
+            "sig_persisted_1234567890123456789012345678901234567890"
+        );
+        assert_eq!(
+            parts[2]["thoughtSignature"],
+            "sig_persisted_1234567890123456789012345678901234567890"
+        );
     }
 
     #[test]
@@ -1755,7 +1908,13 @@ mod tests {
 
         let save = |fp: &str, thought: &str, visible: &str, ids: &[String], names: &[String]| {
             crate::modules::proxy_db::save_thinking_record(
-                store_key, fp, thought, Some(sig), ids, names, visible,
+                store_key,
+                fp,
+                thought,
+                Some(sig),
+                ids,
+                names,
+                visible,
             )
         };
 
@@ -1772,7 +1931,11 @@ mod tests {
         assert!(save(&fp_hello, "thought-3", "你好", &[], &[]).is_ok());
 
         let rows = crate::modules::proxy_db::load_thinking_records(store_key).unwrap_or_default();
-        assert_eq!(rows.len(), 3, "older 你好 turn must not be overwritten: {rows:?}");
+        assert_eq!(
+            rows.len(),
+            3,
+            "older 你好 turn must not be overwritten: {rows:?}"
+        );
         assert_eq!(rows[0].thought, "thought-1-longer");
         assert_eq!(rows[1].thought, "thought-tool");
         assert_eq!(rows[2].thought, "thought-3");
@@ -1782,7 +1945,9 @@ mod tests {
     #[test]
     fn test_explicit_session_id_and_query_extraction() {
         // 1. Query parameter extraction
-        let sid = extract_session_from_query_str("model=gemini-2.5-pro&session_id=win_alpha_101&temp=0.7");
+        let sid = extract_session_from_query_str(
+            "model=gemini-2.5-pro&session_id=win_alpha_101&temp=0.7",
+        );
         assert_eq!(sid.as_deref(), Some("win_alpha_101"));
 
         let sid_alias = extract_session_from_query_str("channel=proj_beta");
@@ -1801,7 +1966,8 @@ mod tests {
             }
         });
         let empty_headers = HeaderMap::new();
-        let scope2 = SessionScope::from_headers_and_body(&empty_headers, Some(&body), "fallback_id");
+        let scope2 =
+            SessionScope::from_headers_and_body(&empty_headers, Some(&body), "fallback_id");
         assert_eq!(scope2.client_id, "meta-conv-888");
     }
 
@@ -1811,18 +1977,27 @@ mod tests {
 
         let mut atom = HeaderMap::new();
         atom.insert("x-atomcode-session-id", uuid.parse().unwrap());
-        assert_eq!(SessionScope::from_headers(&atom, "fallback").client_id, uuid);
+        assert_eq!(
+            SessionScope::from_headers(&atom, "fallback").client_id,
+            uuid
+        );
 
         let mut jeik = HeaderMap::new();
         jeik.insert("x-jeikcode-sessionid", uuid.parse().unwrap());
-        assert_eq!(SessionScope::from_headers(&jeik, "fallback").client_id, uuid);
+        assert_eq!(
+            SessionScope::from_headers(&jeik, "fallback").client_id,
+            uuid
+        );
 
         let mut multi = HeaderMap::new();
         multi.insert("x-api-key", "secret".parse().unwrap());
         multi.insert("x-atomcode-session-id", uuid.parse().unwrap());
         multi.insert("x-jeikcode-sessionid", uuid.parse().unwrap());
         multi.insert("x-session-id", uuid.parse().unwrap());
-        assert_eq!(SessionScope::from_headers(&multi, "fallback").client_id, uuid);
+        assert_eq!(
+            SessionScope::from_headers(&multi, "fallback").client_id,
+            uuid
+        );
 
         let mut custom = HeaderMap::new();
         custom.insert("x-windsurf-session-id", "wind-tab-1".parse().unwrap());
@@ -1900,8 +2075,7 @@ mod tests {
         assert_eq!(contents[0]["parts"][0]["text"], "think-turn1");
         assert_eq!(contents[1]["parts"][0]["thought"], true);
         assert_eq!(
-            contents[1]["parts"][0]["text"],
-            "think-turn2",
+            contents[1]["parts"][0]["text"], "think-turn2",
             "latest incomplete turn must take the latest matching record, not the first 你好"
         );
     }
@@ -1937,11 +2111,24 @@ mod tests {
     #[test]
     fn capture_from_client_history_and_prune_compressed_turns() {
         let store = ThinkingStore::new();
-        let key = "t:compress-session";
-        store.record(key, rec("thought-old-1", "old visible one", Some("call_old_1")));
-        store.record(key, rec("thought-old-2", "old visible two", Some("call_old_2")));
-        store.record(key, rec("thought-old-3", "old visible three", Some("call_old_3")));
-        store.record(key, rec("thought-keep", "kept latest answer", Some("call_keep")));
+        let session_key = format!("t:compress-{}", uuid::Uuid::new_v4());
+        let key = &session_key;
+        store.record(
+            key,
+            rec("thought-old-1", "old visible one", Some("call_old_1")),
+        );
+        store.record(
+            key,
+            rec("thought-old-2", "old visible two", Some("call_old_2")),
+        );
+        store.record(
+            key,
+            rec("thought-old-3", "old visible three", Some("call_old_3")),
+        );
+        store.record(
+            key,
+            rec("thought-keep", "kept latest answer", Some("call_keep")),
+        );
         store.record(key, rec("thought-tail", "newest unused", None));
 
         // Client /compact dropped the first three turns; only the latest kept turn remains.
@@ -1957,9 +2144,13 @@ mod tests {
         assert_eq!(restored, 1);
         store.prune_orphaned_records(key, &contents);
         let (turns, _) = store.session_stats(key).unwrap();
-        assert!(turns <= 3, "orphaned compressed turns should be pruned, got {turns}");
+        assert!(
+            turns <= 3,
+            "orphaned compressed turns should be pruned, got {turns}"
+        );
         let parts = contents[0]["parts"].as_array().unwrap();
         assert_eq!(parts[0]["text"], "thought-keep");
+        store.end_session(key);
     }
 
     #[test]
@@ -2044,7 +2235,10 @@ mod tests {
 
         store.ingest_from_contents(key, &contents);
         let (after, _) = store.session_stats(key).unwrap();
-        assert_eq!(after, 20, "placeholder history must not be appended as new turns");
+        assert_eq!(
+            after, 20,
+            "placeholder history must not be appended as new turns"
+        );
         let _ = crate::modules::proxy_db::delete_thinking_records_for_session(key);
     }
 
@@ -2128,7 +2322,10 @@ mod tests {
         assert_eq!(n, 12);
         for i in 0..12 {
             let parts = contents[i]["parts"].as_array().unwrap();
-            assert_eq!(parts[0]["thought"], true, "thought must stay at parts[0] for turn {i}");
+            assert_eq!(
+                parts[0]["thought"], true,
+                "thought must stay at parts[0] for turn {i}"
+            );
             assert_eq!(parts[0]["text"], format!("THOUGHT-BLOCK-{i}"));
             assert_eq!(parts[0]["thoughtSignature"].as_str().unwrap().len(), 60);
             assert_eq!(parts[1]["text"], format!("answer {i}"));
@@ -2141,5 +2338,215 @@ mod tests {
         assert_eq!(turns, 12, "placeholder fill must not prune live tool turns");
         let _ = crate::modules::proxy_db::delete_thinking_records_for_session(key);
     }
-}
 
+    #[test]
+    fn signed_function_call_is_not_mistaken_for_thinking_block() {
+        let real_sig = "Ep4MCpsMARFNMg9NDlK9RXXz5Mzq9mniX9KSQBBzbUx3k85w/qDgtcE+28NH+1EvPeULAprqUquvYXGMzUXGy1xJoMnqdkC4vqebuhyd2Xhs0oz+OhqcOTwLhGYOG0KBKQ87Hfw4q/sMCSgf2gz4vFMa6V6kKMJepYlPXKFJJF4ok+W6lUt3PfYln8K9Dh7wB/40iHiZ2BnJd++6hfUwu9Bz1n795S50l0yCj84EaSCDDF334Erxq7Fo";
+
+        // Case 1: thinking enabled, only signed functionCall → must prepend real thought block
+        let mut contents = vec![json!({
+            "role": "model",
+            "parts": [
+                {
+                    "functionCall": {
+                        "name": "read_file",
+                        "id": "call_1",
+                        "args": { "path": "a.rs" }
+                    },
+                    "thoughtSignature": real_sig
+                }
+            ]
+        })];
+        finalize_gemini_contents_thinking(&mut contents, true);
+        let parts = contents[0]["parts"].as_array().unwrap();
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0]["thought"], true, "thought must be parts[0]");
+        assert_eq!(parts[0]["text"], "...");
+        assert_eq!(parts[0]["thoughtSignature"], real_sig);
+        assert!(parts[1].get("functionCall").is_some());
+        assert_eq!(parts[1]["thoughtSignature"], real_sig);
+
+        // Case 2: thinking disabled → signed functionCall must survive (not discarded as thought)
+        let mut contents_off = vec![json!({
+            "role": "model",
+            "parts": [
+                {
+                    "functionCall": {
+                        "name": "bash",
+                        "id": "call_9",
+                        "args": {}
+                    },
+                    "thoughtSignature": real_sig
+                }
+            ]
+        })];
+        finalize_gemini_contents_thinking(&mut contents_off, false);
+        let parts_off = contents_off[0]["parts"].as_array().unwrap();
+        assert_eq!(
+            parts_off.len(),
+            1,
+            "functionCall must not be dropped when thinking is off"
+        );
+        assert!(parts_off[0].get("functionCall").is_some());
+        assert!(parts_off[0].get("thoughtSignature").is_none());
+    }
+
+    #[test]
+    fn finalize_upgrades_sentinel_thought_from_tool_real_signature() {
+        let real_sig = "Ep4MCpsMARFNMg9NDlK9RXXz5Mzq9mniX9KSQBBzbUx3k85w/qDgtcE+28NH+1EvPeULAprqUquvYXGMzUXGy1xJoMnqdkC4vqebuhyd2Xhs0oz+OhqcOTwLhGYOG0KBKQ87Hfw4q/sMCSgf2gz4vFMa6V6kKMJepYlPXKFJJF4ok+W6lUt3PfYln8K9Dh7wB/40iHiZ2BnJd++6hfUwu9Bz1n795S50l0yCj84EaSCDDF334Erxq7Fo";
+        let mut contents = vec![json!({
+            "role": "model",
+            "parts": [
+                {
+                    "text": "...",
+                    "thought": true,
+                    "thoughtSignature": SENTINEL_SIGNATURE
+                },
+                {
+                    "functionCall": {
+                        "name": "read_file",
+                        "id": "call_upgrade",
+                        "args": {}
+                    },
+                    "thoughtSignature": real_sig
+                }
+            ]
+        })];
+        finalize_gemini_contents_thinking(&mut contents, true);
+        let parts = contents[0]["parts"].as_array().unwrap();
+        assert_eq!(parts[0]["thought"], true);
+        assert_eq!(
+            parts[0]["thoughtSignature"], real_sig,
+            "sentinel thought must inherit tool real sig"
+        );
+        assert_eq!(parts[1]["thoughtSignature"], real_sig);
+    }
+
+    #[test]
+    fn turn_needs_restore_when_thought_signature_is_sentinel() {
+        let parts = vec![
+            json!({
+                "text": "some real looking text that is not a placeholder",
+                "thought": true,
+                "thoughtSignature": SENTINEL_SIGNATURE
+            }),
+            json!({
+                "functionCall": { "name": "shell", "id": "call_x", "args": {} },
+                "thoughtSignature": SENTINEL_SIGNATURE
+            }),
+        ];
+        assert!(
+            turn_needs_restore(&parts, "some real looking text that is not a placeholder"),
+            "sentinel thought signature must still request restore"
+        );
+    }
+
+    #[test]
+    fn test_is_meaningful_thought_sanitizer() {
+        // Placeholders & empty must fail
+        assert!(!is_meaningful_thought(""));
+        assert!(!is_meaningful_thought("   "));
+        assert!(!is_meaningful_thought("..."));
+        assert!(!is_meaningful_thought("···"));
+        assert!(!is_meaningful_thought("."));
+
+        // Pseudo-thinking tags & placeholders must fail
+        assert!(!is_meaningful_thought("<think></think>"));
+        assert!(!is_meaningful_thought("<think>\n\n</think>"));
+        assert!(!is_meaningful_thought("Thinking Process:\n"));
+        assert!(!is_meaningful_thought("[Thinking]"));
+        assert!(!is_meaningful_thought("None"));
+        assert!(!is_meaningful_thought("none"));
+        assert!(!is_meaningful_thought("null"));
+        assert!(!is_meaningful_thought("undefined"));
+        assert!(!is_meaningful_thought("[Thinking]\n..."));
+
+        // Real thoughts must pass
+        assert!(is_meaningful_thought(
+            "Let's analyze the problem step by step."
+        ));
+        assert!(is_meaningful_thought(
+            "<think>First compute the square root of 16, which is 4.</think>"
+        ));
+        assert!(is_meaningful_thought(
+            "Thinking Process:\n1. Check file existence\n2. Open file"
+        ));
+    }
+
+    #[test]
+    fn test_finalize_thinking_disabled_downgrades_meaningful_thought_and_strips_placeholders() {
+        let mut contents = vec![
+            json!({
+                "role": "model",
+                "parts": [
+                    {
+                        "text": "...",
+                        "thought": true,
+                        "thoughtSignature": SENTINEL_SIGNATURE
+                    },
+                    {
+                        "text": "Hello, how can I help?"
+                    }
+                ]
+            }),
+            json!({
+                "role": "model",
+                "parts": [
+                    {
+                        "text": "Real thought: solving user query carefully.",
+                        "thought": true,
+                        "thoughtSignature": "some_sig"
+                    },
+                    {
+                        "text": "Here is the answer."
+                    }
+                ]
+            }),
+        ];
+
+        finalize_gemini_contents_thinking(&mut contents, false);
+
+        // Turn 1: placeholder "..." thought is dropped, only visible text survives
+        let parts1 = contents[0]["parts"].as_array().unwrap();
+        assert_eq!(parts1.len(), 1);
+        assert_eq!(parts1[0]["text"], "Hello, how can I help?");
+        assert!(parts1[0].get("thought").is_none());
+
+        // Turn 2: meaningful thought is downgraded to text {"text": "Real thought: ..."}
+        let parts2 = contents[1]["parts"].as_array().unwrap();
+        assert_eq!(parts2.len(), 2);
+        assert_eq!(
+            parts2[0]["text"],
+            "Real thought: solving user query carefully."
+        );
+        assert!(parts2[0].get("thought").is_none());
+        assert!(parts2[0].get("thoughtSignature").is_none());
+        assert_eq!(parts2[1]["text"], "Here is the answer.");
+    }
+
+    #[test]
+    fn test_finalize_thinking_disabled_cleans_user_function_response_signature() {
+        let mut contents = vec![json!({
+            "role": "user",
+            "parts": [
+                {
+                    "functionResponse": {
+                        "name": "calc",
+                        "response": { "result": 42 }
+                    },
+                    "thoughtSignature": "sig_to_be_cleaned"
+                }
+            ]
+        })];
+
+        finalize_gemini_contents_thinking(&mut contents, false);
+
+        let parts = contents[0]["parts"].as_array().unwrap();
+        assert_eq!(parts.len(), 1);
+        assert!(parts[0].get("functionResponse").is_some());
+        assert!(
+            parts[0].get("thoughtSignature").is_none(),
+            "thoughtSignature must be removed from functionResponse when thinking is disabled"
+        );
+    }
+}
