@@ -423,6 +423,12 @@ pub async fn save_config(
         config.proxy.experimental.context_compression_threshold_l2,
         config.proxy.experimental.context_compression_threshold_l3,
     );
+    crate::proxy::config::update_global_audit_config(
+        config.proxy.experimental.payload_storage_mode.clone(),
+        config.proxy.experimental.log_retention_days,
+        config.proxy.experimental.thinking_store_enabled,
+        config.proxy.experimental.thinking_retention_days,
+    );
 
     // 热更新正在运行的服务
     let instance_lock = proxy_state.instance.read().await;
@@ -465,6 +471,12 @@ pub async fn save_config(
         crate::proxy::config::update_global_compression_level(
             config.proxy.experimental.compression_level.clone(),
             config.proxy.experimental.enable_usage_scaling,
+        );
+        crate::proxy::config::update_global_audit_config(
+            config.proxy.experimental.payload_storage_mode.clone(),
+            config.proxy.experimental.log_retention_days,
+            config.proxy.experimental.thinking_store_enabled,
+            config.proxy.experimental.thinking_retention_days,
         );
         crate::proxy::config::update_global_thresholds(
             config.proxy.experimental.context_compression_threshold_l1,
@@ -856,7 +868,44 @@ pub async fn open_data_folder() -> Result<(), String> {
 #[tauri::command]
 pub async fn get_data_dir_path() -> Result<String, String> {
     let path = modules::account::get_data_dir()?;
-    Ok(path.to_string_lossy().to_string())
+    Ok(modules::account::format_data_dir_path(&path))
+}
+
+/// 选择并迁移数据目录（指针写在家目录，删除旧目录后下次启动仍能找到）
+#[tauri::command]
+pub async fn set_data_dir(
+    path: String,
+    proxy_state: tauri::State<'_, crate::commands::proxy::ProxyServiceState>,
+    cf_state: tauri::State<'_, crate::commands::cloudflared::CloudflaredState>,
+) -> Result<String, String> {
+    {
+        let instance = proxy_state.instance.read().await;
+        if instance.is_some() {
+            return Err("请先停止 API 反代服务，再迁移数据目录".to_string());
+        }
+    }
+    {
+        let lock = cf_state.manager.read().await;
+        if let Some(manager) = lock.as_ref() {
+            let status = manager.get_status().await;
+            if status.running {
+                return Err("请先停止 Cloudflared 隧道，再迁移数据目录".to_string());
+            }
+        }
+    }
+
+    let new_path = tokio::task::spawn_blocking(move || {
+        modules::account::migrate_data_dir(PathBuf::from(path))
+    })
+    .await
+    .map_err(|e| format!("迁移任务失败: {}", e))??;
+
+    {
+        let mut lock = cf_state.manager.write().await;
+        *lock = None;
+    }
+
+    Ok(modules::account::format_data_dir_path(&new_path))
 }
 
 /// 递归复制目录内容

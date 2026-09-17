@@ -1,5 +1,5 @@
 use crate::models::DeviceProfile;
-use crate::modules::{logger, process};
+use crate::modules::{account, logger, process};
 use chrono::Local;
 use rand::{distributions::Alphanumeric, Rng};
 use rusqlite::Connection;
@@ -11,7 +11,7 @@ use uuid::Uuid;
 const GLOBAL_BASELINE: &str = "device_original.json";
 
 fn get_data_dir() -> Result<PathBuf, String> {
-    crate::modules::account::get_data_dir()
+    account::get_data_dir()
 }
 
 /// Find storage.json path (prefer custom/portable paths)

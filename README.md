@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> 专业级 AI 账号管理与协议代理系统 (v4.7.2)
+> 专业级 AI 账号管理与协议代理系统 (v4.7.3)
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
 
@@ -8,7 +8,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.7.2-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.7.3-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -457,7 +457,7 @@ response = client.chat.completions.create(
 
 ## 📝 更新日志
 
-> 最新版本 **v4.7.2**（2026-09-15）：支持自定义数据存储目录与全量平滑迁移（彻底解决 C 盘爆满问题并自动重启生效）、规范化 Codex 客户端中 Gemini 思考流为标准 reasoning summary 事件、全局系统提示词换行隔离与 Markdown 格式安全保护、Gemini Wrapper 提示词去重、配置保存即时同步全局内存。
+> 最新版本 **v4.7.3**（2026-09-16）：从0到1自研 Thinking Store 服务端思考链引擎（L1 内存+L2 SQLite 缓存与 AGZ1 极速压缩），根治第三方 CLI/Agent 思考签名丢失导致的模型降级与提前摆烂；四大协议流水线严格归一化为 Gemini Contents 与原生工具链调度；深度适配 DeepSeek Harness (DSH) 与 WorkBuddy 工具调用规范；全链路微观毫秒计时与横向三栏报文审计视窗；流量日志内存精简与磁盘配额防护。
 
 👉 **[查看完整更新日志 CHANGELOG.md →](CHANGELOG.md)**
 

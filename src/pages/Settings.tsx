@@ -18,13 +18,29 @@ import { relaunch } from '@tauri-apps/plugin-process';
 import DebugConsole from '../components/debug/DebugConsole';
 import ProxyPoolSettings from '../components/settings/ProxyPoolSettings';
 
+function normalizeDataDirDisplay(path: string): string {
+    const trimmed = path.trim();
+    if (trimmed.startsWith('\\\\?\\UNC\\')) {
+        return `\\\\${trimmed.slice('\\\\?\\UNC\\'.length)}`;
+    }
+    if (trimmed.startsWith('\\\\?\\')) {
+        return trimmed.slice('\\\\?\\'.length);
+    }
+    if (trimmed.startsWith('//?/UNC/')) {
+        return `//${trimmed.slice('//?/UNC/'.length)}`;
+    }
+    if (trimmed.startsWith('//?/')) {
+        return trimmed.slice('//?/'.length);
+    }
+    return trimmed;
+}
 
 function Settings() {
     const { t, i18n } = useTranslation();
     const { config, loadConfig, saveConfig, updateLanguage, updateTheme } = useConfigStore();
     const { enable, disable, isEnabled } = useDebugConsole();
     const [activeTab, setActiveTab] = useState<'general' | 'account' | 'proxy' | 'advanced' | 'debug' | 'about'>('general');
-    const [appVersion, setAppVersion] = useState<string>('4.7.2');
+    const [appVersion, setAppVersion] = useState<string>('4.7.3');
     const [formData, setFormData] = useState<AppConfig>({
         language: 'zh',
         theme: 'system',
@@ -87,12 +103,9 @@ function Settings() {
     const [isClearLogsOpen, setIsClearLogsOpen] = useState(false);
     const [isSupportModalOpen, setIsSupportModalOpen] = useState(false);
     const [dataDirPath, setDataDirPath] = useState<string>('~/.antigravity_tools/');
-
-    // Data directory migration state
-    const [isMigrateModalOpen, setIsMigrateModalOpen] = useState(false);
-    const [targetMigratePath, setTargetMigratePath] = useState<string>('');
-    const [cleanSourceDir, setCleanSourceDir] = useState<boolean>(true);
-    const [isMigrating, setIsMigrating] = useState<boolean>(false);
+    const [pendingDataDir, setPendingDataDir] = useState<string>('');
+    const [isMigrateDataDirOpen, setIsMigrateDataDirOpen] = useState(false);
+    const [isMigratingDataDir, setIsMigratingDataDir] = useState(false);
 
     // Antigravity cache clearing state
     const [isClearCacheOpen, setIsClearCacheOpen] = useState(false);
@@ -121,7 +134,7 @@ function Settings() {
 
         // 获取真实数据目录路径
         invoke<string>('get_data_dir_path')
-            .then(path => setDataDirPath(path))
+            .then(path => setDataDirPath(normalizeDataDirDisplay(path)))
             .catch(err => console.error('Failed to get data dir:', err));
 
         // 加载更新设置
@@ -206,42 +219,42 @@ function Settings() {
         }
     };
 
-    const handleSelectMigrateDataDir = async () => {
+    const handleSelectDataDir = async () => {
         try {
-            // @ts-ignore
             const selected = await open({
                 directory: true,
                 multiple: false,
-                title: t('settings.advanced.migrate_title', '迁移数据目录'),
+                title: t('settings.advanced.data_dir_select'),
             });
-            if (selected && typeof selected === 'string') {
-                setTargetMigratePath(selected);
-                setIsMigrateModalOpen(true);
+            if (!selected || typeof selected !== 'string') {
+                return;
             }
+            if (selected === dataDirPath) {
+                return;
+            }
+            setPendingDataDir(selected);
+            setIsMigrateDataDirOpen(true);
         } catch (error) {
             showToast(`${t('common.error')}: ${error}`, 'error');
         }
     };
 
-    const handleConfirmMigrate = async () => {
-        if (!targetMigratePath) return;
-        setIsMigrating(true);
+    const confirmMigrateDataDir = async () => {
+        if (!pendingDataDir || isMigratingDataDir) {
+            return;
+        }
+        setIsMigratingDataDir(true);
         try {
-            await invoke('migrate_data_dir', {
-                newPath: targetMigratePath,
-                cleanSource: cleanSourceDir,
-            });
-            showToast(t('settings.advanced.migrate_success', '数据迁移成功，正在重启应用...'), 'success');
-            setTimeout(async () => {
-                try {
-                    await relaunch();
-                } catch (relaunchErr) {
-                    console.error('Failed to relaunch:', relaunchErr);
-                }
-            }, 1500);
+            const newPath = await invoke<string>('set_data_dir', { path: pendingDataDir });
+            setDataDirPath(normalizeDataDirDisplay(newPath));
+            setIsMigrateDataDirOpen(false);
+            setPendingDataDir('');
+            showToast(t('settings.advanced.data_dir_migrated'), 'success');
+            showToast(t('settings.advanced.data_dir_restart_hint'), 'info');
         } catch (error) {
-            setIsMigrating(false);
             showToast(`${t('common.error')}: ${error}`, 'error');
+        } finally {
+            setIsMigratingDataDir(false);
         }
     };
 
@@ -959,15 +972,16 @@ function Settings() {
                                             <>
                                                 <button
                                                     className="px-4 py-2 border border-gray-200 dark:border-base-300 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-base-200 hover:text-gray-900 dark:hover:text-base-content transition-colors"
+                                                    onClick={handleSelectDataDir}
+                                                    disabled={isMigratingDataDir}
+                                                >
+                                                    {t('settings.advanced.select_btn')}
+                                                </button>
+                                                <button
+                                                    className="px-4 py-2 border border-gray-200 dark:border-base-300 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-base-200 hover:text-gray-900 dark:hover:text-base-content transition-colors"
                                                     onClick={handleOpenDataDir}
                                                 >
                                                     {t('settings.advanced.open_btn')}
-                                                </button>
-                                                <button
-                                                    className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors font-medium text-sm flex items-center gap-1.5 shadow-sm active:scale-95"
-                                                    onClick={handleSelectMigrateDataDir}
-                                                >
-                                                    {t('settings.advanced.migrate_btn', '更改并迁移')}
                                                 </button>
                                             </>
                                         ) : (
@@ -1627,57 +1641,6 @@ function Settings() {
 
                 {/* Data Directory Migration Modal */}
                 <ModalDialog
-                    isOpen={isMigrateModalOpen}
-                    title={t('settings.advanced.migrate_title', '迁移数据目录')}
-                    type="confirm"
-                    confirmText={isMigrating ? t('settings.advanced.migrating_text', '正在迁移数据...') : t('settings.advanced.migrate_confirm_btn', '开始迁移并重启')}
-                    cancelText={t('common.cancel')}
-                    isLoading={isMigrating}
-                    onConfirm={handleConfirmMigrate}
-                    onCancel={() => {
-                        if (!isMigrating) {
-                            setIsMigrateModalOpen(false);
-                        }
-                    }}
-                >
-                    <div className="space-y-4">
-                        <p className="text-sm text-gray-600 dark:text-gray-400">
-                            {t('settings.advanced.migrate_desc', '将当前数据目录（包括账号、配置、请求日志及数据库）完整迁移至新位置。')}
-                        </p>
-
-                        <div className="space-y-2 bg-gray-50 dark:bg-base-200 p-3.5 rounded-xl text-xs">
-                            <div>
-                                <span className="text-gray-400 block mb-0.5">{t('settings.advanced.migrate_source', '源数据目录')}:</span>
-                                <span className="font-mono text-gray-700 dark:text-gray-300 break-all">{dataDirPath}</span>
-                            </div>
-                            <div className="pt-2 border-t border-gray-200/60 dark:border-base-300">
-                                <span className="text-gray-400 block mb-0.5">{t('settings.advanced.migrate_target', '新数据目录')}:</span>
-                                <span className="font-mono text-blue-600 dark:text-blue-400 font-bold break-all">{targetMigratePath}</span>
-                            </div>
-                        </div>
-
-                        <label className="flex items-center gap-2.5 cursor-pointer select-none">
-                            <input
-                                type="checkbox"
-                                className="checkbox checkbox-sm checkbox-primary rounded"
-                                checked={cleanSourceDir}
-                                onChange={(e) => setCleanSourceDir(e.target.checked)}
-                                disabled={isMigrating}
-                            />
-                            <span className="text-xs text-gray-700 dark:text-gray-300 font-medium">
-                                {t('settings.advanced.migrate_clean_source', '迁移成功后清理原目录数据（释放磁盘空间）')}
-                            </span>
-                        </label>
-
-                        <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700/30 rounded-lg p-2.5">
-                            <p className="text-xs text-amber-700 dark:text-amber-400">
-                                {t('settings.advanced.migrate_restart_notice', '迁移完成后客户端将自动重启以加载新数据目录。')}
-                            </p>
-                        </div>
-                    </div>
-                </ModalDialog>
-
-                <ModalDialog
                     isOpen={isClearLogsOpen}
                     title={t('settings.advanced.clear_logs_title')}
                     message={t('settings.advanced.clear_logs_msg')}
@@ -1688,6 +1651,25 @@ function Settings() {
                     onConfirm={confirmClearLogs}
                     onCancel={() => setIsClearLogsOpen(false)}
                 />
+
+                <ModalDialog
+                    isOpen={isMigrateDataDirOpen}
+                    title={t('settings.advanced.data_dir_migrate_title')}
+                    type="confirm"
+                    confirmText={isMigratingDataDir ? t('common.loading') : t('common.confirm')}
+                    cancelText={t('common.cancel')}
+                    onConfirm={confirmMigrateDataDir}
+                    onCancel={() => {
+                        if (!isMigratingDataDir) {
+                            setIsMigrateDataDirOpen(false);
+                            setPendingDataDir('');
+                        }
+                    }}
+                >
+                    <p className="text-sm text-gray-600 dark:text-gray-400 whitespace-pre-line">
+                        {t('settings.advanced.data_dir_migrate_msg', { path: pendingDataDir })}
+                    </p>
+                </ModalDialog>
 
                 {/* Antigravity Cache Clear Modal */}
                 <ModalDialog

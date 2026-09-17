@@ -127,6 +127,7 @@ where
         let mut error_occurred = false;
         let mut has_emitted_content = false;
         let mut tool_call_index = 0;
+        let mut thinking_acc = crate::proxy::thinking_store::TurnAccumulator::new();
 
         let mut heartbeat_interval = tokio::time::interval(std::time::Duration::from_secs(15));
         heartbeat_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -163,6 +164,7 @@ where
 
                                                     if let Some(parts_list) = parts {
                                                         for part in parts_list {
+                                                            thinking_acc.ingest_part(part);
                                                             let is_thought_part = part.get("thought").and_then(|v| v.as_bool()).unwrap_or(false);
                                                             if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
                                                                 let clean_text = text.replace("<think>\n", "").replace("<think>", "").replace("\n</think>", "").replace("</think>", "");
@@ -194,10 +196,21 @@ where
 
                                                                     let final_name = super::response::resolve_shell_tool_name(name, &client_tool_names);
 
-                                                                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                                                                    use std::hash::{Hash, Hasher};
-                                                                    serde_json::to_string(func_call).unwrap_or_default().hash(&mut hasher);
-                                                                    let call_id = format!("call_{:x}", hasher.finish());
+                                                                    let call_id = func_call
+                                                                        .get("id")
+                                                                        .and_then(|v| v.as_str())
+                                                                        .map(|s| s.to_string())
+                                                                        .unwrap_or_else(|| {
+                                                                            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                                                                            use std::hash::{Hash, Hasher};
+                                                                            serde_json::to_string(func_call).unwrap_or_default().hash(&mut hasher);
+                                                                            format!("call_{:x}", hasher.finish())
+                                                                        });
+
+                                                                    if let Some(sig) = part.get("thoughtSignature").or(part.get("thought_signature")).and_then(|s| s.as_str()) {
+                                                                        crate::proxy::SignatureCache::global().cache_tool_signature(&call_id, sig.to_string());
+                                                                    }
+                                                                    thinking_acc.record_tool_id(name, &call_id);
 
                                                                     let args_str = serde_json::to_string(&args).unwrap_or_default();
                                                                     let tool_call_chunk = json!({
@@ -365,7 +378,19 @@ where
             }
         }
 
+        thinking_acc.commit(&session_id);
         if !error_occurred {
+            if let Some(usage) = final_usage.take() {
+                let usage_chunk = json!({
+                    "id": &stream_id,
+                    "object": "chat.completion.chunk",
+                    "created": created_ts,
+                    "model": &model,
+                    "choices": [],
+                    "usage": usage
+                });
+                yield Ok::<Bytes, String>(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&usage_chunk).unwrap_or_default())));
+            }
             yield Ok::<Bytes, String>(Bytes::from("data: [DONE]\n\n"));
         }
     };
@@ -397,6 +422,7 @@ where
     let stream = async_stream::stream! {
         let mut final_usage: Option<super::models::OpenAIUsage> = None;
         let mut error_occurred = false;
+        let mut thinking_acc = crate::proxy::thinking_store::TurnAccumulator::new();
         let mut heartbeat_interval = tokio::time::interval(std::time::Duration::from_secs(15));
         heartbeat_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -423,6 +449,7 @@ where
                                                 if let Some(candidate) = candidates.get(0) {
                                                     if let Some(parts) = candidate.get("content").and_then(|c| c.get("parts")).and_then(|p| p.as_array()) {
                                                         for part in parts {
+                                                            thinking_acc.ingest_part(part);
                                                             let is_thought = part.get("thought").and_then(|v| v.as_bool()).unwrap_or(false);
                                                             if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
                                                                 let clean_text = text.replace("<think>\n", "").replace("<think>", "").replace("\n</think>", "").replace("</think>", "");
@@ -471,6 +498,7 @@ where
                 _ = heartbeat_interval.tick() => { yield Ok::<Bytes, String>(Bytes::from(": ping\n\n")); }
             }
         }
+        thinking_acc.commit(&session_id);
         if !error_occurred {
             yield Ok::<Bytes, String>(Bytes::from("data: [DONE]\n\n"));
         }
@@ -601,6 +629,7 @@ where
         let mut emitted_tool_calls = std::collections::HashSet::new();
         let mut accumulated_text = String::new();
         let mut accumulated_thinking = String::new();
+        let mut thinking_acc = crate::proxy::thinking_store::TurnAccumulator::new();
         let mut has_seen_tool_calls = false;
         let mut final_finish_reason: Option<String> = None;
 
@@ -643,6 +672,7 @@ where
                                                 }
                                                 if let Some(parts) = candidate.get("content").and_then(|c| c.get("parts")).and_then(|p| p.as_array()) {
                                                     for part in parts {
+                                                        thinking_acc.ingest_part(part);
                                                         let is_thought = part.get("thought").and_then(|v| v.as_bool()).unwrap_or(false);
 
                                                         // Close the reasoning summary before opening normal text
@@ -778,10 +808,21 @@ where
 
                                                                 let args_str = serde_json::to_string(&args).unwrap_or_default();
 
-                                                                let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                                                                use std::hash::{Hash, Hasher};
-                                                                call_key.hash(&mut hasher);
-                                                                let call_id = format!("call_{:x}", hasher.finish());
+                                                                let call_id = func_call
+                                                                    .get("id")
+                                                                    .and_then(|v| v.as_str())
+                                                                    .map(|s| s.to_string())
+                                                                    .unwrap_or_else(|| {
+                                                                        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                                                                        use std::hash::{Hash, Hasher};
+                                                                        call_key.hash(&mut hasher);
+                                                                        format!("call_{:x}", hasher.finish())
+                                                                    });
+
+                                                                if let Some(sig) = part.get("thoughtSignature").or(part.get("thought_signature")).and_then(|s| s.as_str()) {
+                                                                    crate::proxy::SignatureCache::global().cache_tool_signature(&call_id, sig.to_string());
+                                                                }
+                                                                thinking_acc.record_tool_id(name, &call_id);
 
                                                                 let (actual_name, namespace) = split_namespace_tool_name(name);
                                                                 let tool_item_id = format!("item-{}", &Uuid::new_v4().to_string()[..16]);
@@ -1170,6 +1211,11 @@ where
                     return;
                 }
             }
+        }
+
+        thinking_acc.clone().commit(&session_id);
+        if session_id != response_id {
+            thinking_acc.commit(&response_id);
         }
 
         let mut completed_ev = json!({
