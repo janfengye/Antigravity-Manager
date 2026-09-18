@@ -620,6 +620,7 @@ pub fn run() {
             commands::refresh_all_quotas,
             // Config commands
             commands::load_config,
+            commands::get_config,
             commands::save_config,
             // Additional commands
             commands::prepare_oauth_url,

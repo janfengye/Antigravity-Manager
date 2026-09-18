@@ -400,6 +400,12 @@ pub async fn load_config() -> Result<AppConfig, String> {
     modules::load_app_config()
 }
 
+/// 兼容别名：获取配置 (load_config)
+#[tauri::command]
+pub async fn get_config() -> Result<AppConfig, String> {
+    load_config().await
+}
+
 /// 保存配置
 #[tauri::command]
 pub async fn save_config(

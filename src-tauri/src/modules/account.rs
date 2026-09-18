@@ -117,36 +117,46 @@ mod tests {
     #[test]
     fn test_migrate_data_dir_rename_and_copy() {
         let _guard = TEST_MUTEX.lock().unwrap();
-        let pointer_path = dirs::home_dir()
+
+        let previous_env = std::env::var("ABV_DATA_DIR").ok();
+        let previous_pointer_env = std::env::var("ABV_DATA_DIR_POINTER_FILE").ok();
+
+        // 记录真实家目录指针，结尾断言它自始至终没被改动。
+        // 背景：`migrate_data_dir` 会写数据目录指针。如果测试让它写到真实的
+        // `~/.antigravity_tools_location`，那么测试一旦被中断（Ctrl-C / 超时 /
+        // 进程被杀），恢复逻辑不会执行，用户的数据目录就会被永久指向 /tmp 下的
+        // 临时目录 —— 应用下次启动会读到空数据目录，表现为「账号全部消失」。
+        let real_pointer = dirs::home_dir()
             .expect("home")
             .join(".antigravity_tools_location");
-        let previous_env = std::env::var("ABV_DATA_DIR").ok();
-        let previous_pointer = fs::read_to_string(&pointer_path).ok();
+        let real_pointer_before = fs::read_to_string(&real_pointer).ok();
+
+        let src = TestDataDir::new();
+        fs::write(src.path().join("marker.txt"), "hello").unwrap();
+
+        let dest_parent = TestDataDir::new();
+        let dest = dest_parent.path().join("moved_data");
+        // 指针文件也放进临时目录（复用已存在的 dest_parent，避免多建一个
+        // 时间戳目录而可能与 src 撞名）
+        let pointer_path = dest_parent.path().join("location");
+
+        std::env::set_var("ABV_DATA_DIR", src.path());
+        std::env::set_var("ABV_DATA_DIR_POINTER_FILE", &pointer_path);
 
         let restore = || {
             match &previous_env {
                 Some(value) => std::env::set_var("ABV_DATA_DIR", value),
                 None => std::env::remove_var("ABV_DATA_DIR"),
             }
-            match &previous_pointer {
-                Some(value) => {
-                    let _ = fs::write(&pointer_path, value);
-                }
-                None => {
-                    let _ = fs::remove_file(&pointer_path);
-                }
+            match &previous_pointer_env {
+                Some(value) => std::env::set_var("ABV_DATA_DIR_POINTER_FILE", value),
+                None => std::env::remove_var("ABV_DATA_DIR_POINTER_FILE"),
             }
             if let Ok(mut guard) = data_dir_override_slot().write() {
                 *guard = None;
             }
         };
 
-        let src = TestDataDir::new();
-        fs::write(src.path().join("marker.txt"), "hello").unwrap();
-        std::env::set_var("ABV_DATA_DIR", src.path());
-
-        let dest_parent = TestDataDir::new();
-        let dest = dest_parent.path().join("moved_data");
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let resolved = migrate_data_dir(dest.clone()).unwrap();
             assert!(resolved.join("marker.txt").exists());
@@ -160,8 +170,21 @@ mod tests {
                 !shown.contains(r"\\?\"),
                 "migrated path must not keep Windows verbatim prefix: {shown}"
             );
+            // 指针必须写在被重定向后的临时位置
+            assert_eq!(
+                fs::read_to_string(&pointer_path).unwrap().trim(),
+                format_data_dir_path(&resolved)
+            );
         }));
+
+        let real_pointer_after = fs::read_to_string(&real_pointer).ok();
         restore();
+
+        assert_eq!(
+            real_pointer_before, real_pointer_after,
+            "测试污染了真实的 ~/.antigravity_tools_location！"
+        );
+
         if let Err(panic) = result {
             std::panic::resume_unwind(panic);
         }
@@ -623,7 +646,21 @@ fn data_dir_override_slot() -> &'static RwLock<Option<PathBuf>> {
     DATA_DIR_OVERRIDE.get_or_init(|| RwLock::new(None))
 }
 
+/// 数据目录指针文件的路径。
+///
+/// 可用 `ABV_DATA_DIR_POINTER_FILE` 覆盖（测试 / Docker 用）。
+///
+/// 为什么必须支持覆盖：单元测试会调用 `migrate_data_dir`，它经由 `apply_data_dir`
+/// 写入这个指针。若指针固定指向真实的 `~/.antigravity_tools_location`，那么测试一旦
+/// 被中断（Ctrl-C、超时、崩溃、进程被杀），恢复逻辑就不会执行，指针会被永久留在
+/// 临时目录上 —— 应用下次启动就会读到一个空的数据目录，表现为「账号全部消失」。
 fn location_pointer_path() -> Result<PathBuf, String> {
+    if let Ok(custom) = std::env::var("ABV_DATA_DIR_POINTER_FILE") {
+        let trimmed = custom.trim();
+        if !trimmed.is_empty() {
+            return Ok(normalize_data_dir_path(trimmed));
+        }
+    }
     let home = dirs::home_dir().ok_or("failed_to_get_home_dir")?;
     Ok(home.join(LOCATION_POINTER_FILE))
 }

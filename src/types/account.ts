@@ -98,29 +98,41 @@ export interface DeviceProfileVersion {
 }
 
 /**
- * 解析/推导账号的订阅等级 ('ultra' | 'pro' | 'free')
- * 支持大小写不敏感、多关键词识别 (pro/premium/advanced/ultra/free) 与模型列表智能兜底
+ * 解析账号的订阅等级 ('ultra' | 'pro' | 'free')
+ *
+ * 只依据 `quota.subscription_tier` —— 即后端 `loadCodeAssist` 回填的权威值。
+ * 关键词表与 Rust 侧 `normalize_subscription_tier` 保持严格一致，避免前后端判定分叉。
+ *
+ * ⚠️ 不要恢复「模型列表兜底」：实测 `fetchAvailableModels` 对免费号与 Pro 号返回
+ * **完全相同的全量目录**（都含 claude-* / gpt-*，且 remainingFraction 恒为 1），
+ * 用它推断会把所有免费号判成 Pro —— 这正是「free 账号被标记成 pro」的根因。
  */
 export function getAccountTier(account: { quota?: QuotaData | null }): 'ultra' | 'pro' | 'free' {
-    const rawTier = account.quota?.subscription_tier?.toLowerCase();
-    if (rawTier) {
-        if (rawTier.includes('ultra')) return 'ultra';
-        if (rawTier.includes('pro') || rawTier.includes('premium') || rawTier.includes('advanced')) return 'pro';
-        if (rawTier.includes('free')) return 'free';
-    }
+    const rawTier = account.quota?.subscription_tier?.trim().toLowerCase();
+    if (!rawTier) return 'free';
 
-    // 基于可用模型的启发式推导
-    const models = account.quota?.models || [];
-    if (models.some(m => m.name.toLowerCase().includes('ultra'))) {
-        return 'ultra';
-    }
-    // Claude / GPT 在 Google Code Assist 体系内仅付费 Pro/Premium 账号专享
-    if (models.some(m => {
-        const n = m.name.toLowerCase();
-        return n.startsWith('claude') || n.startsWith('gpt');
-    })) {
+    // Ultra 档（"helium" 是 Ultra 的内部代号：GDP_HELIUM / GOOGLE_ONE_HELIUM）
+    if (rawTier.includes('ultra') || rawTier.includes('helium')) return 'ultra';
+    // 免费档：free-tier / "Antigravity Starter Quota"
+    if (rawTier.includes('free') || rawTier.includes('starter')) return 'free';
+    // 付费档：g1-pro-tier / standard-tier / "Google AI Pro" / premium / advanced
+    if (
+        rawTier.includes('pro') ||
+        rawTier.includes('premium') ||
+        rawTier.includes('advanced') ||
+        rawTier.includes('standard')
+    ) {
         return 'pro';
     }
 
+    // 未识别：按最低档处理，等待后端回填权威值（绝不猜成 pro）
     return 'free';
+}
+
+/**
+ * 订阅等级的展示文案。所有徽标都应使用它，避免直接把后端的原始字符串
+ * （如 "Antigravity Starter Quota"）渲染到界面上。
+ */
+export function getTierLabel(tier: 'ultra' | 'pro' | 'free'): string {
+    return tier.toUpperCase();
 }

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { X, Clock, AlertCircle, Bot } from 'lucide-react';
 import { createPortal } from 'react-dom';
-import { Account, getAccountTier } from '../../types/account';
+import { Account, getAccountTier, getTierLabel } from '../../types/account';
 import { formatDate } from '../../utils/format';
 import { useTranslation } from 'react-i18next';
 import { MODEL_CONFIG, sortModels } from '../../config/modelConfig';
@@ -31,7 +31,9 @@ export default function AccountDetailsDialog({ account, onClose }: AccountDetail
                         </div>
                         {(() => {
                             const tier = getAccountTier(account);
-                            const label = account.quota?.subscription_tier || tier.toUpperCase();
+                            // 用归一化后的等级文案，避免把后端的原始字符串
+                            // （如 "Antigravity Starter Quota"）直接渲染出来
+                            const label = getTierLabel(tier);
                             return (
                                 <div className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
                                     tier === 'ultra' ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400' :

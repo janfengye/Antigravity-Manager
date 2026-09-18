@@ -91,51 +91,101 @@ impl QuotaData {
     }
 
     /// 确保当前配额具备有效的订阅等级 (ULTRA/PRO/FREE)
+    ///
+    /// 只做「归一化 + 校验」：已有合法值就保留，无法识别的值置空，
+    /// 等待下一次 `loadCodeAssist` 用上游权威值回填。
+    /// **绝不使用模型列表做推断**（见 `resolve_subscription_tier` 的说明）。
     pub fn ensure_subscription_tier(&mut self) {
-        let resolved = resolve_subscription_tier(self.subscription_tier.as_deref(), &self.models);
-        self.subscription_tier = Some(resolved);
+        self.subscription_tier = match self.subscription_tier.as_deref() {
+            Some(raw) => {
+                let normalized = normalize_subscription_tier(raw);
+                if is_known_tier(&normalized) {
+                    Some(normalized)
+                } else {
+                    None
+                }
+            }
+            None => None,
+        };
     }
+}
+
+/// 是否为三个已知等级之一
+pub fn is_known_tier(tier: &str) -> bool {
+    matches!(tier, "ULTRA" | "PRO" | "FREE")
 }
 
 /// 订阅等级标准化：统一规范为 "ULTRA" | "PRO" | "FREE"
+///
+/// 输入应优先是 `loadCodeAssist` 返回的 `UserTier.id`（稳定标识），实测取值：
+///   - `"free-tier"`     → 免费档（其 `name` 是自由文本 `"Antigravity Starter Quota"`）
+///   - `"standard-tier"` → 付费基础档（`allowedTiers` 里的非默认项）
+///   - `"g1-pro-tier"`   → Google AI Pro（`name` = "Google AI Pro"）
+///   - `"g1-ultra-tier"` → Google AI Ultra（`name` = "Google AI Ultra"）
+///
+/// 同时也兼容按 `name` 文本传入的历史数据。`"helium"` 是 Ultra 档的内部代号
+/// （见上游 `UserTier.UpgradeType` 的 `GDP_HELIUM` / `GOOGLE_ONE_HELIUM`），
+/// 因此一并归入 ULTRA。
+///
+/// 未识别时**原样返回**，由调用方决定如何处理，不做猜测。
 pub fn normalize_subscription_tier(tier: &str) -> String {
-    let lower = tier.to_lowercase();
-    if lower.contains("ultra") {
-        "ULTRA".to_string()
-    } else if lower.contains("pro") || lower.contains("premium") || lower.contains("advanced") {
-        "PRO".to_string()
-    } else if lower.contains("free") {
-        "FREE".to_string()
-    } else {
-        tier.to_string()
-    }
-}
-
-/// 解析/推断订阅等级：结合已有等级与模型列表进行智能兜底
-pub fn resolve_subscription_tier(raw_tier: Option<&str>, models: &[ModelQuota]) -> String {
-    if let Some(tier) = raw_tier {
-        let normalized = normalize_subscription_tier(tier);
-        if normalized == "ULTRA" || normalized == "PRO" || normalized == "FREE" {
-            return normalized;
-        }
+    let lower = tier.trim().to_lowercase();
+    if lower.is_empty() {
+        return String::new();
     }
 
-    let has_ultra = models
-        .iter()
-        .any(|m| m.name.to_lowercase().contains("ultra"));
-    if has_ultra {
+    // 1) Ultra 档（含内部代号 helium）
+    if lower.contains("ultra") || lower.contains("helium") {
         return "ULTRA".to_string();
     }
 
-    let has_paid_models = models.iter().any(|m| {
-        let n = m.name.to_lowercase();
-        n.starts_with("claude") || n.starts_with("gpt")
-    });
-    if has_paid_models {
+    // 2) 免费档：free-tier / "Antigravity Starter Quota"
+    if lower.contains("free") || lower.contains("starter") {
+        return "FREE".to_string();
+    }
+
+    // 3) 付费档：g1-pro-tier / "Google AI Pro" / premium / advanced
+    if lower.contains("pro")
+        || lower.contains("premium")
+        || lower.contains("advanced")
+    {
         return "PRO".to_string();
     }
 
+    tier.to_string()
+}
+
+/// 解析订阅等级。
+///
+/// **重要：不再用模型列表做兜底推断。**
+///
+/// 历史实现会在等级无法识别时检查模型列表，只要出现 `claude*` / `gpt*` 就判为 PRO。
+/// 但实测 `fetchAvailableModels` 返回的是**全量静态目录**：免费号与 Pro 号拿到的
+/// 33 个模型**完全相同**（都含 `claude-opus-4-6-thinking` / `gpt-oss-120b-medium`），
+/// 且 `remainingFraction` 恒为 1。模型是否存在与档位毫无关系，该兜底会把所有
+/// 免费号误判成 PRO —— 这正是「免费账号被标记为 Pro」的根因。
+///
+/// 现在：能识别就返回识别结果；识别不了就返回 "FREE"，等待上游回填。
+pub fn resolve_subscription_tier(raw_tier: Option<&str>) -> String {
+    if let Some(tier) = raw_tier {
+        let normalized = normalize_subscription_tier(tier);
+        if is_known_tier(&normalized) {
+            return normalized;
+        }
+    }
     "FREE".to_string()
+}
+
+/// 轮询调度用的等级优先级：数值越小越优先 (ULTRA=0, PRO=1, FREE=2)。
+///
+/// 未知等级按 FREE 处理，避免出现「未识别等级排在 FREE 之后」的隐藏档位 ——
+/// 那会导致同一个账号在 UI 上显示 FREE、在调度器里却比 FREE 更靠后。
+pub fn tier_priority(tier: Option<&str>) -> u8 {
+    match normalize_subscription_tier(tier.unwrap_or("")).as_str() {
+        "ULTRA" => 0,
+        "PRO" => 1,
+        _ => 2,
+    }
 }
 
 impl Default for QuotaData {
@@ -150,65 +200,107 @@ mod tests {
 
     #[test]
     fn test_normalize_subscription_tier() {
+        // 上游真实 id（loadCodeAssist 返回的权威字段）
+        assert_eq!(normalize_subscription_tier("free-tier"), "FREE");
+        assert_eq!(normalize_subscription_tier("g1-pro-tier"), "PRO");
+        assert_eq!(normalize_subscription_tier("standard-tier"), "standard-tier");
+        assert_eq!(normalize_subscription_tier("g1-ultra-tier"), "ULTRA");
+        assert_eq!(normalize_subscription_tier("GOOGLE_ONE_HELIUM"), "ULTRA");
+        assert_eq!(normalize_subscription_tier("GDP_HELIUM"), "ULTRA");
+
+        // 上游真实 name（自由文本）
+        assert_eq!(
+            normalize_subscription_tier("Antigravity Starter Quota"),
+            "FREE"
+        );
+        assert_eq!(normalize_subscription_tier("Google AI Pro"), "PRO");
+        assert_eq!(normalize_subscription_tier("Google AI Ultra"), "ULTRA");
+
+        // 历史 / 兼容写法
         assert_eq!(normalize_subscription_tier("Google One AI Premium"), "PRO");
         assert_eq!(normalize_subscription_tier("gemini-advanced"), "PRO");
         assert_eq!(normalize_subscription_tier("Gemini Pro"), "PRO");
         assert_eq!(normalize_subscription_tier("pro"), "PRO");
         assert_eq!(normalize_subscription_tier("gemini-ultra"), "ULTRA");
         assert_eq!(normalize_subscription_tier("ULTRA"), "ULTRA");
-        assert_eq!(normalize_subscription_tier("free-tier"), "FREE");
         assert_eq!(normalize_subscription_tier("Free"), "FREE");
+
+        // 空值 / 未识别原样返回
+        assert_eq!(normalize_subscription_tier(""), "");
+        assert_eq!(normalize_subscription_tier("   "), "");
+        assert_eq!(normalize_subscription_tier("totally-unknown"), "totally-unknown");
     }
 
     #[test]
-    fn test_resolve_subscription_tier_model_fallback() {
-        let claude_model = ModelQuota {
-            name: "claude-3-5-sonnet".to_string(),
-            percentage: 100,
-            reset_time: "2026-09-17T00:00:00Z".to_string(),
-            display_name: None,
-            supports_images: None,
-            supports_thinking: None,
-            thinking_budget: None,
-            recommended: None,
-            max_tokens: None,
-            max_output_tokens: None,
-            supported_mime_types: None,
-        };
-        let flash_model = ModelQuota {
-            name: "gemini-2.5-flash".to_string(),
-            percentage: 100,
-            reset_time: "2026-09-17T00:00:00Z".to_string(),
-            display_name: None,
-            supports_images: None,
-            supports_thinking: None,
-            thinking_budget: None,
-            recommended: None,
-            max_tokens: None,
-            max_output_tokens: None,
-            supported_mime_types: None,
-        };
+    fn test_is_known_tier() {
+        assert!(is_known_tier("FREE"));
+        assert!(is_known_tier("PRO"));
+        assert!(is_known_tier("ULTRA"));
+        assert!(!is_known_tier(""));
+        assert!(!is_known_tier("totally-unknown"));
+        assert!(!is_known_tier("pro")); // 未归一化的小写形式不算合法值
+    }
 
-        // Claude model present without explicit tier -> infer PRO
+    #[test]
+    fn test_resolve_subscription_tier_no_model_fallback() {
+        // 关键回归：模型列表不再参与推断。
+        // 免费号也会拿到 claude / gpt 全量目录，因此 None 必须判 FREE，
+        // 否则就是「免费账号被标记成 Pro」的原始 bug。
+        assert_eq!(resolve_subscription_tier(None), "FREE");
+
+        // 上游权威 id
+        assert_eq!(resolve_subscription_tier(Some("free-tier")), "FREE");
+        assert_eq!(resolve_subscription_tier(Some("g1-pro-tier")), "PRO");
+        assert_eq!(resolve_subscription_tier(Some("g1-ultra-tier")), "ULTRA");
+
+        // 上游 name
         assert_eq!(
-            resolve_subscription_tier(None, &[flash_model.clone(), claude_model.clone()]),
-            "PRO"
+            resolve_subscription_tier(Some("Antigravity Starter Quota")),
+            "FREE"
         );
+        assert_eq!(resolve_subscription_tier(Some("Google AI Pro")), "PRO");
 
-        // Flash only without explicit tier -> infer FREE
-        assert_eq!(resolve_subscription_tier(None, &[flash_model]), "FREE");
+        // 未识别 -> FREE（不猜 PRO）
+        assert_eq!(resolve_subscription_tier(Some("totally-unknown")), "FREE");
+        assert_eq!(resolve_subscription_tier(Some("")), "FREE");
+    }
 
-        // Empty models without explicit tier -> infer FREE
-        assert_eq!(resolve_subscription_tier(None, &[]), "FREE");
+    #[test]
+    fn test_tier_priority() {
+        assert_eq!(tier_priority(Some("ULTRA")), 0);
+        assert_eq!(tier_priority(Some("g1-ultra-tier")), 0);
+        assert_eq!(tier_priority(Some("PRO")), 1);
+        assert_eq!(tier_priority(Some("g1-pro-tier")), 1);
+        assert_eq!(tier_priority(Some("FREE")), 2);
+        assert_eq!(tier_priority(Some("free-tier")), 2);
 
-        // Explicit tier overrides model heuristics
-        assert_eq!(
-            resolve_subscription_tier(Some("Google One AI Premium"), &[]),
-            "PRO"
-        );
-        assert_eq!(
-            resolve_subscription_tier(Some("gemini-ultra"), &[claude_model]),
-            "ULTRA"
-        );
+        // 未知 / 缺失一律按 FREE 处理，不允许出现排在 FREE 之后的隐藏档位
+        assert_eq!(tier_priority(None), 2);
+        assert_eq!(tier_priority(Some("")), 2);
+        assert_eq!(tier_priority(Some("garbage")), 2);
+    }
+
+    #[test]
+    fn test_ensure_subscription_tier_normalizes_and_drops_unknown() {
+        let mut quota = QuotaData::new();
+
+        // 上游 name 形态能被归一化
+        quota.subscription_tier = Some("Antigravity Starter Quota".to_string());
+        quota.ensure_subscription_tier();
+        assert_eq!(quota.subscription_tier.as_deref(), Some("FREE"));
+
+        quota.subscription_tier = Some("g1-pro-tier".to_string());
+        quota.ensure_subscription_tier();
+        assert_eq!(quota.subscription_tier.as_deref(), Some("PRO"));
+
+        // 无法识别 -> 置空，等上游回填（绝不能落成 PRO）
+        quota.subscription_tier = Some("totally-unknown".to_string());
+        quota.ensure_subscription_tier();
+        assert_eq!(quota.subscription_tier, None);
+
+        // None 保持 None
+        quota.subscription_tier = None;
+        quota.ensure_subscription_tier();
+        assert_eq!(quota.subscription_tier, None);
     }
 }

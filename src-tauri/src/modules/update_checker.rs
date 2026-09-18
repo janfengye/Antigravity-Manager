@@ -72,6 +72,22 @@ pub fn get_upstream_proxy_url() -> Option<String> {
             return Some(normalized);
         }
     }
+
+    // 兜底：若未显式配置上游代理，尝试从系统环境变量获取代理 (HTTPS_PROXY / HTTP_PROXY / ALL_PROXY)
+    for env_var in &["HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "HTTP_PROXY", "http_proxy"] {
+        if let Ok(val) = std::env::var(env_var) {
+            let trimmed = val.trim();
+            if !trimmed.is_empty() {
+                let normalized = if !trimmed.contains("://") {
+                    format!("http://{}", trimmed)
+                } else {
+                    trimmed.to_string()
+                };
+                return Some(normalized);
+            }
+        }
+    }
+
     None
 }
 

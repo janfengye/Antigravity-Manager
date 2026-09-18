@@ -1,17 +1,17 @@
 # Antigravity Tools 🚀
-> Professional AI Account Management & Protocol Proxy System (v4.7.5)
+> Professional Account Management & Protocol Proxy System for AI Services (v4.7.6)
 
 <div align="center">
   <img src="public/icon.png" width="100" height="100" alt="Antigravity Tools Logo">
   <h3>Antigravity Tools</h3>
-  <p>Multi-platform Automated Operations & Multi-Account Orchestration Console</p>
+  <p>Multi-platform automation & multi-account matrix dispatch console</p>
 
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager/releases">
       <img src="https://img.shields.io/github/v/release/lbjlaq/Antigravity-Manager?color=blue&style=flat-square" alt="GitHub release">
     </a>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.7.5-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.7.6-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
