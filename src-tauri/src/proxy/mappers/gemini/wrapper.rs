@@ -660,37 +660,67 @@ pub fn wrap_request_v2(
                 .get("thinkingBudget")
                 .and_then(|v| v.as_i64());
 
-            let budget = crate::proxy::model_specs::resolve_authoritative_thinking_budget(
-                final_model_name,
-                client_level.as_deref(),
-                client_budget.map(|b| b as u64),
-                token,
-            ) as i64;
-
             let tb_config = crate::proxy::config::get_thinking_budget_config();
-            let final_budget = match tb_config.mode {
-                crate::proxy::config::ThinkingBudgetMode::Custom => {
-                    let custom_val = tb_config.custom_value as i64;
-                    if custom_val > budget {
-                        budget
-                    } else {
-                        custom_val
+            thinking_config["includeThoughts"] = json!(true);
+
+            if tb_config.control_source == crate::proxy::config::ThinkingControlSource::Client {
+                // 客户端直接控制模式：
+                // 1. 若客户端携带 thinkingLevel (如 HIGH, LOW, MAX, MEDIUM 等)，归一化后完整透传
+                if let Some(ref lvl) = client_level {
+                    if let Some(norm_lvl) =
+                        crate::proxy::model_specs::normalize_client_thinking_level(lvl)
+                    {
+                        let final_lvl = if final_model_name.to_lowercase().contains("pro")
+                            && norm_lvl == "MEDIUM"
+                        {
+                            "HIGH"
+                        } else {
+                            norm_lvl
+                        };
+                        thinking_config["thinkingLevel"] = json!(final_lvl);
                     }
                 }
-                _ => budget,
-            };
+                // 2. 若客户端携带 thinkingBudget，忠实透传
+                if let Some(b) = client_budget {
+                    if b > 0 {
+                        thinking_config["thinkingBudget"] = json!(b);
+                    } else if b == -1 {
+                        if let Some(tc) = thinking_config.as_object_mut() {
+                            tc.remove("thinkingBudget");
+                        }
+                    }
+                }
+            } else {
+                // 网关权威控制模式：
+                let budget_opt = crate::proxy::model_specs::resolve_custom_budget(
+                    final_model_name,
+                    client_level.as_deref(),
+                    client_budget.map(|b| b as u64),
+                    &tb_config,
+                    token,
+                );
 
-            tracing::info!(
-                "[Gemini-Wrap] Authoritative thinking budget {} for {} (client_level={:?})",
-                final_budget,
-                final_model_name,
-                client_level
-            );
-
-            thinking_config["includeThoughts"] = json!(true);
-            thinking_config["thinkingBudget"] = json!(final_budget);
-            if let Some(tc) = thinking_config.as_object_mut() {
-                tc.remove("thinkingLevel");
+                if let Some(final_budget) = budget_opt {
+                    tracing::info!(
+                        "[Gemini-Wrap] Authoritative thinking budget {} for {} (client_level={:?})",
+                        final_budget,
+                        final_model_name,
+                        client_level
+                    );
+                    thinking_config["thinkingBudget"] = json!(final_budget);
+                } else {
+                    tracing::info!(
+                        "[Gemini-Wrap] Adaptive thinking (no thinkingBudget) for {} (client_level={:?})",
+                        final_model_name,
+                        client_level
+                    );
+                    if let Some(tc) = thinking_config.as_object_mut() {
+                        tc.remove("thinkingBudget");
+                    }
+                }
+                if let Some(tc) = thinking_config.as_object_mut() {
+                    tc.remove("thinkingLevel");
+                }
             }
         }
 
@@ -700,6 +730,7 @@ pub fn wrap_request_v2(
         let thinking_config_opt = gen_config.get("thinkingConfig");
         let is_adaptive = thinking_config_opt.map_or(false, |t| {
             t.get("thinkingLevel").is_some()
+                || t.get("thinkingBudget").is_none()
                 || t.get("thinkingBudget").and_then(|v| v.as_i64()) == Some(-1)
         }) || (thinking_config_opt
             .and_then(|t| t.get("thinkingBudget").and_then(|v| v.as_u64()))
@@ -1599,8 +1630,20 @@ mod tests {
 
     #[test]
     fn test_image_thinking_mode_disabled() {
+        let _test_lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let _config_lock = crate::proxy::config::TEST_CONFIG_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
         // 1. Set global mode to disabled
         crate::proxy::config::update_image_thinking_mode(Some("disabled".to_string()));
+        struct ImageResetGuard;
+        impl Drop for ImageResetGuard {
+            fn drop(&mut self) {
+                crate::proxy::config::update_image_thinking_mode(Some("enabled".to_string()));
+            }
+        }
+        let _guard = ImageResetGuard;
 
         // 2. Create a request for an image model (which triggers the image logic)
         // Note: resolve_request_config needs to return image_config for the logic to trigger
@@ -1624,9 +1667,6 @@ mod tests {
         // 3. Verify thinkingConfig has includeThoughts: false
         let thinking_config = gen_config.get("thinkingConfig").unwrap();
         assert_eq!(thinking_config["includeThoughts"], false);
-
-        // 4. Reset global mode
-        crate::proxy::config::update_image_thinking_mode(Some("enabled".to_string()));
     }
 
     #[test]
@@ -1721,6 +1761,7 @@ mod tests {
             mode: ThinkingBudgetMode::Custom,
             custom_value: 1024, // Distinct value
             effort: None,
+            ..Default::default()
         });
         struct GeminiCustomResetGuard;
         impl Drop for GeminiCustomResetGuard {
@@ -1777,6 +1818,7 @@ mod tests {
                     mode: crate::proxy::config::ThinkingBudgetMode::Auto,
                     custom_value: 0,
                     effort: None,
+                    ..Default::default()
                 },
             );
 
@@ -1866,6 +1908,7 @@ mod tests {
                 mode: crate::proxy::config::ThinkingBudgetMode::Auto,
                 custom_value: 24576,
                 effort: None,
+                ..Default::default()
             },
         );
 

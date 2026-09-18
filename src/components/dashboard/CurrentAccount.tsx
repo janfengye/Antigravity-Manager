@@ -1,5 +1,5 @@
 import { CheckCircle, Mail, Diamond, Gem, Circle, Tag, Lock, Clock } from 'lucide-react';
-import { Account } from '../../types/account';
+import { Account, getAccountTier } from '../../types/account';
 import { formatTimeRemaining } from '../../utils/format';
 import { findQuotaModel, getModelProtectionKey, getModelDisplayName, findImageQuotaModel } from '../../config/modelConfig';
 
@@ -53,16 +53,16 @@ function CurrentAccount({ account, onSwitch }: CurrentAccountProps) {
                         <span className="text-sm font-medium text-gray-700 dark:text-gray-300 truncate">{account.email}</span>
                     </div>
                     {/* 订阅类型 */}
-                    {account.quota?.subscription_tier && (() => {
-                        const tier = account.quota.subscription_tier.toLowerCase();
-                        if (tier.includes('ultra')) {
+                    {(() => {
+                        const tier = getAccountTier(account);
+                        if (tier === 'ultra') {
                             return (
                                 <span className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-gradient-to-r from-purple-600 to-pink-600 text-white text-[10px] font-bold shadow-sm shrink-0">
                                     <Gem className="w-2.5 h-2.5 fill-current" />
                                     ULTRA
                                 </span>
                             );
-                        } else if (tier.includes('pro')) {
+                        } else if (tier === 'pro') {
                             return (
                                 <span className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-gradient-to-r from-blue-600 to-indigo-600 text-white text-[10px] font-bold shadow-sm shrink-0">
                                     <Diamond className="w-2.5 h-2.5 fill-current" />

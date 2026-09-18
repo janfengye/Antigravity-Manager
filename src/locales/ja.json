@@ -888,6 +888,55 @@
           "sync_success_count": "{{count}} 個のモデルを Droid に追加しました",
           "sync_error": "同期に失敗しました: {{error}}"
         }
+      },
+      "thinking_budget": {
+        "title": "思考予算制御 (Thinking Budget)",
+        "description": "プロトコル間の推論パラメータを正規化し、GeminiおよびClaudeモデルの思考トークン予算と適応的動作を一元管理します。",
+        "control_source_label": "制御権限の帰属",
+        "source_gateway": "ゲートウェイ権威制御",
+        "source_gateway_desc": "ゲートウェイ層で思考予算とヒューリスティック層を一元管理し、クライアント間の不一致や400エラーを防止します。",
+        "source_client": "クライアント直接制御",
+        "source_client_desc": "正規化後にクライアントからの予算を直接透過します。不適切な予算はGoogleの400エラーを引き起こす可能性があります。",
+        "recommended_tag": "推奨 / 推奨",
+        "danger_tag": "危険 / 非推奨",
+        "client_warning_title": "Warning: Switched to Client Direct Control",
+        "client_warning_desc": "Different clients (Cline, Roo, Cherry, etc.) submit varying thinking.budget_tokens or effort values. If a client specifies limits exceeding Google API constraints (e.g. Flash > 24576 or non-standard Pro budgets), Google will return 400 Bad Request.",
+        "mode_default": "デフォルトモード (公式適応)",
+        "mode_custom": "カスタム予算モード (推奨)",
+        "tier_low": "Low レベル",
+        "tier_medium": "Medium レベル",
+        "tier_high": "High レベル",
+        "tier_pro_high": "High レベル (デフォルト / 主力)",
+        "tier_tiered": "Tiered (自由モデル)",
+        "flash_family_title": "Gemini Flash Series (3-flash, 3.7-flash, tiered, etc.)",
+        "flash_family_desc": "Manage four tier budgets for Flash reasoning models (enter -1 for official adaptive)",
+        "flash_low_hint": "Light reasoning (Default 1000)",
+        "flash_medium_hint": "Balanced tier (Default 4000)",
+        "flash_high_hint": "Deep reasoning (Default 10000)",
+        "flash_tiered_hint": "Adaptive / Freeform (Default -1)",
+        "flash_default_hint": "Official default mode enabled: passes model ID directly without injecting thinkingBudget.",
+        "tiered_desc": "💡 Tiered Model Note: Designed for Google's dynamic adaptation. When set to -1, the model allocates reasoning dynamically based on task difficulty; setting 30000+ unlocks Max reasoning beyond High.",
+        "pro_family_title": "Gemini Pro Series (3-pro, 3.1-pro, etc.)",
+        "pro_family_desc": "Google's Gemini 3.1 Pro architecture officially provides only Low and High tiers. Unspecified effort or medium automatically routes to High for deep reasoning.",
+        "pro_low_hint": "Low reasoning tier (Default 1001, -1 for adaptive)",
+        "pro_high_hint": "Deep reasoning tier (Default 10001, -1 for adaptive)",
+        "pro_default_hint": "Official default mode enabled: Gemini Pro reasoning is determined dynamically by Google.",
+        "claude_family_title": "Claude シリーズ思考モデル (claude-3-7-sonnet-thinking など)",
+        "claude_family_desc": "Claude 思考モデルのトークン予算を調整（公式モデル一覧は -thinking と通常モデルのみを区別し、本設定は思考モデル専用です）",
+        "claude_low_hint": "Light thinking (Default 1024)",
+        "claude_medium_hint": "Everyday balanced (Default 4096)",
+        "claude_high_hint": "Deep reasoning (Default 16000)",
+        "claude_default_hint": "Official default mode enabled: adheres to standard Anthropic specifications without custom limits.",
+        "store_enabled": "サーバー側思考ブロック・署名の復元",
+        "store_enabled_desc": "思考プロセスと暗号署名を自動キャプチャして永続化します。クライアント（Cline、Roo、Claude Code など）がマルチターン会話で思考を返さない場合、ゲートウェイが自動補完して上流の 400 エラーや文脈損失を防ぎます。",
+        "default_on_tag": "デフォルト有効",
+        "claude_thinking_note": "💡 Claude モデルについて：Anthropic 公式モデル一覧では `-thinking` 付きモデル（例: claude-3-7-sonnet-thinking）と通常モデルのみを区別します。このカスタム予算は thinking モデル専用であり、通常モデルの呼び出しでは思考プロセスは生成されません。"
+      },
+      "thinking_settings": {
+        "title": "思考設定 (Thinking Settings)"
+      },
+      "prompt_multimodal": {
+        "title": "グローバルプロンプト＆マルチモーダル設定"
       }
     },
     "cloudflared": {
@@ -1225,6 +1274,18 @@
         "start_time": "開始時刻",
         "duration": "所要時間"
       }
+    },
+    "settings": {
+      "toggle_button": "ログ保存とメンテナンス設定",
+      "button_text": "ログ設定",
+      "title": "ログ保存期間とメンテナンス設定",
+      "subtitle": "リクエストログ保持期間、思考ブロックスライディングウィンドウ、ディスク領域解放を一元管理",
+      "retention_title": "リクエストログ保持ポリシー",
+      "payload_thinking_title": "ペイロード保存と思考ブロック期間",
+      "maintenance_title": "ログメンテナンスと領域解放"
+    },
+    "actions": {
+      "clear_all_requests": "すべての履歴リクエストをクリア"
     }
   },
   "update_notification": {

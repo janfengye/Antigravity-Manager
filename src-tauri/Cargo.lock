@@ -96,7 +96,7 @@ checksum = "34fde25430d87a9388dadbe6e34d7f72a462c8b43ac8d309b42b0a8505d7e2a5"
 
 [[package]]
 name = "antigravity-tools"
-version = "4.7.4"
+version = "4.7.5"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -123,6 +123,7 @@ dependencies = [
  "rand 0.8.5",
  "regex",
  "reqwest 0.12.28",
+ "reqwest 0.13.2",
  "rquest",
  "rquest-util",
  "rusqlite",

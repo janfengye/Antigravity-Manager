@@ -739,6 +739,55 @@
         "context_compression_threshold_l2_tooltip": "ضغط كتل التفكير المبكرة مع الحفاظ على التوقيعات. موصى به: 0.55 (55%)",
         "context_compression_threshold_l3": "عتبة ضغط L3 (محور الملخص)",
         "context_compression_threshold_l3_tooltip": "إعادة تعيين نهائية: يولد ملخص حالة XML ويتمحور إلى جلسة جديدة. الأكثر كفاءة في استهلاك التوكن. موصى به: 0.7 (70%)"
+      },
+      "thinking_budget": {
+        "title": "Thinking Budget Control",
+        "description": "Normalize cross-protocol reasoning parameters and centrally manage thinking token budgets and adaptive behaviors for Gemini and Claude models.",
+        "control_source_label": "Authority Source",
+        "source_gateway": "Gateway Authoritative Control",
+        "source_gateway_desc": "The gateway centrally regulates thinking budgets and heuristic tiers, eliminating client inconsistencies and preventing upstream 400 errors caused by invalid limits.",
+        "source_client": "Client Direct Control",
+        "source_client_desc": "Extracts client-provided thinking parameters after normalization and forwards them directly. If omitted, upstream dynamic adaptive reasoning is used. Inappropriate values may trigger Google API errors.",
+        "recommended_tag": "Preferred / Recommended",
+        "danger_tag": "Dangerous / Not Recommended",
+        "client_warning_title": "Warning: Switched to Client Direct Control",
+        "client_warning_desc": "Different clients (Cline, Roo, Cherry, etc.) submit varying thinking.budget_tokens or effort values. If a client specifies limits exceeding Google API constraints (e.g. Flash > 24576 or non-standard Pro budgets), Google will return 400 Bad Request.",
+        "mode_default": "Default Mode (Upstream Adaptive)",
+        "mode_custom": "Custom Budget Mode (Recommended)",
+        "tier_low": "Low Tier",
+        "tier_medium": "Medium Tier",
+        "tier_high": "High Tier",
+        "tier_pro_high": "High Tier (Default / Flagship)",
+        "tier_tiered": "Tiered (Freeform Model)",
+        "flash_family_title": "Gemini Flash Series (3-flash, 3.7-flash, tiered, etc.)",
+        "flash_family_desc": "Manage four tier budgets for Flash reasoning models (enter -1 for official adaptive)",
+        "flash_low_hint": "Light reasoning (Default 1000)",
+        "flash_medium_hint": "Balanced tier (Default 4000)",
+        "flash_high_hint": "Deep reasoning (Default 10000)",
+        "flash_tiered_hint": "Adaptive / Freeform (Default -1)",
+        "flash_default_hint": "Official default mode enabled: passes model ID directly without injecting thinkingBudget.",
+        "tiered_desc": "💡 Tiered Model Note: Designed for Google's dynamic adaptation. When set to -1, the model allocates reasoning dynamically based on task difficulty; setting 30000+ unlocks Max reasoning beyond High.",
+        "pro_family_title": "Gemini Pro Series (3-pro, 3.1-pro, etc.)",
+        "pro_family_desc": "Google's Gemini 3.1 Pro architecture officially provides only Low and High tiers. Unspecified effort or medium automatically routes to High for deep reasoning.",
+        "pro_low_hint": "Low reasoning tier (Default 1001, -1 for adaptive)",
+        "pro_high_hint": "Deep reasoning tier (Default 10001, -1 for adaptive)",
+        "pro_default_hint": "Official default mode enabled: Gemini Pro reasoning is determined dynamically by Google.",
+        "claude_family_title": "نماذج التفكير لسلسلة Claude (مثل claude-3-7-sonnet-thinking)",
+        "claude_family_desc": "التحكم في ميزانية رموز التفكير لـ Claude (تميز القائمة الرسمية فقط بين -thinking والنماذج العادية؛ هذا الإعداد خاص بنماذج التفكير فقط)",
+        "claude_low_hint": "Light thinking (Default 1024)",
+        "claude_medium_hint": "Everyday balanced (Default 4096)",
+        "claude_high_hint": "Deep reasoning (Default 16000)",
+        "claude_default_hint": "Official default mode enabled: adheres to standard Anthropic specifications without custom limits.",
+        "store_enabled": "استعادة كتل التفكير والتوقيع من جهة الخادم",
+        "store_enabled_desc": "يلتقط ويحفظ عمليات التفكير والتوقيعات المشفرة تلقائيًا. عندما تحذف وكلاء العملاء (مثل Cline و Roo و Claude Code) التفكير في المحادثات متعددة الأدوار، تقوم البوابة بإكماله تلقائيًا لمنع أخطاء 400 أو فقدان السياق.",
+        "default_on_tag": "مفعل افتراضيًا",
+        "claude_thinking_note": "💡 ملاحظة حول نماذج Claude: تميز قائمة نماذج Anthropic الرسمية فقط بين النماذج التي تحتوي على `-thinking` (مثل claude-3-7-sonnet-thinking) والنماذج العادية. هذه الميزانية مخصصة لنماذج thinking؛ ولن تولد النماذج العادية تفكيرًا."
+      },
+      "thinking_settings": {
+        "title": "إعدادات التفكير (Thinking Settings)"
+      },
+      "prompt_multimodal": {
+        "title": "الموجه العام وإعدادات الوسائط المتعددة"
       }
     },
     "cloudflared": {
@@ -1002,6 +1051,18 @@
     "dialog": {
       "clear_title": "مسح سجلات الوكيل",
       "clear_msg": "هل أنت متأكد من رغبتك في مسح كافة سجلات الوكيل؟ لا يمكن التراجع عن هذا الإجراء."
+    },
+    "settings": {
+      "toggle_button": "إعدادات تخزين السجلات والصيانة",
+      "button_text": "إعدادات السجل",
+      "title": "فترة الاحتفاظ بالسجلات وإعدادات الصيانة",
+      "subtitle": "إدارة مركزية لأيام الاحتفاظ بالسجلات ونافذة التفكير المنزلقة واستعادة مساحة القرص",
+      "retention_title": "سياسة الاحتفاظ بسجلات الطلبات",
+      "payload_thinking_title": "تخزين الحزم ودورة كتل التفكير",
+      "maintenance_title": "صيانة السجلات وتنظيف المساحة"
+    },
+    "actions": {
+      "clear_all_requests": "مسح جميع سجلات الطلبات السابقة"
     }
   },
   "update_notification": {

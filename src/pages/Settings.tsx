@@ -40,7 +40,7 @@ function Settings() {
     const { config, loadConfig, saveConfig, updateLanguage, updateTheme } = useConfigStore();
     const { enable, disable, isEnabled } = useDebugConsole();
     const [activeTab, setActiveTab] = useState<'general' | 'account' | 'proxy' | 'advanced' | 'debug' | 'about'>('general');
-    const [appVersion, setAppVersion] = useState<string>('4.7.4');
+    const [appVersion, setAppVersion] = useState<string>('4.7.5');
     const [formData, setFormData] = useState<AppConfig>({
         language: 'zh',
         theme: 'system',
@@ -99,8 +99,6 @@ function Settings() {
     });
 
     // Dialog state
-    // Dialog state
-    const [isClearLogsOpen, setIsClearLogsOpen] = useState(false);
     const [isSupportModalOpen, setIsSupportModalOpen] = useState(false);
     const [dataDirPath, setDataDirPath] = useState<string>('~/.antigravity_tools/');
     const [pendingDataDir, setPendingDataDir] = useState<string>('');
@@ -201,15 +199,7 @@ function Settings() {
         }
     };
 
-    const confirmClearLogs = async () => {
-        try {
-            await invoke('clear_log_cache');
-            showToast(t('settings.advanced.logs_cleared'), 'success');
-        } catch (error) {
-            showToast(`${t('common.error')}: ${error}`, 'error');
-        }
-        setIsClearLogsOpen(false);
-    };
+
 
     const handleOpenDataDir = async () => {
         try {
@@ -1186,21 +1176,7 @@ function Settings() {
                                     </p>
                                 </div>
 
-                                {/* 日志缓存清理 */}
-                                <div className="border-t border-gray-200 dark:border-base-200 pt-4">
-                                    <h3 className="font-medium text-gray-900 dark:text-base-content mb-3">{t('settings.advanced.logs_title')}</h3>
-                                    <div className="bg-gray-50 dark:bg-base-200 border border-gray-200 dark:border-base-300 rounded-lg p-3 mb-3">
-                                        <p className="text-sm text-gray-600 dark:text-gray-400">{t('settings.advanced.logs_desc')}</p>
-                                    </div>
-                                    <div className="flex items-center gap-4">
-                                        <button
-                                            className="px-4 py-2 border border-gray-300 dark:border-base-300 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-100 dark:hover:bg-base-200 transition-colors"
-                                            onClick={() => setIsClearLogsOpen(true)}
-                                        >
-                                            {t('settings.advanced.clear_logs')}
-                                        </button>
-                                    </div>
-                                </div>
+
 
                                 {/* Antigravity 缓存清理 */}
                                 <div className="border-t border-gray-200 dark:border-base-200 pt-4">
@@ -1639,18 +1615,7 @@ function Settings() {
                     }
                 </div >
 
-                {/* Data Directory Migration Modal */}
-                <ModalDialog
-                    isOpen={isClearLogsOpen}
-                    title={t('settings.advanced.clear_logs_title')}
-                    message={t('settings.advanced.clear_logs_msg')}
-                    type="confirm"
-                    confirmText={t('common.clear')}
-                    cancelText={t('common.cancel')}
-                    isDestructive={true}
-                    onConfirm={confirmClearLogs}
-                    onCancel={() => setIsClearLogsOpen(false)}
-                />
+
 
                 <ModalDialog
                     isOpen={isMigrateDataDirOpen}

@@ -112,11 +112,12 @@ impl Account {
     }
 
     pub fn update_quota(&mut self, mut quota: QuotaData) {
-        if let Some(ref existing) = self.quota {
-            if quota.subscription_tier.is_none() {
+        if quota.subscription_tier.is_none() {
+            if let Some(ref existing) = self.quota {
                 quota.subscription_tier = existing.subscription_tier.clone();
             }
         }
+        quota.ensure_subscription_tier();
         self.quota = Some(quota);
     }
 }

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { X, Clock, AlertCircle, Bot } from 'lucide-react';
 import { createPortal } from 'react-dom';
-import { Account } from '../../types/account';
+import { Account, getAccountTier } from '../../types/account';
 import { formatDate } from '../../utils/format';
 import { useTranslation } from 'react-i18next';
 import { MODEL_CONFIG, sortModels } from '../../config/modelConfig';
@@ -29,13 +29,19 @@ export default function AccountDetailsDialog({ account, onClose }: AccountDetail
                         <div className="px-2.5 py-0.5 rounded-full bg-gray-100 dark:bg-base-200 border border-gray-200 dark:border-base-300 text-xs font-mono text-gray-500 dark:text-gray-400">
                             {account.email}
                         </div>
-                        {account.quota?.subscription_tier && (
-                            <div className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${account.quota.subscription_tier === 'ultra' ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400' :
-                                account.quota.subscription_tier === 'pro' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400' : 'bg-gray-100 text-gray-600 dark:bg-base-300 dark:text-gray-400'
+                        {(() => {
+                            const tier = getAccountTier(account);
+                            const label = account.quota?.subscription_tier || tier.toUpperCase();
+                            return (
+                                <div className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                                    tier === 'ultra' ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400' :
+                                    tier === 'pro' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400' :
+                                    'bg-gray-100 text-gray-600 dark:bg-base-300 dark:text-gray-400'
                                 }`}>
-                                {account.quota.subscription_tier}
-                            </div>
-                        )}
+                                    {label}
+                                </div>
+                            );
+                        })()}
                     </div>
                     <button
                         onClick={onClose}

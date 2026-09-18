@@ -274,9 +274,14 @@ fn migrate_thinking_from_logs() -> Result<(), String> {
 
 pub fn init_db() -> Result<(), String> {
     let conn = Connection::open(get_proxy_db_path()?).map_err(|e| e.to_string())?;
-    // Must precede WAL for new databases. Existing databases are not fully VACUUMed.
-    // Keep this out of ordinary connections: even an unchanged mode can write.
-    let _ = conn.pragma_update(None, "auto_vacuum", "INCREMENTAL");
+    // Must precede WAL for new databases. Upgrade legacy databases if auto_vacuum is 0.
+    let auto_vacuum: i64 = conn
+        .pragma_query_value(None, "auto_vacuum", |r| r.get(0))
+        .unwrap_or(0);
+    if auto_vacuum == 0 {
+        let _ = conn.pragma_update(None, "auto_vacuum", "INCREMENTAL");
+        let _ = conn.execute("VACUUM", []);
+    }
     apply_fast_pragmas(&conn)?;
 
     conn.execute(
@@ -708,23 +713,27 @@ fn apply_retention_with_connection(
 ) -> Result<(usize, usize), String> {
     let now = chrono::Utc::now().timestamp_millis();
     let body_cutoff = now - (policy.max_body_age_hours as i64 * 3600 * 1000);
-    let age_cutoff = now - (policy.max_age_days as i64 * 24 * 3600 * 1000);
     let bodies_cleared = conn.execute(
         "UPDATE request_logs SET request_body = NULL, upstream_request_body = NULL, response_body = NULL WHERE timestamp < ?1 AND (request_body IS NOT NULL OR upstream_request_body IS NOT NULL OR response_body IS NOT NULL)",
         [body_cutoff],
     ).map_err(|e| e.to_string())?;
-    let mut rows_deleted = conn
-        .execute(
-            "DELETE FROM request_logs WHERE timestamp < ?1",
-            [age_cutoff],
-        )
-        .map_err(|e| e.to_string())?;
+
+    // 注意：已移除基于 max_age_days 的按天整行删除逻辑，改为条数上限与空间上限滑动窗口淘汰
+    let mut rows_deleted = 0;
     if policy.max_rows > 0 {
         rows_deleted += conn.execute(
             "DELETE FROM request_logs WHERE id NOT IN (SELECT id FROM request_logs ORDER BY timestamp DESC LIMIT ?1)",
             [policy.max_rows],
         ).map_err(|e| e.to_string())?;
     }
+
+    // 按空间上限执行 30% 滑动窗口尾部淘汰
+    let budget = policy.budget_bytes();
+    if budget > 0 && disk_bytes(conn).unwrap_or(0) > budget {
+        let (evicted, _) = evict_sliding_window(conn, budget)?;
+        rows_deleted += evicted;
+    }
+
     reclaim_space(conn)?;
     Ok((bodies_cleared, rows_deleted))
 }
@@ -735,18 +744,38 @@ fn reclaim_space(conn: &Connection) -> Result<(), String> {
             .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))
             .map_err(|e| e.to_string())?;
         if busy != 0 {
-            return Err("proxy log checkpoint busy".to_string());
+            tracing::warn!("proxy log checkpoint busy");
         }
         Ok(())
     };
     checkpoint()?;
-    // This pragma yields a row per reclaimed page; drain it to perform all 256 steps.
-    let mut vacuum = conn
-        .prepare("PRAGMA incremental_vacuum(256)")
-        .map_err(|e| e.to_string())?;
-    let mut pages = vacuum.query([]).map_err(|e| e.to_string())?;
-    while pages.next().map_err(|e| e.to_string())?.is_some() {}
-    drop(pages);
+
+    let auto_vacuum: i64 = conn
+        .pragma_query_value(None, "auto_vacuum", |r| r.get(0))
+        .unwrap_or(0);
+
+    if auto_vacuum == 2 {
+        // Draining all free pages incrementally in batches
+        for _ in 0..50 {
+            let free: u64 = conn
+                .pragma_query_value(None, "freelist_count", |r| r.get(0))
+                .unwrap_or(0);
+            if free == 0 {
+                break;
+            }
+            let step = free.min(1000);
+            let mut vacuum = conn
+                .prepare(&format!("PRAGMA incremental_vacuum({})", step))
+                .map_err(|e| e.to_string())?;
+            let mut pages = vacuum.query([]).map_err(|e| e.to_string())?;
+            while pages.next().map_err(|e| e.to_string())?.is_some() {}
+            drop(pages);
+        }
+    } else {
+        // Non-incremental or legacy database: full VACUUM to shrink disk size
+        let _ = conn.execute("VACUUM", []);
+    }
+
     checkpoint()
 }
 
@@ -759,6 +788,69 @@ fn disk_bytes(conn: &Connection) -> Result<u64, String> {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(total),
             Err(e) => Err(e.to_string()),
         })
+}
+
+pub fn get_proxy_db_disk_bytes() -> Result<u64, String> {
+    let conn = connect_db()?;
+    disk_bytes(&conn)
+}
+
+/// 滑动窗口尾部淘汰机制：
+/// 当日志数据库达到或即将超过预算上限时，自动清理最尾部（最早）的日志，
+/// 一次性挤出最大存储空间的 30%（即让体积回落到 <= 70% 预算内），
+/// 并记录日志，随后返回清理的记录数与释放字节数。
+pub fn evict_sliding_window(conn: &Connection, budget: u64) -> Result<(usize, u64), String> {
+    if budget == 0 {
+        return Ok((0, 0));
+    }
+    let before_bytes = disk_bytes(conn)?;
+    // 一次挤出最大空间的 30% (即目标保留 <= 70% 的最大上限)
+    let evict_quota = (budget as f64 * 0.30) as u64;
+    let target_bytes = budget.saturating_sub(evict_quota);
+
+    if before_bytes <= target_bytes {
+        return Ok((0, 0));
+    }
+
+    let mut total_deleted: usize = 0;
+    // 循环按批次从最尾部（最早记录，timestamp ASC）清理
+    for _ in 0..100 {
+        let deleted = conn
+            .execute(
+                "DELETE FROM request_logs WHERE id IN (
+                SELECT id FROM request_logs ORDER BY timestamp ASC LIMIT 250
+            )",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+
+        if deleted == 0 {
+            break;
+        }
+        total_deleted += deleted;
+        reclaim_space(conn)?;
+
+        let current_bytes = disk_bytes(conn)?;
+        if current_bytes <= target_bytes {
+            break;
+        }
+    }
+
+    let after_bytes = disk_bytes(conn)?;
+    let freed_bytes = before_bytes.saturating_sub(after_bytes);
+
+    if total_deleted > 0 {
+        tracing::info!(
+            "[ProxyLog Sliding Window] Disk budget reached ({:.2} GB limit). Evicted {} tail records, freed {:.2} MB (target 30% quota: {:.2} MB). Current size: {:.2} MB.",
+            budget as f64 / 1_073_741_824.0,
+            total_deleted,
+            freed_bytes as f64 / 1_048_576.0,
+            evict_quota as f64 / 1_048_576.0,
+            after_bytes as f64 / 1_048_576.0
+        );
+    }
+
+    Ok((total_deleted, freed_bytes))
 }
 
 fn projected_bytes(conn: &Connection, log_bytes: u64) -> Result<u64, String> {
@@ -776,6 +868,9 @@ fn projected_bytes(conn: &Connection, log_bytes: u64) -> Result<u64, String> {
 }
 
 fn make_room(conn: &Connection, budget: u64, log_bytes: u64) -> Result<(), String> {
+    if budget == 0 {
+        return Err("proxy log disk budget is 0".to_string());
+    }
     if projected_bytes(conn, log_bytes)? <= budget {
         return Ok(());
     }
@@ -783,36 +878,29 @@ fn make_room(conn: &Connection, budget: u64, log_bytes: u64) -> Result<(), Strin
     if projected_bytes(conn, log_bytes)? <= budget {
         return Ok(());
     }
-    let auto_vacuum: i64 = conn
-        .pragma_query_value(None, "auto_vacuum", |r| r.get(0))
-        .map_err(|e| e.to_string())?;
-    // Legacy files cannot shrink: even reusing all free pages still needs WAL headroom.
-    if auto_vacuum == 0
-        && disk_bytes(conn)?
-            .saturating_add(log_bytes.saturating_mul(2))
-            .saturating_add(64 * 1024)
-            > budget
-    {
-        return Err("legacy proxy log database cannot shrink within budget".to_string());
+
+    // 优先触发 30% 滑动窗口机制清理最尾部历史日志
+    let (evicted, _) = evict_sliding_window(conn, budget)?;
+    if evicted > 0 {
+        reclaim_space(conn)?;
     }
-    let target = budget / 5 * 4;
+
+    if projected_bytes(conn, log_bytes)? <= budget {
+        return Ok(());
+    }
+
+    let target = budget.saturating_mul(7) / 10;
     // Bounded work per write, oldest bodies first, then oldest summaries. No full-body reads.
     for _ in 0..8 {
         let before = projected_bytes(conn, log_bytes)?;
-        let free: u64 = conn
-            .pragma_query_value(None, "freelist_count", |r| r.get(0))
-            .map_err(|e| e.to_string())?;
-        // Reclaim already freed pages before discarding more history.
-        if auto_vacuum == 0 || free == 0 {
-            let cleared = conn.execute(
+        let cleared = conn.execute(
             "UPDATE request_logs SET request_body = NULL, upstream_request_body = NULL, response_body = NULL,
              request_headers = NULL, upstream_request_headers = NULL, response_headers = NULL WHERE id IN
-             (SELECT id FROM request_logs WHERE request_body IS NOT NULL OR upstream_request_body IS NOT NULL OR response_body IS NOT NULL ORDER BY timestamp ASC LIMIT 32)", []
+             (SELECT id FROM request_logs WHERE request_body IS NOT NULL OR upstream_request_body IS NOT NULL OR response_body IS NOT NULL ORDER BY timestamp ASC LIMIT 64)", []
         ).map_err(|e| e.to_string())?;
-            if cleared == 0 {
-                conn.execute("DELETE FROM request_logs WHERE id IN (SELECT id FROM request_logs ORDER BY timestamp ASC LIMIT 32)", [])
-                    .map_err(|e| e.to_string())?;
-            }
+        if cleared == 0 {
+            conn.execute("DELETE FROM request_logs WHERE id IN (SELECT id FROM request_logs ORDER BY timestamp ASC LIMIT 64)", [])
+                .map_err(|e| e.to_string())?;
         }
         reclaim_space(conn)?;
         let after = projected_bytes(conn, log_bytes)?;
@@ -851,7 +939,7 @@ fn save_log_with_connection(
         .error
         .as_ref()
         .map(|error| error.chars().take(1024).collect());
-    let budget = policy.max_disk_mb.saturating_mul(1024 * 1024);
+    let budget = policy.budget_bytes();
     let summary_bytes = [&log.id, &log.method, &log.url]
         .iter()
         .map(|s| s.len() as u64)
@@ -1141,15 +1229,17 @@ mod retention_tests {
             serde_json::from_str::<LogRetentionConfig>("{}")
                 .unwrap()
                 .max_disk_mb,
-            1024
+            512
         );
         config.proxy.log_retention.max_disk_mb = 8;
+        config.proxy.log_retention.max_storage_gb = 0.0;
         crate::modules::config::save_app_config(&config).unwrap();
         save_log(sample_log("old", 300_000)).unwrap();
         let conn = connect_db().unwrap();
         reclaim_space(&conn).unwrap();
         assert!(disk_bytes(&conn).unwrap() > 1024 * 1024);
         config.proxy.log_retention.max_disk_mb = 1;
+        config.proxy.log_retention.max_storage_gb = 0.0;
         crate::modules::config::save_app_config(&config).unwrap();
         save_log(sample_log("new", 4096)).unwrap();
         assert!(get_log_detail("old").unwrap().response_body.is_none());
@@ -1162,6 +1252,7 @@ mod retention_tests {
         assert!(get_log_detail("oversize").unwrap().response_body.is_none());
         let zero_budget_policy = LogRetentionConfig {
             max_disk_mb: 0,
+            max_storage_gb: 0.0,
             ..config.proxy.log_retention
         };
         assert!(
@@ -1347,9 +1438,13 @@ pub fn limit_max_logs(max_count: usize) -> Result<usize, String> {
 }
 
 pub fn clear_logs() -> Result<(), String> {
+    let _guard = LOG_WRITE_LOCK.lock().map_err(|e| e.to_string())?;
     let conn = connect_db()?;
     conn.execute("DELETE FROM request_logs", [])
         .map_err(|e| e.to_string())?;
+    // Full vacuum to reclaim all disk space immediately
+    let _ = conn.execute("VACUUM", []);
+    let _ = conn.pragma_update(None, "wal_checkpoint", "TRUNCATE");
     Ok(())
 }
 

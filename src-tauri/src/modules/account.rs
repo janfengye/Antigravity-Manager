@@ -1032,8 +1032,8 @@ fn load_account_at_path(account_path: &PathBuf) -> Result<Account, String> {
     let content = fs::read_to_string(account_path)
         .map_err(|e| format!("failed_to_read_account_data: {}", e))?;
 
-    match serde_json::from_str::<Account>(&content) {
-        Ok(account) => Ok(account),
+    let mut account = match serde_json::from_str::<Account>(&content) {
+        Ok(account) => account,
         Err(e) => {
             let err_msg = e.to_string();
             // Self-healing attempt: handle trailing characters / extra closing brackets
@@ -1051,9 +1051,24 @@ fn load_account_at_path(account_path: &PathBuf) -> Result<Account, String> {
                     return Ok(account);
                 }
             }
-            Err(format!("failed_to_parse_account_data: {}", err_msg))
+            return Err(format!("failed_to_parse_account_data: {}", err_msg));
+        }
+    };
+
+    // Self-healing: if subscription_tier is missing or unnormalized, heal it and persist to disk
+    if let Some(ref mut quota) = account.quota {
+        let original_tier = quota.subscription_tier.clone();
+        quota.ensure_subscription_tier();
+        if quota.subscription_tier != original_tier {
+            crate::modules::logger::log_info(&format!(
+                "Self-healing subscription tier for account {} ({:?} -> {:?})",
+                account.email, original_tier, quota.subscription_tier
+            ));
+            let _ = save_account_at_path(account_path, &account);
         }
     }
+
+    Ok(account)
 }
 
 /// Load account index with recovery support

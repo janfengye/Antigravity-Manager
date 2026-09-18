@@ -44,18 +44,40 @@ pub fn update_thinking_budget_config(config: ThinkingBudgetConfig) {
         if let Ok(mut cfg) = lock.write() {
             *cfg = config.clone();
             tracing::info!(
-                "[Thinking-Budget] Global config updated: mode={:?}, custom_value={}",
-                config.mode,
-                config.custom_value
+                "[Thinking-Budget] Global config updated: source={:?}, flash_mode={:?} (L:{}, M:{}, H:{}, T:{}), pro_mode={:?} (L:{}, H:{}), claude_mode={:?} (L:{}, M:{}, H:{})",
+                config.control_source,
+                config.flash_mode,
+                config.flash_low,
+                config.flash_medium,
+                config.flash_high,
+                config.flash_tiered,
+                config.pro_mode,
+                config.pro_low,
+                config.pro_high,
+                config.claude_mode,
+                config.claude_low,
+                config.claude_medium,
+                config.claude_high
             );
         }
     } else {
         // 首次初始化
         let _ = GLOBAL_THINKING_BUDGET_CONFIG.set(RwLock::new(config.clone()));
         tracing::info!(
-            "[Thinking-Budget] Global config initialized: mode={:?}, custom_value={}",
-            config.mode,
-            config.custom_value
+            "[Thinking-Budget] Global config initialized: source={:?}, flash_mode={:?} (L:{}, M:{}, H:{}, T:{}), pro_mode={:?} (L:{}, H:{}), claude_mode={:?} (L:{}, M:{}, H:{})",
+            config.control_source,
+            config.flash_mode,
+            config.flash_low,
+            config.flash_medium,
+            config.flash_high,
+            config.flash_tiered,
+            config.pro_mode,
+            config.pro_low,
+            config.pro_high,
+            config.claude_mode,
+            config.claude_low,
+            config.claude_medium,
+            config.claude_high
         );
     }
 }
@@ -535,47 +557,174 @@ fn default_thinking_retention_days() -> u32 {
     15
 }
 
+/// 思考预算控制权大选择
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ThinkingControlSource {
+    /// 网关权威控制（首选 / 推荐）：网关全权接管，按模型系列与档位标准字典进行权威解析与注入
+    Gateway,
+    /// 客户端直接控制（危险，不推荐）：四大协议归一化后，直接提取客户端传入的思考预算透传给上游
+    Client,
+}
+
+impl Default for ThinkingControlSource {
+    fn default() -> Self {
+        Self::Gateway
+    }
+}
+
 /// Thinking Budget 模式
-/// 控制如何处理调用方传入的 thinking_budget 参数
+/// 控制如何处理模型调用时的思考预算
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum ThinkingBudgetMode {
-    /// 自动限制：对特定模型（Flash/Thinking）应用 24576 上限
-    Auto,
-    /// 透传：完全使用调用方传入的值，不做任何修改
-    Passthrough,
-    /// 自定义：使用用户设定的固定值覆盖所有请求
+    /// 默认模式（官方自适应）：完全透传官方模型 ID，不注入 thinkingBudget
+    #[serde(rename = "default")]
+    Default,
+    /// 自定义思考预算模式：按各档位配置注入对应预算
+    #[serde(rename = "custom")]
     Custom,
-    /// 自适应：使用 effort 参数控制思考强度 (Claude 4.6+)
+    /// 旧版兼容模式：自动限制
+    #[serde(rename = "auto")]
+    Auto,
+    /// 旧版兼容模式：透传
+    #[serde(rename = "passthrough")]
+    Passthrough,
+    /// 旧版兼容模式：自适应
+    #[serde(rename = "adaptive")]
     Adaptive,
 }
 
 impl Default for ThinkingBudgetMode {
     fn default() -> Self {
-        Self::Auto
+        Self::Custom
     }
 }
 
 /// Thinking Budget 配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThinkingBudgetConfig {
-    /// 模式选择
-    #[serde(default)]
+    /// 控制权大选择：网关控制 vs 客户端控制
+    #[serde(default = "default_control_source")]
+    pub control_source: ThinkingControlSource,
+
+    // --- Gemini Flash 系列配置 ---
+    #[serde(default = "default_thinking_budget_mode")]
+    pub flash_mode: ThinkingBudgetMode,
+    #[serde(default = "default_flash_low")]
+    pub flash_low: i32, // 默认 1000
+    #[serde(default = "default_flash_medium")]
+    pub flash_medium: i32, // 默认 4000
+    #[serde(default = "default_flash_high")]
+    pub flash_high: i32, // 默认 10000
+    #[serde(default = "default_flash_tiered")]
+    pub flash_tiered: i32, // 默认 -1
+
+    // --- Gemini Pro 系列配置（官方仅 Low 与 High 两档） ---
+    #[serde(default = "default_thinking_budget_mode")]
+    pub pro_mode: ThinkingBudgetMode,
+    #[serde(default = "default_pro_low")]
+    pub pro_low: i32, // 默认 1001
+    #[serde(default = "default_pro_high")]
+    pub pro_high: i32, // 默认 10001
+
+    // --- Claude 系列配置 ---
+    #[serde(default = "default_thinking_budget_mode")]
+    pub claude_mode: ThinkingBudgetMode,
+    #[serde(default = "default_claude_budget")]
+    pub claude_budget: i32, // 统一思考预算 (默认 16000, 填 -1 自适应)
+    #[serde(default = "default_claude_low")]
+    pub claude_low: i32, // 默认 1024
+    #[serde(default = "default_claude_medium")]
+    pub claude_medium: i32, // 默认 4096
+    #[serde(default = "default_claude_high")]
+    pub claude_high: i32, // 默认 16000
+
+    // --- 历史向后兼容字段 ---
+    #[serde(default = "default_thinking_budget_mode")]
     pub mode: ThinkingBudgetMode,
-    /// 自定义固定值（仅在 mode=Custom 时生效）
     #[serde(default = "default_thinking_budget_custom_value")]
     pub custom_value: u32,
-    /// 思考强度 (仅在 mode=Adaptive 时生效) : low, medium, high
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
+    #[serde(default = "default_flash_low")]
+    pub custom_low: i32,
+    #[serde(default = "default_flash_medium")]
+    pub custom_medium: i32,
+    #[serde(default = "default_flash_high")]
+    pub custom_high: i32,
+    #[serde(default = "default_flash_tiered")]
+    pub custom_tiered: i32,
+}
+
+fn default_control_source() -> ThinkingControlSource {
+    ThinkingControlSource::Gateway
+}
+
+fn default_thinking_budget_mode() -> ThinkingBudgetMode {
+    ThinkingBudgetMode::Custom
+}
+
+fn default_flash_low() -> i32 {
+    1000
+}
+fn default_flash_medium() -> i32 {
+    4000
+}
+fn default_flash_high() -> i32 {
+    10000
+}
+fn default_flash_tiered() -> i32 {
+    -1
+}
+
+fn default_pro_low() -> i32 {
+    1001
+}
+fn default_pro_high() -> i32 {
+    10001
+}
+
+fn default_claude_budget() -> i32 {
+    16000
+}
+fn default_claude_low() -> i32 {
+    1024
+}
+fn default_claude_medium() -> i32 {
+    4096
+}
+fn default_claude_high() -> i32 {
+    16000
 }
 
 impl Default for ThinkingBudgetConfig {
     fn default() -> Self {
         Self {
-            mode: ThinkingBudgetMode::Auto,
+            control_source: default_control_source(),
+            flash_mode: default_thinking_budget_mode(),
+            flash_low: default_flash_low(),
+            flash_medium: default_flash_medium(),
+            flash_high: default_flash_high(),
+            flash_tiered: default_flash_tiered(),
+
+            pro_mode: default_thinking_budget_mode(),
+            pro_low: default_pro_low(),
+            pro_high: default_pro_high(),
+
+            claude_mode: default_thinking_budget_mode(),
+            claude_budget: default_claude_budget(),
+            claude_low: default_claude_low(),
+            claude_medium: default_claude_medium(),
+            claude_high: default_claude_high(),
+
+            mode: default_thinking_budget_mode(),
             custom_value: default_thinking_budget_custom_value(),
             effort: None,
+            custom_low: default_flash_low(),
+            custom_medium: default_flash_medium(),
+            custom_high: default_flash_high(),
+            custom_tiered: default_flash_tiered(),
         }
     }
 }
@@ -821,6 +970,9 @@ pub struct LogRetentionConfig {
     /// Application disk budget in MiB, including the database and WAL.
     #[serde(default = "default_max_disk_mb")]
     pub max_disk_mb: u64,
+    /// Max log storage limit in GB (supports decimals, e.g. 0.5)
+    #[serde(default = "default_max_storage_gb")]
+    pub max_storage_gb: f64,
 }
 
 fn default_max_body_age_hours() -> u64 {
@@ -833,7 +985,22 @@ fn default_max_rows() -> u64 {
     100_000
 }
 fn default_max_disk_mb() -> u64 {
-    1024
+    512
+}
+fn default_max_storage_gb() -> f64 {
+    0.5
+}
+
+impl LogRetentionConfig {
+    pub fn budget_bytes(&self) -> u64 {
+        if self.max_storage_gb > 0.0 {
+            (self.max_storage_gb * 1024.0 * 1024.0 * 1024.0) as u64
+        } else if self.max_disk_mb > 0 {
+            self.max_disk_mb.saturating_mul(1024 * 1024)
+        } else {
+            512 * 1024 * 1024 // 0.5 GB
+        }
+    }
 }
 
 impl Default for LogRetentionConfig {
@@ -842,7 +1009,8 @@ impl Default for LogRetentionConfig {
             max_body_age_hours: 24,
             max_age_days: 30,
             max_rows: 100_000,
-            max_disk_mb: default_max_disk_mb(),
+            max_disk_mb: 512,
+            max_storage_gb: 0.5,
         }
     }
 }

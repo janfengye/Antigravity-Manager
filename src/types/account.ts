@@ -96,3 +96,31 @@ export interface DeviceProfileVersion {
     profile: DeviceProfile;
     is_current?: boolean;
 }
+
+/**
+ * 解析/推导账号的订阅等级 ('ultra' | 'pro' | 'free')
+ * 支持大小写不敏感、多关键词识别 (pro/premium/advanced/ultra/free) 与模型列表智能兜底
+ */
+export function getAccountTier(account: { quota?: QuotaData | null }): 'ultra' | 'pro' | 'free' {
+    const rawTier = account.quota?.subscription_tier?.toLowerCase();
+    if (rawTier) {
+        if (rawTier.includes('ultra')) return 'ultra';
+        if (rawTier.includes('pro') || rawTier.includes('premium') || rawTier.includes('advanced')) return 'pro';
+        if (rawTier.includes('free')) return 'free';
+    }
+
+    // 基于可用模型的启发式推导
+    const models = account.quota?.models || [];
+    if (models.some(m => m.name.toLowerCase().includes('ultra'))) {
+        return 'ultra';
+    }
+    // Claude / GPT 在 Google Code Assist 体系内仅付费 Pro/Premium 账号专享
+    if (models.some(m => {
+        const n = m.name.toLowerCase();
+        return n.startsWith('claude') || n.startsWith('gpt');
+    })) {
+        return 'pro';
+    }
+
+    return 'free';
+}

@@ -785,6 +785,55 @@
         "auto_start_desc": "Tự động khởi động tunnel khi dịch vụ API Proxy khởi động",
         "warning_quick_mode": "⚠️ Chế độ Nhanh: URL thay đổi mỗi lần khởi động lại",
         "warning_token_storage": "💡 Token được lưu trữ an toàn cục bộ"
+      },
+      "thinking_budget": {
+        "title": "Thinking Budget Control",
+        "description": "Normalize cross-protocol reasoning parameters and centrally manage thinking token budgets and adaptive behaviors for Gemini and Claude models.",
+        "control_source_label": "Authority Source",
+        "source_gateway": "Gateway Authoritative Control",
+        "source_gateway_desc": "The gateway centrally regulates thinking budgets and heuristic tiers, eliminating client inconsistencies and preventing upstream 400 errors caused by invalid limits.",
+        "source_client": "Client Direct Control",
+        "source_client_desc": "Extracts client-provided thinking parameters after normalization and forwards them directly. If omitted, upstream dynamic adaptive reasoning is used. Inappropriate values may trigger Google API errors.",
+        "recommended_tag": "Preferred / Recommended",
+        "danger_tag": "Dangerous / Not Recommended",
+        "client_warning_title": "Warning: Switched to Client Direct Control",
+        "client_warning_desc": "Different clients (Cline, Roo, Cherry, etc.) submit varying thinking.budget_tokens or effort values. If a client specifies limits exceeding Google API constraints (e.g. Flash > 24576 or non-standard Pro budgets), Google will return 400 Bad Request.",
+        "mode_default": "Default Mode (Upstream Adaptive)",
+        "mode_custom": "Custom Budget Mode (Recommended)",
+        "tier_low": "Low Tier",
+        "tier_medium": "Medium Tier",
+        "tier_high": "High Tier",
+        "tier_pro_high": "High Tier (Default / Flagship)",
+        "tier_tiered": "Tiered (Freeform Model)",
+        "flash_family_title": "Gemini Flash Series (3-flash, 3.7-flash, tiered, etc.)",
+        "flash_family_desc": "Manage four tier budgets for Flash reasoning models (enter -1 for official adaptive)",
+        "flash_low_hint": "Light reasoning (Default 1000)",
+        "flash_medium_hint": "Balanced tier (Default 4000)",
+        "flash_high_hint": "Deep reasoning (Default 10000)",
+        "flash_tiered_hint": "Adaptive / Freeform (Default -1)",
+        "flash_default_hint": "Official default mode enabled: passes model ID directly without injecting thinkingBudget.",
+        "tiered_desc": "💡 Tiered Model Note: Designed for Google's dynamic adaptation. When set to -1, the model allocates reasoning dynamically based on task difficulty; setting 30000+ unlocks Max reasoning beyond High.",
+        "pro_family_title": "Gemini Pro Series (3-pro, 3.1-pro, etc.)",
+        "pro_family_desc": "Google's Gemini 3.1 Pro architecture officially provides only Low and High tiers. Unspecified effort or medium automatically routes to High for deep reasoning.",
+        "pro_low_hint": "Low reasoning tier (Default 1001, -1 for adaptive)",
+        "pro_high_hint": "Deep reasoning tier (Default 10001, -1 for adaptive)",
+        "pro_default_hint": "Official default mode enabled: Gemini Pro reasoning is determined dynamically by Google.",
+        "claude_family_title": "Mô hình suy nghĩ dòng Claude (claude-3-7-sonnet-thinking,...)",
+        "claude_family_desc": "Điều chỉnh ngân sách token suy nghĩ của Claude (danh sách chính thức chỉ phân biệt -thinking và chuẩn; thiết lập này dành riêng cho mô hình thinking)",
+        "claude_low_hint": "Light thinking (Default 1024)",
+        "claude_medium_hint": "Everyday balanced (Default 4096)",
+        "claude_high_hint": "Deep reasoning (Default 16000)",
+        "claude_default_hint": "Official default mode enabled: adheres to standard Anthropic specifications without custom limits.",
+        "store_enabled": "Tự động hoàn thiện khối suy nghĩ và chữ ký ở máy chủ",
+        "store_enabled_desc": "Tự động thu thập và lưu giữ quá trình suy nghĩ cùng chữ ký mã hóa. Khi các Agent (Cline, Roo, Claude Code,...) không gửi lại suy nghĩ trong hội thoại nhiều lượt, gateway sẽ tự động bổ sung để tránh lỗi 400 hoặc mất ngữ cảnh.",
+        "default_on_tag": "Mặc định bật",
+        "claude_thinking_note": "💡 Lưu ý về mô hình Claude: Danh sách mô hình Anthropic chỉ phân biệt giữa mô hình có đuôi `-thinking` (như claude-3-7-sonnet-thinking) và mô hình chuẩn. Ngân sách này chỉ áp dụng cho mô hình thinking; mô hình thông thường sẽ không tạo ra suy nghĩ."
+      },
+      "thinking_settings": {
+        "title": "Cài đặt suy nghĩ (Thinking Settings)"
+      },
+      "prompt_multimodal": {
+        "title": "Prompt toàn cục & Cài đặt đa phương thức"
       }
     },
     "example": {
@@ -1025,6 +1074,18 @@
     "dialog": {
       "clear_title": "Xóa Logs Proxy",
       "clear_msg": "Bạn có chắc muốn xóa tất cả logs proxy? Hành động này không thể hoàn tác."
+    },
+    "settings": {
+      "toggle_button": "Cài đặt lưu trữ và bảo trì nhật ký",
+      "button_text": "Cài đặt nhật ký",
+      "title": "Chu kỳ lưu trữ và bảo trì nhật ký",
+      "subtitle": "Quản lý tập trung số ngày giữ nhật ký, cửa sổ trượt khối suy nghĩ và giải phóng dung lượng đĩa",
+      "retention_title": "Chính sách giữ nhật ký yêu cầu",
+      "payload_thinking_title": "Lưu trữ gói tin & chu kỳ suy nghĩ",
+      "maintenance_title": "Bảo trì nhật ký & dọn dẹp dung lượng"
+    },
+    "actions": {
+      "clear_all_requests": "Xóa toàn bộ lịch sử yêu cầu"
     }
   },
   "update_notification": {

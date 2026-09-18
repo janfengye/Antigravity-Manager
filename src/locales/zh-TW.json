@@ -795,6 +795,55 @@
         "auto_start_desc": "API 代理服務啟動時自動啟動隧道",
         "warning_quick_mode": "⚠️ 快速模式: URL 會在每次重啟時變更",
         "warning_token_storage": "💡 令牌會安全地儲存在本地"
+      },
+      "thinking_budget": {
+        "title": "思考鏈預算控制 (Thinking Budget)",
+        "description": "跨協議正規化思考參數，統一調控 Gemini 與 Claude 模型的深度思考 Token 預算及自適應行為。",
+        "control_source_label": "控制權歸屬 (Top-Level Authority)",
+        "source_gateway": "網關權威控制",
+        "source_gateway_desc": "網關層統一掌控思維鏈預算與啟發式檔位，消除不同客戶端參數差異，杜絕由於超額預算或格式不當引發的官方 400 報錯。",
+        "source_client": "客戶端直接控制",
+        "source_client_desc": "正規化後直接提取客戶端上傳的預算並透傳。若客戶端未傳則由上游自適應。不恰當的預算可能直接導致 Google 報錯。",
+        "recommended_tag": "首選 / 推薦",
+        "danger_tag": "危險 / 不推薦",
+        "client_warning_title": "危險警告：已切換為客戶端直接控制",
+        "client_warning_desc": "不同客戶端外掛（如 Cline, Roo, Cherry 等）上傳的 thinking.budget_tokens 或 effort 各不相同。若客戶端指定了超過 Google API 支援的數值（如 Flash 超過 24576、或 Pro 傳入非標準數值），Google 將直接返回 400 Bad Request 錯誤中斷生成。",
+        "mode_default": "預設模式 (官方自適應)",
+        "mode_custom": "自訂思考預算模式 (推薦)",
+        "tier_low": "Low 檔位",
+        "tier_medium": "Medium 檔位",
+        "tier_high": "High 檔位",
+        "tier_pro_high": "High 檔位 (預設/主力檔位)",
+        "tier_tiered": "Tiered (自由模型)",
+        "flash_family_title": "Gemini Flash 系列 (如 3-flash, 3.7-flash, tiered 等)",
+        "flash_family_desc": "控制 Flash 思考模型的四大檔位預算（填 -1 則不指定走官方自適應）",
+        "flash_low_hint": "極低推理 (預設 1000)",
+        "flash_medium_hint": "標準平衡檔 (預設 4000)",
+        "flash_high_hint": "深度推理檔 (預設 10000)",
+        "flash_tiered_hint": "自適應/自由強度 (預設 -1)",
+        "flash_default_hint": "已啟用官方預設模式：完全透傳官方模型 ID，不注入 thinkingBudget，完全由 Google 上游模型自主決定思考行為。",
+        "tiered_desc": "💡 Tiered 自由模型說明：該模型專為谷歌動態自適應打造。設定為 -1 時，模型根據問題難度自動分配思考量；若指定具體數值（如 30000+），可突破 High 檔位解鎖 Max 極限思考。",
+        "pro_family_title": "Gemini Pro 系列 (如 3-pro, 3.1-pro 等)",
+        "pro_family_desc": "Google 官方 3.1 Pro 體系僅提供 Low 與 High 兩個檔位。未指定 effort 或 medium 將自動走 High 保證 Pro 深度思考。",
+        "pro_low_hint": "低思考檔位 (預設 1001，填 -1 則走官方自適應)",
+        "pro_high_hint": "深度思考檔位 (預設 10001，填 -1 則走官方自適應)",
+        "pro_default_hint": "已啟用官方預設模式：Gemini Pro 系列將由 Google 官方動態確定思考強度。",
+        "claude_family_title": "Claude 系列思考模型 (如 claude-3-7-sonnet-thinking 等)",
+        "claude_family_desc": "調控 Claude 思考模型的 Token 預算（官方模型列表僅區分 -thinking 與普通模型，此項專用於思考模型）",
+        "claude_low_hint": "輕量思考 (預設 1024)",
+        "claude_medium_hint": "日常平衡檔 (預設 4096)",
+        "claude_high_hint": "深度思考檔 (預設 16000)",
+        "claude_default_hint": "已啟用官方預設模式：完全按官方協議規範透傳，不注入額外自訂預算限制。",
+        "store_enabled": "伺服端思考塊與簽名回填",
+        "store_enabled_desc": "自動攔截並持久化思考過程與加密簽名；當商業 Agent（如 Cline, Roo, Claude Code 等）多輪對話未帶回思考時由伺服端自動補齊，杜絕上游 400 報錯或上下文遺失。",
+        "default_on_tag": "預設開啟",
+        "claude_thinking_note": "💡 Claude 模型說明：Anthropic 官方模型列表僅區分帶 `-thinking`（如 claude-3-7-sonnet-thinking）與普通模型。本自訂預算專門控制帶 thinking 模型的思考配額；若調用普通非 thinking 模型，上游不產生思考過程。"
+      },
+      "thinking_settings": {
+        "title": "思考設定 (Thinking Settings)"
+      },
+      "prompt_multimodal": {
+        "title": "全域提示詞與多模態設定 (Prompt & Multimodal)"
       }
     },
     "example": {
@@ -1065,6 +1114,18 @@
     "dialog": {
       "clear_title": "清除監控紀錄",
       "clear_msg": "確定要清除所有監控紀錄嗎？此操作無法撤銷。"
+    },
+    "settings": {
+      "toggle_button": "日誌儲存與維護設定",
+      "button_text": "日誌設定",
+      "title": "日誌儲存週期與維護設定",
+      "subtitle": "統一管理請求日誌保留天數、思考塊滑動視窗與磁碟空間回收",
+      "retention_title": "請求日誌保留策略",
+      "payload_thinking_title": "報文儲存與思考塊週期",
+      "maintenance_title": "日誌維護與空間清理"
+    },
+    "actions": {
+      "clear_all_requests": "清空全部歷史請求"
     }
   },
   "update_notification": {

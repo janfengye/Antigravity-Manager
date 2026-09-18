@@ -424,6 +424,14 @@ pub async fn clear_proxy_logs(state: State<'_, ProxyServiceState>) -> Result<(),
     let monitor_lock = state.monitor.read().await;
     if let Some(monitor) = monitor_lock.as_ref() {
         monitor.clear().await;
+    } else {
+        tokio::task::spawn_blocking(|| {
+            if let Err(e) = crate::modules::proxy_db::clear_logs() {
+                tracing::error!("Failed to clear logs in DB: {}", e);
+            }
+        })
+        .await
+        .map_err(|e| format!("Spawn blocking failed: {}", e))?;
     }
     Ok(())
 }
@@ -439,8 +447,14 @@ pub async fn get_proxy_logs_paginated(
 
 /// 获取单条日志的完整详情
 #[tauri::command]
-pub async fn get_proxy_log_detail(log_id: String) -> Result<ProxyRequestLog, String> {
-    crate::modules::proxy_db::get_log_detail(&log_id)
+pub async fn get_proxy_log_detail(
+    log_id: Option<String>,
+    logId: Option<String>,
+) -> Result<ProxyRequestLog, String> {
+    let id = log_id
+        .or(logId)
+        .ok_or_else(|| "Missing log_id parameter".to_string())?;
+    crate::modules::proxy_db::get_log_detail(&id)
 }
 
 /// 获取日志总数
@@ -832,4 +846,10 @@ pub async fn get_proxy_pool_config(
     } else {
         Err("服务未运行".to_string())
     }
+}
+
+/// 获取日志数据库占用的磁盘大小 (字节)
+#[tauri::command]
+pub async fn get_proxy_db_disk_size() -> Result<u64, String> {
+    crate::modules::proxy_db::get_proxy_db_disk_bytes()
 }

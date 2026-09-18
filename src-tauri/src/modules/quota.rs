@@ -184,45 +184,27 @@ async fn fetch_project_id(
                     if let Ok(data) = res.json::<LoadProjectResponse>().await {
                         let project_id = data.project_id.clone();
 
-                        // Core logic: Multi-level fallback for tier extraction
-                        // 1. Paid Tier (Google One AI Premium etc.)
-                        // 2. Current Tier (If not ineligible)
-                        // 3. Allowed Tiers (Restricted/Default proxy access)
-                        let mut subscription_tier = data
+                        // Multi-level fallback for tier extraction: paid_tier -> current_tier -> allowed_tiers default
+                        let raw_tier = data
                             .paid_tier
                             .as_ref()
-                            .and_then(|t| t.name.clone())
-                            .or_else(|| data.paid_tier.as_ref().and_then(|t| t.id.clone()));
-
-                        let is_ineligible = data.ineligible_tiers.is_some()
-                            && !data.ineligible_tiers.as_ref().unwrap().is_empty();
-
-                        if subscription_tier.is_none() {
-                            if !is_ineligible {
-                                subscription_tier = data
-                                    .current_tier
+                            .and_then(|t| t.name.clone().or_else(|| t.id.clone()))
+                            .or_else(|| {
+                                data.current_tier
                                     .as_ref()
-                                    .and_then(|t| t.name.clone())
-                                    .or_else(|| {
-                                        data.current_tier.as_ref().and_then(|t| t.id.clone())
-                                    });
-                            } else {
-                                // If account is marked as INELIGIBLE, drop to allowedTiers and extract default
-                                if let Some(mut allowed) = data.allowed_tiers {
-                                    if let Some(default_tier) =
-                                        allowed.iter_mut().find(|t| t.is_default == Some(true))
-                                    {
-                                        if let Some(name) = &default_tier.name {
-                                            subscription_tier =
-                                                Some(format!("{} (Restricted)", name));
-                                        } else if let Some(id) = &default_tier.id {
-                                            subscription_tier =
-                                                Some(format!("{} (Restricted)", id));
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                                    .and_then(|t| t.name.clone().or_else(|| t.id.clone()))
+                            })
+                            .or_else(|| {
+                                data.allowed_tiers.as_ref().and_then(|allowed| {
+                                    allowed
+                                        .iter()
+                                        .find(|t| t.is_default == Some(true))
+                                        .and_then(|t| t.name.clone().or_else(|| t.id.clone()))
+                                })
+                            });
+
+                        let subscription_tier =
+                            raw_tier.map(|t| crate::models::quota::normalize_subscription_tier(&t));
 
                         if let Some(ref tier) = subscription_tier {
                             crate::modules::logger::log_info(&format!(
@@ -281,9 +263,18 @@ pub async fn fetch_quota_with_cache(
 ) -> crate::error::AppResult<(QuotaData, Option<String>)> {
     use crate::error::AppError;
 
-    // Optimization: Skip loadCodeAssist call if project_id is cached to save API quota
+    // Optimization: Skip loadCodeAssist call if project_id is cached to save API quota,
+    // BUT if the account is missing its subscription_tier, still query loadCodeAssist to recover it.
     let (project_id, subscription_tier) = if let Some(pid) = cached_project_id {
-        (Some(pid.to_string()), None)
+        let existing_tier = account_id
+            .and_then(|id| crate::modules::load_account(id).ok())
+            .and_then(|acc| acc.quota.and_then(|q| q.subscription_tier));
+
+        if existing_tier.is_some() {
+            (Some(pid.to_string()), existing_tier)
+        } else {
+            fetch_project_id(access_token, email, account_id).await
+        }
     } else {
         fetch_project_id(access_token, email, account_id).await
     };
@@ -338,7 +329,11 @@ pub async fn fetch_quota_with_cache(
                             ));
                             let mut q = QuotaData::new();
                             q.is_forbidden = true;
-                            q.subscription_tier = subscription_tier.clone();
+                            q.subscription_tier = subscription_tier.clone().or_else(|| {
+                                account_id
+                                    .and_then(|id| crate::modules::load_account(id).ok())
+                                    .and_then(|acc| acc.quota.and_then(|sq| sq.subscription_tier))
+                            });
                             return Ok((q, project_id.clone()));
                         }
 
@@ -424,8 +419,12 @@ pub async fn fetch_quota_with_cache(
                         }
                     }
 
-                    // Set subscription tier
-                    quota_data.subscription_tier = subscription_tier.clone();
+                    // Set subscription tier with robust normalization and model-based fallback inference
+                    let final_tier = crate::models::quota::resolve_subscription_tier(
+                        subscription_tier.as_deref(),
+                        &quota_data.models,
+                    );
+                    quota_data.subscription_tier = Some(final_tier);
 
                     // Best-effort: fetch grouped quota summary (weekly + 5h windows).
                     // Failure here must not block the primary quota result.

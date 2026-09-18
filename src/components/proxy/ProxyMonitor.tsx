@@ -1,15 +1,16 @@
-import React, { useEffect, useState, useRef, useMemo } from 'react';
+import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import ModalDialog from '../common/ModalDialog';
 import { useTranslation } from 'react-i18next';
 import { request as invoke } from '../../utils/request';
-import { Trash2, Search, X, Copy, CheckCircle, ChevronLeft, ChevronRight, ChevronUp, ChevronDown, RefreshCw, User, Sparkles, FileCode2, Eye, EyeOff, Clock } from 'lucide-react';
+import { Trash2, Search, X, Copy, CheckCircle, ChevronLeft, ChevronRight, ChevronDown, RefreshCw, User, Sparkles, FileCode2, Eye, EyeOff, Clock, Settings, HardDrive, Database, Check } from 'lucide-react';
 
-import { AppConfig } from '../../types/config';
+import { AppConfig, ExperimentalConfig } from '../../types/config';
 import { formatCompactNumber } from '../../utils/format';
 import { useAccountStore } from '../../stores/useAccountStore';
 import { isTauri } from '../../utils/env';
 import { copyToClipboard } from '../../utils/clipboard';
+import { VirtualizedPayloadViewer } from './VirtualizedPayloadViewer';
 
 
 interface ProxyRequestLog {
@@ -63,74 +64,80 @@ const LogTable: React.FC<LogTableProps> = ({
         <div
             className="flex-1 overflow-y-auto overflow-x-auto bg-white dark:bg-base-100"
         >
-            <table className="table table-xs w-full">
-                <thead className="bg-gray-50 dark:bg-base-200 text-gray-500 sticky top-0 z-10">
+            <table className="table table-sm w-full border-separate border-spacing-0">
+                <thead className="bg-gray-100/90 dark:bg-base-200 text-gray-700 dark:text-gray-200 text-xs font-semibold sticky top-0 z-10 backdrop-blur-sm border-b border-gray-200 dark:border-base-300">
                     <tr>
-                        <th style={{ width: '60px' }}>{t('monitor.table.status')}</th>
-                        <th style={{ width: '60px' }}>{t('monitor.table.method')}</th>
-                        <th style={{ width: '220px' }}>{t('monitor.table.model')}</th>
-                        <th style={{ width: '70px' }}>{t('monitor.table.protocol')}</th>
-                        <th style={{ width: '140px' }}>{t('monitor.table.account')}</th>
-                        <th style={{ width: '180px' }}>{t('monitor.table.path')}</th>
-                        <th className="text-right" style={{ width: '90px' }}>{t('monitor.table.usage')}</th>
-                        <th className="text-right" style={{ width: '80px' }}>{t('monitor.table.duration')}</th>
-                        <th className="text-right" style={{ width: '80px' }}>{t('monitor.table.time')}</th>
+                        <th style={{ width: '65px' }} className="py-2.5 px-3">{t('monitor.table.status')}</th>
+                        <th style={{ width: '65px' }} className="py-2.5 px-3">{t('monitor.table.method')}</th>
+                        <th style={{ width: '220px' }} className="py-2.5 px-3">{t('monitor.table.model')}</th>
+                        <th style={{ width: '80px' }} className="py-2.5 px-3">{t('monitor.table.protocol')}</th>
+                        <th style={{ width: '150px' }} className="py-2.5 px-3">{t('monitor.table.account')}</th>
+                        <th style={{ width: '180px' }} className="py-2.5 px-3">{t('monitor.table.path')}</th>
+                        <th className="text-right py-2.5 px-3" style={{ width: '100px' }}>{t('monitor.table.usage')}</th>
+                        <th className="text-right py-2.5 px-3" style={{ width: '85px' }}>{t('monitor.table.duration')}</th>
+                        <th className="text-right py-2.5 px-3" style={{ width: '85px' }}>{t('monitor.table.time')}</th>
                     </tr>
                 </thead>
-                <tbody className="font-mono text-gray-700 dark:text-gray-300">
+                <tbody className="font-mono text-gray-800 dark:text-gray-100 text-xs divide-y divide-gray-100 dark:divide-base-200">
                     {logs.map((log) => (
                         <tr
                             key={log.id}
-                            className="hover:bg-blue-50 dark:hover:bg-blue-900/20 cursor-pointer"
+                            className="hover:bg-blue-50/80 dark:hover:bg-base-200/80 cursor-pointer transition-colors"
                             onClick={() => onLogClick(log)}
                         >
-                            <td style={{ width: '60px' }}>
-                                <span className={`badge badge-xs text-white border-none ${log.status >= 200 && log.status < 400 ? 'badge-success' : 'badge-error'}`}>
+                            <td style={{ width: '65px' }} className="py-2 px-3">
+                                <span className={`badge badge-sm font-bold text-white border-none shadow-xs ${
+                                    log.status >= 200 && log.status < 400
+                                        ? 'bg-emerald-600 dark:bg-emerald-600'
+                                        : 'bg-rose-600 dark:bg-rose-600'
+                                }`}>
                                     {log.status}
                                 </span>
                             </td>
-                            <td className="font-bold" style={{ width: '60px' }}>{log.method}</td>
-                            <td className="text-blue-600 truncate" style={{ width: '220px', maxWidth: '220px' }}>
+                            <td className="font-bold text-gray-900 dark:text-white py-2 px-3" style={{ width: '65px' }}>{log.method}</td>
+                            <td className="text-sky-600 dark:text-sky-400 font-semibold truncate py-2 px-3" style={{ width: '220px', maxWidth: '220px' }}>
                                 {log.mapped_model && log.model !== log.mapped_model
                                     ? `${log.model} => ${log.mapped_model}`
                                     : (log.model || '-')}
                             </td>
-                            <td style={{ width: '70px' }}>
+                            <td style={{ width: '80px' }} className="py-2 px-3">
                                 {log.protocol && (
-                                    <span className={`badge badge-xs text-white border-none ${log.protocol === 'openai' ? 'bg-green-500' :
-                                        log.protocol === 'anthropic' ? 'bg-orange-500' :
-                                            log.protocol === 'gemini' ? 'bg-blue-500' : 'bg-gray-400'
-                                        }`}>
+                                    <span className={`badge badge-xs px-2 py-0.5 font-bold text-white border-none shadow-xs ${
+                                        log.protocol === 'openai' ? 'bg-emerald-600 dark:bg-emerald-600' :
+                                            log.protocol === 'anthropic' ? 'bg-amber-600 dark:bg-amber-600' :
+                                                log.protocol === 'gemini' ? 'bg-blue-600 dark:bg-blue-600' :
+                                                    'bg-gray-600 dark:bg-gray-600'
+                                    }`}>
                                         {log.protocol === 'openai' ? 'OpenAI' :
                                             log.protocol === 'anthropic' ? 'Claude' :
                                                 log.protocol === 'gemini' ? 'Gemini' : log.protocol}
                                     </span>
                                 )}
                             </td>
-                            <td className="text-gray-600 dark:text-gray-400 truncate text-[10px]" style={{ width: '140px', maxWidth: '140px' }} title={log.account_email || ''}>
+                            <td className="text-gray-600 dark:text-gray-300 font-sans truncate text-xs py-2 px-3" style={{ width: '150px', maxWidth: '150px' }} title={log.account_email || ''}>
                                 {log.account_email ? log.account_email.replace(/(.{3}).*(@.*)/, '$1***$2') : '-'}
                             </td>
-                            <td className="truncate" style={{ width: '180px', maxWidth: '180px' }}>{log.url}</td>
-                            <td className="text-right text-[9px]" style={{ width: '90px' }}>
+                            <td className="text-gray-700 dark:text-gray-300 truncate text-xs py-2 px-3" style={{ width: '180px', maxWidth: '180px' }}>{log.url}</td>
+                            <td className="text-right text-xs py-2 px-3" style={{ width: '100px' }}>
                                 {log.input_tokens != null && (() => {
                                     const totalIn = (log.cached_tokens && log.cached_tokens > log.input_tokens)
                                         ? log.input_tokens + log.cached_tokens
                                         : log.input_tokens;
                                     return (
                                         <div>
-                                            <div>{t('monitor.input')}: {formatCompactNumber(totalIn)}</div>
+                                            <div className="text-gray-700 dark:text-gray-200">{t('monitor.input')}: <span className="font-semibold">{formatCompactNumber(totalIn)}</span></div>
                                             {log.cached_tokens ? (
-                                                <div className="text-emerald-600 dark:text-emerald-400 font-medium text-[8.5px]">
+                                                <div className="text-emerald-600 dark:text-emerald-400 font-semibold text-[10px]">
                                                     ({t('monitor.cached', '缓')}: {formatCompactNumber(log.cached_tokens)})
                                                 </div>
                                             ) : null}
                                         </div>
                                     );
                                 })()}
-                                {log.output_tokens != null && <div>{t('monitor.output')}: {formatCompactNumber(log.output_tokens)}</div>}
+                                {log.output_tokens != null && <div className="text-gray-700 dark:text-gray-200">{t('monitor.output')}: <span className="font-semibold">{formatCompactNumber(log.output_tokens)}</span></div>}
                             </td>
-                            <td className="text-right" style={{ width: '80px' }}>{log.duration}ms</td>
-                            <td className="text-right text-[10px]" style={{ width: '80px' }}>
+                            <td className="text-right text-gray-700 dark:text-gray-300 text-xs font-medium py-2 px-3" style={{ width: '85px' }}>{log.duration}ms</td>
+                            <td className="text-right text-gray-500 dark:text-gray-400 text-xs py-2 px-3" style={{ width: '85px' }}>
                                 {new Date(log.timestamp).toLocaleTimeString()}
                             </td>
                         </tr>
@@ -141,14 +148,14 @@ const LogTable: React.FC<LogTableProps> = ({
             {/* Loading indicator */}
             {loading && (
                 <div className="flex items-center justify-center p-4 bg-white dark:bg-base-100">
-                    <div className="loading loading-spinner loading-md"></div>
-                    <span className="ml-3 text-sm text-gray-500">{t('common.loading')}</span>
+                    <div className="loading loading-spinner loading-md text-blue-600"></div>
+                    <span className="ml-3 text-sm text-gray-500 dark:text-gray-400">{t('common.loading')}</span>
                 </div>
             )}
 
             {/* Empty state */}
             {!loading && logs.length === 0 && (
-                <div className="flex items-center justify-center p-8 text-gray-400">
+                <div className="flex items-center justify-center p-8 text-gray-400 dark:text-gray-500 text-sm">
                     {t('monitor.table.empty') || '暂无请求记录'}
                 </div>
             )}
@@ -556,6 +563,19 @@ function extractConcisePayload(
         });
     }
 
+    if (obj.input !== undefined) {
+        concise.input = typeof obj.input === 'string' ? obj.input : (Array.isArray(obj.input) ? simplifyMessages(obj.input) : obj.input);
+    }
+    if (obj.output !== undefined) {
+        concise.output = obj.output;
+    }
+    if (obj.prompt !== undefined) {
+        concise.prompt = obj.prompt;
+    }
+    if (obj.instructions !== undefined) {
+        concise.instructions = obj.instructions;
+    }
+
     if (obj.content !== undefined && !obj.messages && !obj.choices && !obj.request) {
         concise.content = simplifyContent(obj.content);
     }
@@ -583,6 +603,11 @@ function extractConcisePayload(
                 cache_hit_rate: totalIn > 0 ? `${Math.min(100, Math.max(0, (log.cached_tokens / totalIn) * 100)).toFixed(1)}%` : undefined
             } : {})
         };
+    }
+
+    const substantiveKeys = Object.keys(concise).filter(k => k !== '_session_thinking_id');
+    if (substantiveKeys.length === 0) {
+        return rawStr;
     }
 
     return JSON.stringify(concise, null, 2);
@@ -741,7 +766,7 @@ const TimingDiagnosticsCard: React.FC<TimingDiagnosticsCardProps> = ({ timing, o
     const stages = useMemo(() => [
         {
             key: 'clean',
-            label: t('monitor.timing.clean', '初始会话清洗'),
+            label: t('monitor.timing.clean', '会话清洗 (Clean)'),
             desc: t('monitor.timing.clean_desc', '清理缓存控制 / 合并同角色 / 历史提纯'),
             sec: timing.cleanSec,
             color: 'bg-indigo-500',
@@ -749,32 +774,32 @@ const TimingDiagnosticsCard: React.FC<TimingDiagnosticsCardProps> = ({ timing, o
         },
         {
             key: 'norm',
-            label: t('monitor.timing.norm', '中转归一'),
-            desc: t('monitor.timing.norm_desc', '模型映射 / 账号调度 / 协议转Gemini格式'),
+            label: t('monitor.timing.norm', '中转归一 (Normalize)'),
+            desc: t('monitor.timing.norm_desc', '模型映射 / 账号调度 / 跨协议转换'),
             sec: timing.normSec,
             color: 'bg-purple-500',
             textColor: 'text-purple-600 dark:text-purple-400',
         },
         {
             key: 'thinking',
-            label: t('monitor.timing.thinking', 'Thinking块、签名填充'),
-            desc: t('monitor.timing.thinking_desc', 'ThinkingStore回填 / 补全思维块与哨兵签名'),
+            label: t('monitor.timing.thinking', '思维块回填 (ThinkingStore)'),
+            desc: t('monitor.timing.thinking_desc', '持久化思维链及补齐商业Agent历史签名'),
             sec: timing.thinkingSec,
             color: 'bg-amber-500',
             textColor: 'text-amber-600 dark:text-amber-400',
         },
         {
             key: 'ttft',
-            label: t('monitor.timing.ttft', '等待首包（思考首ssetoken或者工具ssetoken或正文ssetoken）'),
-            desc: t('monitor.timing.ttft_desc', '网关发出请求至接收到上游首个有效数据块'),
+            label: t('monitor.timing.ttft', '等待首包 (TTFT)'),
+            desc: t('monitor.timing.ttft_desc', '网关上送至接收首个数据包 (含首Token/思考块)'),
             sec: timing.ttftSec,
             color: 'bg-emerald-500',
             textColor: 'text-emerald-600 dark:text-emerald-400',
         },
         {
             key: 'stream',
-            label: t('monitor.timing.stream', '首包到这个包响应完的时间'),
-            desc: t('monitor.timing.stream_desc', '首个数据块到达至整条响应流结束'),
+            label: t('monitor.timing.stream', '流式传输 (Stream)'),
+            desc: t('monitor.timing.stream_desc', '首个数据块到达至整条流式响应完成'),
             sec: timing.streamSec,
             color: 'bg-sky-500',
             textColor: 'text-sky-600 dark:text-sky-400',
@@ -784,11 +809,11 @@ const TimingDiagnosticsCard: React.FC<TimingDiagnosticsCardProps> = ({ timing, o
     const handleCopy = (e: React.MouseEvent) => {
         e.stopPropagation();
         const lines: string[] = [];
-        if (timing.cleanSec !== undefined) lines.push(`初始会话清洗：${formatSeconds(timing.cleanSec)}`);
-        if (timing.normSec !== undefined) lines.push(`中转归一：${formatSeconds(timing.normSec)}`);
-        if (timing.thinkingSec !== undefined) lines.push(`Thinking块、签名填充：${formatSeconds(timing.thinkingSec)}`);
-        if (timing.ttftSec !== undefined) lines.push(`等待首包（思考首ssetoken或者工具ssetoken或正文ssetoken）：${formatSeconds(timing.ttftSec)}`);
-        if (timing.streamSec !== undefined) lines.push(`首包到这个包响应完的时间：${formatSeconds(timing.streamSec)}`);
+        if (timing.cleanSec !== undefined) lines.push(`会话清洗 (Clean)：${formatSeconds(timing.cleanSec)}`);
+        if (timing.normSec !== undefined) lines.push(`中转归一 (Normalize)：${formatSeconds(timing.normSec)}`);
+        if (timing.thinkingSec !== undefined) lines.push(`思维块回填 (ThinkingStore)：${formatSeconds(timing.thinkingSec)}`);
+        if (timing.ttftSec !== undefined) lines.push(`等待首包 (TTFT)：${formatSeconds(timing.ttftSec)}`);
+        if (timing.streamSec !== undefined) lines.push(`流式传输 (Stream)：${formatSeconds(timing.streamSec)}`);
         lines.push(`总耗时：${formatSeconds(timing.totalSec)}`);
 
         onCopyText(lines.join('\n'));
@@ -798,36 +823,30 @@ const TimingDiagnosticsCard: React.FC<TimingDiagnosticsCardProps> = ({ timing, o
 
     if (timing.isOldRecordWithoutStages) {
         return (
-            <div className="mb-3 rounded-xl overflow-hidden border border-slate-200 dark:border-slate-800/80 bg-slate-100/50 dark:bg-slate-900/40">
-                <div className="px-3 py-2 bg-slate-200/60 dark:bg-[#161b22] border-b border-slate-200 dark:border-slate-800/80 flex items-center justify-between">
+            <div className="mb-3 rounded-xl overflow-hidden border border-gray-200 dark:border-base-300 bg-gray-100/50 dark:bg-base-200">
+                <div className="px-3 py-2 bg-gray-200/60 dark:bg-base-200 border-b border-gray-200 dark:border-base-300 flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                        <Clock size={12} className="text-slate-500 dark:text-slate-400" />
-                        <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300">
-                            {t('monitor.timing.title', '耗时分类诊断')}
+                        <Clock size={13} className="text-gray-500 dark:text-gray-400 shrink-0" />
+                        <span className="text-xs font-bold tracking-wider text-gray-700 dark:text-gray-200 shrink-0 whitespace-nowrap">
+                            {t('monitor.timing.title', '耗时诊断')}
                         </span>
-                        <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/70 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60">
+                        <span className="px-2 py-0.5 rounded text-[11px] font-mono font-bold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/70 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60">
                             {t('monitor.timing.total', '总耗时')}: {formatSeconds(timing.totalSec)}
                         </span>
                     </div>
-                    <span className="text-[10px] text-slate-400 dark:text-slate-500">
-                        {t('monitor.timing.legacy_hint', '历史记录未采集微观阶段耗时')}
-                    </span>
                 </div>
             </div>
         );
     }
 
     return (
-        <div className="mb-3 rounded-xl overflow-hidden border border-emerald-500/25 dark:border-emerald-500/20 bg-emerald-50/20 dark:bg-[#0c141c] shadow-sm">
+        <div className="mb-3 rounded-xl overflow-hidden border border-emerald-500/30 dark:border-emerald-500/25 bg-emerald-50/25 dark:bg-base-100 shadow-sm">
             {/* Card Header */}
-            <div className="px-3 py-2 bg-emerald-500/10 dark:bg-[#131f2b] border-b border-emerald-500/20 flex items-center justify-between gap-2 select-none">
+            <div className="px-3 py-2 bg-emerald-500/10 dark:bg-emerald-950/30 border-b border-emerald-500/20 flex items-center justify-between gap-2 select-none">
                 <div className="flex items-center gap-2 min-w-0">
-                    <Clock size={13} className="text-emerald-600 dark:text-emerald-400 shrink-0" />
-                    <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-emerald-900 dark:text-emerald-200 truncate">
-                        {t('monitor.timing.title', '耗时分类诊断')}
-                    </span>
-                    <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-black bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 shrink-0">
-                        {t('monitor.timing.total', '总耗时')}: {formatSeconds(timing.totalSec)}
+                    <Clock size={14} className="text-emerald-600 dark:text-emerald-400 shrink-0" />
+                    <span className="text-xs font-bold tracking-wider text-emerald-950 dark:text-emerald-100 shrink-0 whitespace-nowrap">
+                        {t('monitor.timing.title', '耗时诊断')}
                     </span>
                 </div>
 
@@ -835,30 +854,30 @@ const TimingDiagnosticsCard: React.FC<TimingDiagnosticsCardProps> = ({ timing, o
                     <button
                         type="button"
                         onClick={handleCopy}
-                        className="btn btn-ghost btn-xs h-6 px-2 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/15 text-[10px] font-medium gap-1"
-                        title={isCopied ? t('monitor.timing.copied_timing', '已复制耗时') : t('monitor.timing.copy_timing', '复制耗时分类')}
+                        className="btn btn-ghost btn-xs h-6 px-2 text-emerald-800 dark:text-emerald-200 hover:bg-emerald-500/15 text-[11px] font-semibold gap-1"
+                        title={isCopied ? t('common.copied', '已复制') : t('common.copy', '复制')}
                     >
-                        {isCopied ? <CheckCircle size={11} className="text-emerald-500" /> : <Copy size={11} />}
-                        <span>{isCopied ? t('monitor.timing.copied_timing', '已复制耗时') : t('monitor.timing.copy_timing', '复制耗时分类')}</span>
+                        {isCopied ? <CheckCircle size={12} className="text-emerald-500" /> : <Copy size={12} />}
+                        <span>{isCopied ? t('common.copied', '已复制') : t('common.copy', '复制')}</span>
                     </button>
                     <button
                         type="button"
                         onClick={() => setIsExpanded((prev) => !prev)}
-                        className="btn btn-ghost btn-xs p-1 h-6 min-h-0 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/15"
+                        className="btn btn-ghost btn-xs p-1 h-6 min-h-0 text-emerald-800 dark:text-emerald-300 hover:bg-emerald-500/15"
                         title={isExpanded ? '收起耗时诊断' : '展开耗时诊断'}
                     >
-                        <ChevronDown size={13} className={`transition-transform duration-200 ${isExpanded ? '' : '-rotate-90'}`} />
+                        <ChevronDown size={14} className={`transition-transform duration-200 ${isExpanded ? '' : '-rotate-90'}`} />
                     </button>
                 </div>
             </div>
 
             {/* Expandable Body */}
             {isExpanded && (
-                <div className="p-3 space-y-2.5 font-mono text-[11px]">
+                <div className="p-3 space-y-2.5 font-mono text-xs">
                     {/* Multi-stage Stacked Progress Bar */}
                     {totalSec > 0 && (
                         <div className="space-y-1">
-                            <div className="h-2 w-full bg-slate-200/80 dark:bg-slate-800 rounded-full flex overflow-hidden shadow-inner">
+                            <div className="h-2 w-full bg-gray-200/80 dark:bg-base-300 rounded-full flex overflow-hidden shadow-inner">
                                 {stages.map((st) => {
                                     if (st.sec === undefined || st.sec <= 0) return null;
                                     const pct = Math.min(100, Math.max(0.5, (st.sec / totalSec) * 100));
@@ -883,26 +902,26 @@ const TimingDiagnosticsCard: React.FC<TimingDiagnosticsCardProps> = ({ timing, o
                             return (
                                 <div
                                     key={st.key}
-                                    className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-white/70 dark:bg-[#16202c]/80 border border-slate-200/70 dark:border-slate-800/80 hover:border-emerald-500/30 transition-colors"
+                                    className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-white dark:bg-base-200 border border-gray-200/80 dark:border-base-300/90 hover:border-emerald-500/40 transition-colors shadow-2xs"
                                 >
-                                    <div className="flex items-center gap-2 min-w-0">
-                                        <span className={`w-2 h-2 rounded-full ${st.color} shrink-0`} />
+                                    <div className="flex items-center gap-2.5 min-w-0">
+                                        <span className={`w-2.5 h-2.5 rounded-full ${st.color} shrink-0`} />
                                         <div className="min-w-0">
-                                            <span className="font-semibold text-slate-800 dark:text-slate-200 truncate block text-[11px]">
+                                            <span className="font-bold text-gray-900 dark:text-white truncate block text-xs">
                                                 {st.label}
                                             </span>
-                                            <span className="text-[9px] text-slate-400 dark:text-slate-500 truncate block">
+                                            <span className="text-[10px] text-gray-500 dark:text-gray-400 truncate block">
                                                 {st.desc}
                                             </span>
                                         </div>
                                     </div>
 
                                     <div className="flex items-baseline gap-2 shrink-0 text-right font-mono">
-                                        <span className={`text-[11px] font-bold ${hasVal ? st.textColor : 'text-slate-400'}`}>
+                                        <span className={`text-xs font-black ${hasVal ? st.textColor : 'text-gray-400'}`}>
                                             {formatSeconds(st.sec)}
                                         </span>
                                         {pct !== undefined && (
-                                            <span className="text-[10px] text-slate-400 dark:text-slate-500 w-10 text-right">
+                                            <span className="text-[11px] font-bold text-gray-500 dark:text-gray-400 w-11 text-right">
                                                 {pct}%
                                             </span>
                                         )}
@@ -912,18 +931,18 @@ const TimingDiagnosticsCard: React.FC<TimingDiagnosticsCardProps> = ({ timing, o
                         })}
 
                         {/* Total Duration Row */}
-                        <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-emerald-500/10 dark:bg-emerald-950/40 border border-emerald-500/30 font-bold">
+                        <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-emerald-500/15 dark:bg-emerald-950/50 border border-emerald-500/40 font-bold">
                             <div className="flex items-center gap-2 min-w-0">
-                                <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
-                                <span className="text-emerald-900 dark:text-emerald-300 text-[11px]">
+                                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 shrink-0" />
+                                <span className="text-emerald-950 dark:text-emerald-100 text-xs font-bold">
                                     {t('monitor.timing.total', '总耗时')}
                                 </span>
                             </div>
                             <div className="flex items-baseline gap-2 shrink-0 text-right font-mono">
-                                <span className="text-[12px] font-black text-emerald-700 dark:text-emerald-300">
+                                <span className="text-sm font-black text-emerald-800 dark:text-emerald-200">
                                     {formatSeconds(timing.totalSec)}
                                 </span>
-                                <span className="text-[10px] text-emerald-600/70 dark:text-emerald-400/70 w-10 text-right">
+                                <span className="text-[11px] text-emerald-700/80 dark:text-emerald-300/80 w-11 text-right font-bold">
                                     100%
                                 </span>
                             </div>
@@ -935,365 +954,7 @@ const TimingDiagnosticsCard: React.FC<TimingDiagnosticsCardProps> = ({ timing, o
     );
 };
 
-// ==========================================
-// 单栏报文展示卡片（含语法高亮、独立搜索、跳转与复制）
-// ==========================================
-interface PayloadViewerCardProps {
-    cardId: string;
-    title: string;
-    badge: string;
-    badgeStyle: string;
-    rawPayload?: string;
-    concisePayload?: string;
-    headersJson?: string;
-    viewMode: 'concise' | 'full';
-    emptyPlaceholder: string;
-    onCopy: (content: string) => Promise<void>;
-    isCopied: boolean;
-    duration?: number;
-}
 
-const renderHighlightedJson = (
-    content: string,
-    searchTerm: string,
-    currentMatchIndex: number,
-    cardId: string
-) => {
-    if (!content) return null;
-
-    // Tokenize JSON: keys, strings, booleans, null, numbers, punctuation, and whitespace
-    const tokenRegex = /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(?:true|false|null)\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|[{}[\],:]|[^\s"{}[\],:]+|\s+)/g;
-
-    const trimmedSearch = searchTerm.trim();
-    let searchRegex: RegExp | null = null;
-    if (trimmedSearch) {
-        try {
-            const escaped = trimmedSearch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            searchRegex = new RegExp(`(${escaped})`, 'gi');
-        } catch {
-            searchRegex = null;
-        }
-    }
-
-    let globalMatchCounter = -1;
-
-    const renderTextWithSearch = (text: string, defaultClass: string, keyPrefix: string) => {
-        if (!searchRegex) {
-            return <span key={keyPrefix} className={defaultClass}>{text}</span>;
-        }
-
-        const parts = text.split(searchRegex);
-        return parts.map((part, pIdx) => {
-            if (!part) return null;
-            if (part.toLowerCase() === trimmedSearch.toLowerCase()) {
-                globalMatchCounter++;
-                const isActive = globalMatchCounter === currentMatchIndex;
-                return (
-                    <mark
-                        key={`${keyPrefix}-m-${pIdx}`}
-                        id={isActive ? `active-match-${cardId}` : undefined}
-                        className={`rounded-sm px-0.5 font-bold transition-all duration-150 ${
-                            isActive
-                                ? 'bg-amber-400 text-slate-950 ring-2 ring-amber-500 shadow-sm'
-                                : 'bg-amber-500/35 text-amber-900 dark:text-amber-100'
-                        }`}
-                    >
-                        {part}
-                    </mark>
-                );
-            }
-            return (
-                <span key={`${keyPrefix}-t-${pIdx}`} className={defaultClass}>
-                    {part}
-                </span>
-            );
-        });
-    };
-
-    const tokens: React.ReactNode[] = [];
-    let match;
-    let tokenIdx = 0;
-
-    while ((match = tokenRegex.exec(content)) !== null) {
-        const token = match[0];
-        const keyPrefix = `tok-${tokenIdx++}`;
-
-        if (/^"(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"\s*:$/.test(token)) {
-            // JSON Property Key (e.g. "model": or "messages":)
-            const colonIndex = token.lastIndexOf(':');
-            const keyStr = token.slice(0, colonIndex);
-            const colonStr = token.slice(colonIndex);
-            tokens.push(
-                <React.Fragment key={keyPrefix}>
-                    {renderTextWithSearch(keyStr, 'text-sky-600 dark:text-sky-300 font-medium', `${keyPrefix}-k`)}
-                    {renderTextWithSearch(colonStr, 'text-slate-400 dark:text-slate-500', `${keyPrefix}-c`)}
-                </React.Fragment>
-            );
-        } else if (/^"(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"$/.test(token)) {
-            // String Literal value
-            tokens.push(renderTextWithSearch(token, 'text-emerald-700 dark:text-emerald-300', keyPrefix));
-        } else if (/^(true|false)$/.test(token)) {
-            // Boolean value
-            tokens.push(renderTextWithSearch(token, 'text-purple-600 dark:text-purple-400 font-semibold', keyPrefix));
-        } else if (token === 'null') {
-            // Null value
-            tokens.push(renderTextWithSearch(token, 'text-rose-500 dark:text-rose-400 font-semibold italic', keyPrefix));
-        } else if (/^-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(token)) {
-            // Number value
-            tokens.push(renderTextWithSearch(token, 'text-amber-600 dark:text-amber-300 font-semibold', keyPrefix));
-        } else if (/^[{}[\],:]$/.test(token)) {
-            // Structural punctuation
-            tokens.push(renderTextWithSearch(token, 'text-slate-400 dark:text-slate-500', keyPrefix));
-        } else {
-            // Whitespace or plain fallback text
-            tokens.push(renderTextWithSearch(token, 'text-slate-700 dark:text-slate-300', keyPrefix));
-        }
-    }
-
-    return (
-        <pre className="text-[11px] font-mono whitespace-pre-wrap select-text leading-relaxed m-0 p-0 font-normal">
-            {tokens}
-        </pre>
-    );
-};
-
-const PayloadViewerCard: React.FC<PayloadViewerCardProps> = ({
-    cardId,
-    title,
-    badge,
-    badgeStyle,
-    rawPayload,
-    concisePayload,
-    headersJson,
-    viewMode,
-    emptyPlaceholder,
-    onCopy,
-    isCopied,
-    duration,
-}) => {
-    const { t } = useTranslation();
-    const [searchTerm, setSearchTerm] = useState('');
-    const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
-    const containerRef = useRef<HTMLDivElement>(null);
-
-    const timingInfo = useMemo(() => {
-        if (cardId !== 'resp') return null;
-        return parseTimingFromHeadersAndBody(headersJson, rawPayload, duration);
-    }, [cardId, headersJson, rawPayload, duration]);
-
-    const activeContent = useMemo(() => {
-        if (viewMode === 'concise') {
-            return concisePayload || rawPayload || '';
-        }
-        return rawPayload || '';
-    }, [viewMode, concisePayload, rawPayload]);
-
-    const formattedContent = useMemo(() => {
-        if (!activeContent) return '';
-        try {
-            const obj = JSON.parse(activeContent);
-            return JSON.stringify(obj, null, 2);
-        } catch {
-            return activeContent;
-        }
-    }, [activeContent]);
-
-    const matchesCount = useMemo(() => {
-        if (!searchTerm.trim() || !formattedContent) return 0;
-        try {
-            const escaped = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            const matches = formattedContent.match(new RegExp(escaped, 'gi'));
-            return matches ? matches.length : 0;
-        } catch {
-            return 0;
-        }
-    }, [searchTerm, formattedContent]);
-
-    useEffect(() => {
-        setCurrentMatchIndex(0);
-    }, [searchTerm, viewMode]);
-
-    useEffect(() => {
-        if (searchTerm.trim() && matchesCount > 0 && containerRef.current) {
-            const activeEl = containerRef.current.querySelector(`#active-match-${cardId}`);
-            if (activeEl) {
-                activeEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            }
-        }
-    }, [currentMatchIndex, searchTerm, matchesCount, cardId]);
-
-    const handleNext = () => {
-        if (matchesCount > 0) {
-            setCurrentMatchIndex((prev) => (prev + 1) % matchesCount);
-        }
-    };
-
-    const handlePrev = () => {
-        if (matchesCount > 0) {
-            setCurrentMatchIndex((prev) => (prev - 1 + matchesCount) % matchesCount);
-        }
-    };
-
-    const renderBody = () => {
-        if (!formattedContent) {
-            return (
-                <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-slate-400 dark:text-slate-500 select-none">
-                    <span className="text-xs italic">{emptyPlaceholder}</span>
-                </div>
-            );
-        }
-
-        return renderHighlightedJson(formattedContent, searchTerm, currentMatchIndex, cardId);
-    };
-
-    const searchInputRef = useRef<HTMLInputElement>(null);
-
-    const prettyHeaders = useMemo(() => {
-        if (!headersJson) return '';
-        try {
-            return JSON.stringify(JSON.parse(headersJson), null, 2);
-        } catch {
-            return headersJson;
-        }
-    }, [headersJson]);
-
-    const copyPayload = prettyHeaders
-        ? `/* headers */\n${prettyHeaders}\n\n/* body */\n${formattedContent}`
-        : formattedContent;
-
-    return (
-        <div
-            className="payload-viewer-card flex flex-col h-full bg-slate-50/50 dark:bg-[#0d1117] rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm outline-none"
-            tabIndex={-1}
-            onKeyDown={(e) => {
-                if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F')) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    searchInputRef.current?.focus();
-                    searchInputRef.current?.select();
-                }
-            }}
-        >
-            {/* Card Header */}
-            <div className="px-3.5 py-2 border-b border-slate-200 dark:border-slate-800/80 bg-white/95 dark:bg-[#161b22] flex items-center justify-between gap-2 shrink-0">
-                <div className="flex items-center gap-2 min-w-0">
-                    <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider border shrink-0 ${badgeStyle}`}>
-                        {badge}
-                    </span>
-                    <h3 className="text-xs font-bold text-slate-800 dark:text-slate-200 truncate" title={title}>
-                        {title}
-                    </h3>
-                </div>
-
-                <div className="flex items-center gap-1 shrink-0">
-                    <button
-                        type="button"
-                        onClick={() => onCopy(copyPayload)}
-                        disabled={!formattedContent && !prettyHeaders}
-                        className="btn btn-ghost btn-xs gap-1 h-7 px-2 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
-                        title={isCopied ? t('proxy.config.btn_copied', '已复制') : t('proxy.config.btn_copy', '复制')}
-                    >
-                        {isCopied ? <CheckCircle size={12} className="text-emerald-500" /> : <Copy size={12} />}
-                        <span className="text-[10px] font-medium">{isCopied ? t('proxy.config.btn_copied', '已复制') : t('proxy.config.btn_copy', '复制')}</span>
-                    </button>
-                </div>
-            </div>
-
-            {/* In-block Search Bar */}
-            <div className="px-2.5 py-1.5 bg-slate-100/70 dark:bg-[#161b22]/80 border-b border-slate-200 dark:border-slate-800/80 flex items-center gap-1.5 shrink-0">
-                <div className="relative flex-1 min-w-0 flex items-center">
-                    <Search size={12} className="absolute left-2 text-slate-400 pointer-events-none" />
-                    <input
-                        ref={searchInputRef}
-                        type="text"
-                        placeholder={t('monitor.details.search_placeholder', '搜索此报文... (Enter下个, Shift+Enter上个)')}
-                        value={searchTerm}
-                        onChange={(e) => setSearchTerm(e.target.value)}
-                        onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                                e.preventDefault();
-                                if (e.shiftKey) {
-                                    handlePrev();
-                                } else {
-                                    handleNext();
-                                }
-                            } else if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F')) {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                searchInputRef.current?.select();
-                            }
-                        }}
-                        className="input input-xs input-bordered w-full pl-6 pr-6 text-[11px] h-7 bg-white dark:bg-[#0d1117] border-slate-200 dark:border-slate-700/80 text-slate-800 dark:text-slate-200 rounded-md focus:border-blue-500"
-                    />
-                    {searchTerm && (
-                        <button
-                            type="button"
-                            onClick={() => setSearchTerm('')}
-                            className="absolute right-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-0.5"
-                            title="清除搜索"
-                        >
-                            <X size={12} />
-                        </button>
-                    )}
-                </div>
-
-                {/* Match Counter and Next/Prev Navigation */}
-                {searchTerm.trim() && (
-                    <div className="flex items-center gap-1 shrink-0 bg-white dark:bg-[#0d1117] border border-slate-200 dark:border-slate-700/80 rounded-md px-1.5 py-0.5 h-7">
-                        <span className="text-[10px] font-mono font-semibold text-slate-600 dark:text-slate-300">
-                            {matchesCount > 0 ? `${currentMatchIndex + 1}/${matchesCount}` : '0 匹配'}
-                        </span>
-                        <div className="flex items-center">
-                            <button
-                                type="button"
-                                onClick={handlePrev}
-                                disabled={matchesCount <= 1}
-                                className="btn btn-ghost btn-xs p-0.5 h-5 min-h-0 text-slate-500 dark:text-slate-400 disabled:opacity-30"
-                                title="上一处 (Shift+Enter)"
-                            >
-                                <ChevronUp size={12} />
-                            </button>
-                            <button
-                                type="button"
-                                onClick={handleNext}
-                                disabled={matchesCount <= 1}
-                                className="btn btn-ghost btn-xs p-0.5 h-5 min-h-0 text-slate-500 dark:text-slate-400 disabled:opacity-30"
-                                title="下一处 (Enter)"
-                            >
-                                <ChevronDown size={12} />
-                            </button>
-                        </div>
-                    </div>
-                )}
-            </div>
-
-            {/* Scrollable Content Body */}
-            <div
-                ref={containerRef}
-                tabIndex={0}
-                className="flex-1 overflow-y-auto overflow-x-auto p-3.5 bg-slate-50/40 dark:bg-[#0d1117] font-mono text-[11px] outline-none focus:ring-1 focus:ring-blue-500/20"
-            >
-                {timingInfo && (
-                    <TimingDiagnosticsCard timing={timingInfo} onCopyText={onCopy} />
-                )}
-                {prettyHeaders && (
-                    <div className="mb-3 rounded-lg overflow-hidden border border-slate-200 dark:border-slate-800/80 bg-slate-100/50 dark:bg-slate-900/40">
-                        <div className="px-2.5 py-1 bg-slate-200/60 dark:bg-[#161b22] border-b border-slate-200 dark:border-slate-800/80 flex items-center justify-between">
-                            <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                                {t('monitor.details.headers', 'Headers')}
-                            </span>
-                            <span className="text-[9px] font-mono text-slate-400 dark:text-slate-500">HTTP Headers</span>
-                        </div>
-                        <div className="p-2.5 font-mono text-[11px] leading-relaxed">
-                            {renderHighlightedJson(prettyHeaders, '', 0, `${cardId}-hdr`)}
-                        </div>
-                    </div>
-                )}
-                {renderBody()}
-            </div>
-        </div>
-    );
-};
 
 export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
     const { t } = useTranslation();
@@ -1312,6 +973,37 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
     const [payloadViewMode, setPayloadViewMode] = useState<'concise' | 'full'>('concise');
     const [showMetadata, setShowMetadata] = useState(true);
     const [copiedCard, setCopiedCard] = useState<string | null>(null);
+
+    // 日志存储与维护配置状态
+    const [showLogSettings, setShowLogSettings] = useState(false);
+    const [appConfig, setAppConfig] = useState<AppConfig | null>(null);
+    const [isSavingConfig, setIsSavingConfig] = useState(false);
+    const [saveSuccess, setSaveSuccess] = useState(false);
+    const [isClearCacheModalOpen, setIsClearCacheModalOpen] = useState(false);
+    const [cacheClearedSuccess, setCacheClearedSuccess] = useState(false);
+    const [dbDiskSizeBytes, setDbDiskSizeBytes] = useState<number | null>(null);
+
+    const fetchDbDiskSize = useCallback(async () => {
+        try {
+            const bytes = await invoke<number>('get_proxy_db_disk_size');
+            setDbDiskSizeBytes(bytes);
+        } catch (e) {
+            console.error('Failed to get proxy db disk size', e);
+        }
+    }, []);
+
+    useEffect(() => {
+        if (showLogSettings) {
+            fetchDbDiskSize();
+        }
+    }, [showLogSettings, fetchDbDiskSize]);
+
+    const formatBytes = (bytes: number) => {
+        if (bytes < 1024) return `${bytes} B`;
+        if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+        if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+        return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+    };
 
     // 全局快捷键 Ctrl+F：当焦点在报文卡片之外时，聚焦主界面的全局过滤搜索框
     useEffect(() => {
@@ -1347,6 +1039,29 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
             ? extractConcisePayload(selectedLog.response_body, 'response', selectedLog)
             : '';
     }, [selectedLog?.response_body, selectedLog?.id, selectedLog?.input_tokens, selectedLog?.output_tokens, selectedLog?.cached_tokens]);
+
+    const timingInfo = useMemo(() => {
+        return parseTimingFromHeadersAndBody(
+            selectedLog?.response_headers,
+            selectedLog?.response_body,
+            selectedLog?.duration
+        );
+    }, [selectedLog?.response_headers, selectedLog?.response_body, selectedLog?.duration]);
+
+    const timingNode = timingInfo ? (
+        <div className="p-2.5">
+            <TimingDiagnosticsCard
+                timing={timingInfo}
+                onCopyText={async (text) => {
+                    const success = await copyToClipboard(text);
+                    if (success) {
+                        setCopiedCard('timing');
+                        setTimeout(() => setCopiedCard(null), 2000);
+                    }
+                }}
+            />
+        </div>
+    ) : undefined;
 
     const { accounts, fetchAccounts } = useAccountStore();
 
@@ -1387,6 +1102,7 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
             ]) as AppConfig;
 
             if (config && config.proxy) {
+                setAppConfig(config);
                 setIsLoggingEnabled(config.proxy.enable_logging);
                 await invoke('set_proxy_monitor_enabled', { enabled: config.proxy.enable_logging });
             }
@@ -1622,23 +1338,92 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
             setLogs([]);
             setStats({ total_requests: 0, success_count: 0, error_count: 0 });
             setTotalCount(0);
+            fetchDbDiskSize();
         } catch (e) {
             console.error("Failed to clear logs", e);
         }
     };
 
+    const updateLogRetentionField = (field: 'max_body_age_hours' | 'max_storage_gb' | 'max_rows', value: number) => {
+        if (!appConfig) return;
+        const currentRetention = appConfig.proxy?.log_retention || { max_body_age_hours: 24, max_storage_gb: 0.5, max_rows: 100000 };
+        const safeVal = field === 'max_storage_gb'
+            ? Math.max(0.1, isNaN(value) ? 0.5 : value)
+            : Math.max(1, isNaN(value) ? 1 : value);
+        const updated = {
+            ...currentRetention,
+            [field]: safeVal,
+        };
+        const currentExp: ExperimentalConfig = appConfig.proxy?.experimental || {
+            enable_usage_scaling: true,
+        };
+        const updatedConfig: AppConfig = {
+            ...appConfig,
+            proxy: {
+                ...appConfig.proxy,
+                log_retention: updated,
+                experimental: {
+                    ...currentExp,
+                }
+            }
+        };
+        setAppConfig(updatedConfig);
+    };
 
+    const updateExperimentalField = (field: 'payload_storage_mode' | 'thinking_retention_days', value: any) => {
+        if (!appConfig) return;
+        const currentExp: ExperimentalConfig = appConfig.proxy?.experimental || {
+            enable_usage_scaling: true,
+        };
+        const updatedExp: ExperimentalConfig = {
+            ...currentExp,
+            [field]: field === 'thinking_retention_days' ? Math.max(1, parseInt(value) || 15) : value,
+        };
+        const updatedConfig: AppConfig = {
+            ...appConfig,
+            proxy: {
+                ...appConfig.proxy,
+                experimental: updatedExp
+            }
+        };
+        setAppConfig(updatedConfig);
+    };
 
+    const handleSaveLogSettings = async () => {
+        if (!appConfig) return;
+        setIsSavingConfig(true);
+        try {
+            await invoke('save_config', { config: appConfig });
+            setSaveSuccess(true);
+            fetchDbDiskSize();
+            setTimeout(() => setSaveSuccess(false), 2000);
+        } catch (e) {
+            console.error('Failed to save log settings', e);
+        } finally {
+            setIsSavingConfig(false);
+        }
+    };
+
+    const handleClearCache = async () => {
+        setIsClearCacheModalOpen(false);
+        try {
+            await invoke('clear_log_cache');
+            setCacheClearedSuccess(true);
+            setTimeout(() => setCacheClearedSuccess(false), 2500);
+        } catch (e) {
+            console.error('Failed to clear log cache', e);
+        }
+    };
 
     return (
-        <div className={`flex flex-col bg-white dark:bg-base-100 rounded-xl shadow-sm border border-gray-100 dark:border-base-200 overflow-hidden ${className || 'flex-1'}`}>
-            <div className="p-3 border-b border-gray-100 dark:border-base-200 space-y-3 bg-gray-50/30 dark:bg-base-200/30">
-                <div className="flex items-center gap-4">
+        <div className={`flex flex-col bg-white dark:bg-base-100 rounded-xl shadow-xs border border-gray-200/80 dark:border-base-200 overflow-hidden ${className || 'flex-1'}`}>
+            <div className="p-3.5 border-b border-gray-200/80 dark:border-base-200 space-y-3 bg-gray-50/80 dark:bg-base-200">
+                <div className="flex items-center gap-3">
                     <button
                         onClick={toggleLogging}
-                        className={`btn btn-sm gap-2 px-4 border font-bold ${isLoggingEnabled
-                            ? 'bg-red-500 border-red-600 text-white animate-pulse'
-                            : 'bg-white dark:bg-base-200 border-gray-300 text-gray-600'
+                        className={`btn btn-sm gap-2 px-3.5 border font-semibold rounded-lg transition-all ${isLoggingEnabled
+                            ? 'bg-rose-600 hover:bg-rose-700 border-rose-600 text-white shadow-xs'
+                            : 'bg-white dark:bg-base-200 border-gray-300 dark:border-base-300 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-base-300/80 shadow-2xs'
                             }`}
                     >
                         <div className={`w-2.5 h-2.5 rounded-full ${isLoggingEnabled ? 'bg-white' : 'bg-gray-400'}`} />
@@ -1651,7 +1436,7 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
                             ref={globalFilterInputRef}
                             type="text"
                             placeholder={t('monitor.filters.placeholder')}
-                            className="input input-sm input-bordered w-full pl-9 text-xs"
+                            className="input input-sm input-bordered w-full pl-9 text-xs bg-white dark:bg-base-200 border-gray-300 dark:border-base-300 text-gray-900 dark:text-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500/30"
                             value={filter}
                             onChange={(e) => setFilter(e.target.value)}
                         />
@@ -1660,7 +1445,7 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
                     <div className="relative">
                         <User className="absolute left-2.5 top-2 text-gray-400 z-10" size={14} />
                         <select
-                            className="select select-sm select-bordered pl-8 text-xs min-w-[140px] max-w-[220px]"
+                            className="select select-sm select-bordered pl-8 text-xs min-w-[140px] max-w-[220px] bg-white dark:bg-base-200 border-gray-300 dark:border-base-300 text-gray-900 dark:text-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500/30"
                             value={accountFilter}
                             onChange={(e) => setAccountFilter(e.target.value)}
                             title={t('monitor.filters.by_account')}
@@ -1674,30 +1459,245 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
                         </select>
                     </div>
 
-                    <div className="hidden lg:flex gap-4 text-[10px] font-bold uppercase">
-                        <span className="text-blue-500">{formatCompactNumber(stats.total_requests)} {t('monitor.stats.total')}</span>
-                        <span className="text-green-500">{formatCompactNumber(stats.success_count)} {t('monitor.stats.ok')}</span>
-                        <span className="text-red-500">{formatCompactNumber(stats.error_count)} {t('monitor.stats.err')}</span>
+                    <div className="hidden lg:flex items-center gap-3 text-xs font-bold font-mono">
+                        <span className="text-blue-600 dark:text-blue-400">
+                            {formatCompactNumber(stats.total_requests)} <span className="font-sans font-semibold text-[11px] text-gray-500 dark:text-gray-400">{t('monitor.stats.total')}</span>
+                        </span>
+                        <span className="text-emerald-600 dark:text-emerald-400">
+                            {formatCompactNumber(stats.success_count)} <span className="font-sans font-semibold text-[11px] text-gray-500 dark:text-gray-400">{t('monitor.stats.ok')}</span>
+                        </span>
+                        <span className="text-rose-600 dark:text-rose-400">
+                            {formatCompactNumber(stats.error_count)} <span className="font-sans font-semibold text-[11px] text-gray-500 dark:text-gray-400">{t('monitor.stats.err')}</span>
+                        </span>
                     </div>
 
-                    <button onClick={() => loadData(currentPage, filter)} className="btn btn-sm btn-ghost text-gray-400" title={t('common.refresh')}>
+                    <button onClick={() => loadData(currentPage, filter)} className="btn btn-sm btn-ghost text-gray-400 hover:text-gray-600 dark:hover:text-gray-200" title={t('common.refresh')}>
                         <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
                     </button>
-                    <button onClick={clearLogs} className="btn btn-sm btn-ghost text-gray-400">
+                    <button
+                        onClick={() => setShowLogSettings(!showLogSettings)}
+                        className={`btn btn-sm btn-ghost ${
+                            showLogSettings
+                                ? 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30'
+                                : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-200'
+                        }`}
+                        title={t('common.settings', { defaultValue: '设置' })}
+                        aria-label={t('common.settings', { defaultValue: '设置' })}
+                    >
+                        <Settings size={16} />
+                    </button>
+                    <button onClick={clearLogs} className="btn btn-sm btn-ghost text-gray-400 hover:text-gray-600 dark:hover:text-gray-200" title={t('monitor.actions.clear_all_requests', { defaultValue: '清空请求日志' })}>
                         <Trash2 size={16} />
                     </button>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-[10px] font-bold text-gray-400 uppercase">{t('monitor.filters.quick_filters')}</span>
+                    <span className="text-xs font-bold text-gray-700 dark:text-gray-200 uppercase tracking-wide">{t('monitor.filters.quick_filters')}</span>
                     {quickFilters.map(q => (
-                        <button key={q.label} onClick={() => setFilter(q.value)} className={`px-2 py-0.5 rounded-full text-[10px] border ${filter === q.value ? 'bg-blue-500 text-white' : 'bg-white dark:bg-base-200 text-gray-500'}`}>
+                        <button
+                            key={q.label}
+                            onClick={() => setFilter(q.value)}
+                            className={`px-3 py-0.5 rounded-full text-xs font-semibold border transition-all ${
+                                filter === q.value
+                                    ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
+                                    : 'bg-white dark:bg-base-200 text-gray-700 dark:text-gray-200 border-gray-300 dark:border-base-300 hover:bg-gray-100 dark:hover:bg-base-300/80 hover:text-gray-900 dark:hover:text-white shadow-2xs'
+                            }`}
+                        >
                             {q.label}
                         </button>
                     ))}
-                    {(filter || accountFilter) && <button onClick={() => { setFilter(''); setAccountFilter(''); }} className="text-[10px] text-blue-500"> {t('monitor.filters.reset')} </button>}
+                    {(filter || accountFilter) && (
+                        <button
+                            onClick={() => { setFilter(''); setAccountFilter(''); }}
+                            className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline ml-1"
+                        >
+                            {t('monitor.filters.reset')}
+                        </button>
+                    )}
                 </div>
             </div>
+
+            {/* 日志存储与维护展开配置面板 */}
+            {showLogSettings && appConfig && (
+                <div className="bg-gray-50/90 dark:bg-base-200 border-b border-gray-200 dark:border-base-300 p-4 space-y-3.5 shadow-xs">
+                    {/* Panel Header */}
+                    <div className="flex items-center justify-between border-b border-gray-200/80 dark:border-base-200 pb-2.5">
+                        <div className="flex items-center gap-2">
+                            <Database size={16} className="text-blue-600 dark:text-blue-400" />
+                            <span className="text-sm font-bold text-gray-900 dark:text-white">
+                                {t('monitor.settings.title', { defaultValue: '日志存储周期与维护设置' })}
+                            </span>
+                            <span className="text-xs text-gray-500 dark:text-gray-400 hidden sm:inline">
+                                {t('monitor.settings.subtitle', { defaultValue: '统一管理请求日志保留天数、思考块滑动窗口与磁盘空间回收' })}
+                            </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <button
+                                onClick={handleSaveLogSettings}
+                                disabled={isSavingConfig}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-all text-white active:scale-95 ${
+                                    saveSuccess
+                                        ? 'bg-emerald-600 hover:bg-emerald-700'
+                                        : 'bg-blue-600 hover:bg-blue-700'
+                                }`}
+                                title="保存全部日志与思考块配置"
+                            >
+                                <Check size={13} />
+                                <span>{saveSuccess ? t('common.saved', { defaultValue: '已生效' }) : (isSavingConfig ? t('common.saving', { defaultValue: '保存中...' }) : t('common.save', { defaultValue: '全部保存并热生效' }))}</span>
+                            </button>
+                            <button
+                                onClick={() => setShowLogSettings(false)}
+                                className="btn btn-xs btn-ghost text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+                            >
+                                <X size={15} />
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* 3-Column Settings Grid */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
+                        {/* 1. 请求日志保留策略 */}
+                        <div className="p-3.5 bg-white dark:bg-base-100 rounded-xl border border-gray-200/90 dark:border-base-200 shadow-xs flex flex-col justify-between space-y-3">
+                            <div className="space-y-2.5">
+                                <span className="text-xs font-bold text-gray-800 dark:text-gray-200 flex items-center gap-1.5">
+                                    <Clock size={13} className="text-indigo-500 dark:text-indigo-400" />
+                                    {t('monitor.settings.retention_title', { defaultValue: '请求日志保留策略' })}
+                                </span>
+                                <div className="space-y-2">
+                                    <div>
+                                        <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
+                                            {t('proxy.config.log_retention_body_hours', { defaultValue: '请求报文保留时间 (小时)' })}
+                                        </label>
+                                        <input
+                                            type="number"
+                                            min={1}
+                                            max={720}
+                                            value={appConfig.proxy.log_retention?.max_body_age_hours ?? 24}
+                                            onChange={(e) => updateLogRetentionField('max_body_age_hours', Number(e.target.value))}
+                                            className="input input-xs input-bordered bg-gray-50 dark:bg-base-200 border-gray-300 dark:border-base-300 text-gray-800 dark:text-white w-full font-mono text-xs focus:border-blue-500"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
+                                            {t('proxy.config.log_retention_storage_gb', { defaultValue: '日志保留空间上限 (GB)' })}
+                                        </label>
+                                        <input
+                                            type="number"
+                                            min={0.1}
+                                            max={100}
+                                            step={0.1}
+                                            value={appConfig.proxy.log_retention?.max_storage_gb ?? 0.5}
+                                            onChange={(e) => updateLogRetentionField('max_storage_gb', parseFloat(e.target.value))}
+                                            className="input input-xs input-bordered bg-gray-50 dark:bg-base-200 border-gray-300 dark:border-base-300 text-gray-800 dark:text-white w-full font-mono text-xs focus:border-blue-500"
+                                        />
+                                        <div className="flex items-center justify-between mt-1 text-[10px] text-gray-500 dark:text-gray-400">
+                                            <span>{t('proxy.config.log_retention_current_usage', { defaultValue: '当前数据库占用' })}: <strong className="font-mono text-gray-700 dark:text-gray-200">{dbDiskSizeBytes !== null ? formatBytes(dbDiskSizeBytes) : '...'}</strong></span>
+                                            <span className="text-amber-600 dark:text-amber-400 font-medium">超限挤出 30%</span>
+                                        </div>
+                                        <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5 leading-tight">
+                                            {t('proxy.config.log_retention_storage_gb_desc', { defaultValue: '滑动窗口机制：达到上限自动淘汰最尾部 30% 记录以容纳新日志入库' })}
+                                        </p>
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
+                                            {t('proxy.config.log_retention_rows', { defaultValue: '最大保留条数' })}
+                                        </label>
+                                        <input
+                                            type="number"
+                                            min={100}
+                                            step={1000}
+                                            value={appConfig.proxy.log_retention?.max_rows ?? 100000}
+                                            onChange={(e) => updateLogRetentionField('max_rows', Number(e.target.value))}
+                                            className="input input-xs input-bordered bg-gray-50 dark:bg-base-200 border-gray-300 dark:border-base-300 text-gray-800 dark:text-white w-full font-mono text-xs focus:border-blue-500"
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* 2. 报文模式与思考块滑动窗口 */}
+                        <div className="p-3.5 bg-white dark:bg-base-100 rounded-xl border border-gray-200/90 dark:border-base-200 shadow-xs flex flex-col justify-between space-y-3">
+                            <div className="space-y-2.5">
+                                <span className="text-xs font-bold text-gray-800 dark:text-gray-200 flex items-center gap-1.5">
+                                    <Sparkles size={13} className="text-purple-500 dark:text-purple-400" />
+                                    {t('monitor.settings.payload_thinking_title', { defaultValue: '报文存储与思考块周期' })}
+                                </span>
+                                <div className="space-y-2.5">
+                                    <div>
+                                        <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
+                                            {t('proxy.config.experimental.payload_storage_mode_label', { defaultValue: '监控报文存储模式' })}
+                                        </label>
+                                        <select
+                                            className="select select-xs select-bordered bg-gray-50 dark:bg-base-200 border-gray-300 dark:border-base-300 text-gray-800 dark:text-white w-full text-xs"
+                                            value={appConfig.proxy.experimental?.payload_storage_mode || 'simple'}
+                                            onChange={(e) => updateExperimentalField('payload_storage_mode', e.target.value)}
+                                        >
+                                            <option value="simple">{t('proxy.config.experimental.payload_mode_simple', { defaultValue: '简要模式 (推荐，防止数据库膨胀)' })}</option>
+                                            <option value="full">{t('proxy.config.experimental.payload_mode_full', { defaultValue: '完整原文 (保存原始请求响应)' })}</option>
+                                        </select>
+                                        <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1 leading-relaxed">
+                                            {t('proxy.config.experimental.payload_storage_mode_desc', { defaultValue: '默认简要存储，避免工具参数与图片撑爆日志库；排错时可切完整模式。' })}
+                                        </p>
+                                    </div>
+
+                                    <div className="pt-2 border-t border-gray-100 dark:border-base-200">
+                                        <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
+                                            {t('proxy.config.experimental.thinking_retention_days_label', { defaultValue: '思考块保留天数 (滑动窗口)' })}
+                                        </label>
+                                        <input
+                                            type="number"
+                                            min={1}
+                                            max={365}
+                                            value={appConfig.proxy.experimental?.thinking_retention_days ?? 15}
+                                            onChange={(e) => updateExperimentalField('thinking_retention_days', Number(e.target.value))}
+                                            className="input input-xs input-bordered bg-gray-50 dark:bg-base-200 border-gray-300 dark:border-base-300 text-gray-800 dark:text-white w-full font-mono text-xs focus:border-purple-500"
+                                        />
+                                        <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1 leading-relaxed">
+                                            {t('proxy.config.experimental.thinking_retention_days_desc', { defaultValue: '只要客户端 session 活跃每次请求自动刷新过期；超过窗口无请求才清理。' })}
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* 3. 维护与清理操作 */}
+                        <div className="p-3.5 bg-white dark:bg-base-100 rounded-xl border border-gray-200/90 dark:border-base-200 shadow-xs flex flex-col justify-between space-y-3">
+                            <div>
+                                <span className="text-xs font-bold text-gray-800 dark:text-gray-200 flex items-center gap-1.5 mb-1.5">
+                                    <HardDrive size={13} className="text-amber-500 dark:text-amber-400" />
+                                    {t('monitor.settings.maintenance_title', { defaultValue: '日志维护与空间清理' })}
+                                </span>
+                                <p className="text-xs text-gray-500 dark:text-gray-400 leading-relaxed">
+                                    {t('settings.advanced.logs_desc', { defaultValue: '清理应用产生的日志缓存文件或清空全部历史请求记录，释放磁盘空间。' })}
+                                </p>
+                            </div>
+                            <div className="space-y-2 pt-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setIsClearCacheModalOpen(true)}
+                                    className="btn btn-xs w-full btn-outline btn-warning gap-1.5 text-xs font-semibold"
+                                >
+                                    <Trash2 size={12} />
+                                    {t('settings.advanced.clear_logs', { defaultValue: '清理日志缓存文件' })}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={clearLogs}
+                                    className="btn btn-xs w-full btn-outline btn-error gap-1.5 text-xs font-semibold"
+                                >
+                                    <Trash2 size={12} />
+                                    {t('monitor.actions.clear_all_requests', { defaultValue: '清空全部历史请求' })}
+                                </button>
+                                {cacheClearedSuccess && (
+                                    <p className="text-xs text-emerald-600 dark:text-emerald-400 text-center font-medium">
+                                        ✓ {t('settings.advanced.logs_cleared', { defaultValue: '日志缓存已清理' })}
+                                    </p>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             <LogTable
                 logs={filteredLogs}
@@ -1705,8 +1705,8 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
                 onLogClick={async (log: ProxyRequestLog) => {
                     setLoadingDetail(true);
                     try {
-                        const detail = await invoke<ProxyRequestLog>('get_proxy_log_detail', { logId: log.id });
-                        setSelectedLog(detail);
+                        const detail = await invoke<ProxyRequestLog>('get_proxy_log_detail', { logId: log.id, log_id: log.id });
+                        setSelectedLog(detail || log);
                     } catch (e) {
                         console.error('Failed to load log detail', e);
                         setSelectedLog(log);
@@ -1759,72 +1759,78 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
 
             {selectedLog && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-2 sm:p-3 md:p-4" onClick={() => setSelectedLog(null)}>
-                    <div className="bg-white dark:bg-[#161b22] rounded-2xl shadow-2xl w-full max-w-[98vw] xl:max-w-[1720px] h-[94vh] max-h-[94vh] flex flex-col overflow-hidden border border-slate-200 dark:border-slate-800" onClick={e => e.stopPropagation()}>
+                    <div className="bg-white dark:bg-base-100 rounded-2xl shadow-2xl w-full max-w-[98vw] xl:max-w-[1720px] h-[94vh] max-h-[94vh] flex flex-col overflow-hidden border border-gray-200 dark:border-base-200" onClick={e => e.stopPropagation()}>
                         {/* Modal Header */}
-                        <div className="px-4 py-2.5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50 dark:bg-[#161b22] shrink-0">
+                        <div className="px-4 py-2.5 border-b border-gray-200 dark:border-base-300 flex items-center justify-between bg-gray-50 dark:bg-base-200 shrink-0">
                             <div className="flex items-center gap-3 min-w-0">
                                 {loadingDetail && <div className="loading loading-spinner loading-sm shrink-0"></div>}
-                                <span className={`badge badge-sm text-white border-none font-bold shrink-0 ${selectedLog.status >= 200 && selectedLog.status < 400 ? 'badge-success' : 'badge-error'}`}>{selectedLog.status}</span>
-                                <span className="font-mono font-bold text-slate-900 dark:text-slate-100 text-sm shrink-0">{selectedLog.method}</span>
-                                <span className="text-xs text-slate-500 dark:text-slate-400 font-mono truncate max-w-lg hidden sm:inline" title={selectedLog.url}>{selectedLog.url}</span>
+                                <span className={`badge badge-sm font-bold text-white border-none shrink-0 shadow-xs ${
+                                    selectedLog.status >= 200 && selectedLog.status < 400
+                                        ? 'bg-emerald-600'
+                                        : 'bg-rose-600'
+                                }`}>
+                                    {selectedLog.status}
+                                </span>
+                                <span className="font-mono font-bold text-gray-900 dark:text-white text-sm shrink-0">{selectedLog.method}</span>
+                                <span className="text-xs text-gray-500 dark:text-gray-400 font-mono truncate max-w-lg hidden sm:inline" title={selectedLog.url}>{selectedLog.url}</span>
                             </div>
-                            <button onClick={() => setSelectedLog(null)} className="btn btn-ghost btn-sm btn-circle text-slate-500 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-800" aria-label="关闭"><X size={18} /></button>
+                            <button onClick={() => setSelectedLog(null)} className="btn btn-ghost btn-sm btn-circle text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-base-200" aria-label="关闭"><X size={18} /></button>
                         </div>
 
                         {/* Modal Content */}
-                        <div className="flex-1 min-h-0 flex flex-col p-3 sm:p-4 space-y-2.5 bg-slate-100/50 dark:bg-[#0a0e17] overflow-hidden">
+                        <div className="flex-1 min-h-0 flex flex-col p-3 sm:p-4 space-y-2.5 bg-gray-100/50 dark:bg-base-100 overflow-hidden">
                             {/* Metadata Section (Collapsible) */}
                             {showMetadata && (
-                                <div className="bg-white dark:bg-[#161b22] p-3 sm:p-3.5 rounded-xl border border-slate-200 dark:border-slate-800/90 shadow-sm shrink-0 text-xs transition-all duration-200">
+                                <div className="bg-white dark:bg-base-200 p-3 sm:p-3.5 rounded-xl border border-gray-200 dark:border-base-300 shadow-sm shrink-0 text-xs transition-all duration-200">
                                     <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
                                         <div>
-                                            <span className="block text-slate-400 dark:text-slate-500 uppercase font-black text-[9px] tracking-wider">{t('monitor.details.time')}</span>
-                                            <span className="font-mono font-semibold text-slate-800 dark:text-slate-200 text-[11px] truncate block" title={new Date(selectedLog.timestamp).toLocaleString()}>{new Date(selectedLog.timestamp).toLocaleString()}</span>
+                                            <span className="block text-gray-500 dark:text-gray-400 uppercase font-bold text-[10px] tracking-wider">{t('monitor.details.time')}</span>
+                                            <span className="font-mono font-semibold text-gray-900 dark:text-white text-xs truncate block" title={new Date(selectedLog.timestamp).toLocaleString()}>{new Date(selectedLog.timestamp).toLocaleString()}</span>
                                         </div>
                                         <div>
-                                            <span className="block text-slate-400 dark:text-slate-500 uppercase font-black text-[9px] tracking-wider">{t('monitor.details.duration')}</span>
-                                            <span className="font-mono font-semibold text-slate-800 dark:text-slate-200 text-[11px]">{selectedLog.duration}ms</span>
+                                            <span className="block text-gray-500 dark:text-gray-400 uppercase font-bold text-[10px] tracking-wider">{t('monitor.details.duration')}</span>
+                                            <span className="font-mono font-semibold text-gray-900 dark:text-white text-xs">{selectedLog.duration}ms</span>
                                         </div>
                                         <div>
-                                            <span className="block text-slate-400 dark:text-slate-500 uppercase font-black text-[9px] tracking-wider">{t('monitor.details.tokens')}</span>
-                                            <div className="font-mono text-[10px] flex items-center gap-1.5 mt-0.5">
+                                            <span className="block text-gray-500 dark:text-gray-400 uppercase font-bold text-[10px] tracking-wider">{t('monitor.details.tokens')}</span>
+                                            <div className="font-mono text-[11px] flex items-center gap-1.5 mt-0.5">
                                                 {(() => {
                                                     const totalIn = (selectedLog.cached_tokens && selectedLog.cached_tokens > (selectedLog.input_tokens ?? 0))
                                                         ? (selectedLog.input_tokens ?? 0) + selectedLog.cached_tokens
                                                         : (selectedLog.input_tokens ?? 0);
                                                     return (
-                                                        <span className="text-blue-700 dark:text-blue-300 bg-blue-100 dark:bg-blue-950/60 px-1.5 py-0.5 rounded font-bold" title={`Total Input Tokens: ${totalIn}`}>
+                                                        <span className="text-blue-700 dark:text-blue-300 bg-blue-100 dark:bg-blue-900/40 px-1.5 py-0.5 rounded font-bold" title={`Total Input Tokens: ${totalIn}`}>
                                                             In: {formatCompactNumber(totalIn)}
                                                         </span>
                                                     );
                                                 })()}
-                                                <span className="text-emerald-700 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-950/60 px-1.5 py-0.5 rounded font-bold">Out: {formatCompactNumber(selectedLog.output_tokens ?? 0)}</span>
+                                                <span className="text-emerald-700 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-900/40 px-1.5 py-0.5 rounded font-bold">Out: {formatCompactNumber(selectedLog.output_tokens ?? 0)}</span>
                                                 {selectedLog.cached_tokens != null && selectedLog.cached_tokens > 0 && (
-                                                    <span className="text-purple-700 dark:text-purple-300 bg-purple-100 dark:bg-purple-950/60 px-1.5 py-0.5 rounded font-bold">Cache: {formatCompactNumber(selectedLog.cached_tokens)}</span>
+                                                    <span className="text-purple-700 dark:text-purple-300 bg-purple-100 dark:bg-purple-900/40 px-1.5 py-0.5 rounded font-bold">Cache: {formatCompactNumber(selectedLog.cached_tokens)}</span>
                                                 )}
                                             </div>
                                         </div>
                                         <div>
-                                            <span className="block text-slate-400 dark:text-slate-500 uppercase font-black text-[9px] tracking-wider">{t('monitor.details.protocol')}</span>
-                                            <span className={`inline-block px-1.5 py-0.5 rounded font-mono font-black text-[10px] uppercase mt-0.5 ${
-                                                selectedLog.protocol === 'openai' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/70 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60' :
-                                                selectedLog.protocol === 'anthropic' ? 'bg-orange-100 text-orange-700 dark:bg-orange-950/70 dark:text-orange-300 border border-orange-200 dark:border-orange-800/60' :
-                                                selectedLog.protocol === 'gemini' ? 'bg-blue-100 text-blue-700 dark:bg-blue-950/70 dark:text-blue-300 border border-blue-200 dark:border-blue-800/60' :
-                                                'bg-slate-100 text-slate-700 dark:bg-slate-900/60 dark:text-slate-300'
+                                            <span className="block text-gray-500 dark:text-gray-400 uppercase font-bold text-[10px] tracking-wider">{t('monitor.details.protocol')}</span>
+                                            <span className={`inline-block px-2 py-0.5 rounded-full font-mono font-bold text-[11px] uppercase mt-0.5 text-white shadow-xs ${
+                                                selectedLog.protocol === 'openai' ? 'bg-emerald-600' :
+                                                selectedLog.protocol === 'anthropic' ? 'bg-amber-600' :
+                                                selectedLog.protocol === 'gemini' ? 'bg-blue-600' :
+                                                'bg-gray-600'
                                             }`}>
                                                 {selectedLog.protocol || '-'}
                                             </span>
                                         </div>
                                         <div>
-                                            <span className="block text-slate-400 dark:text-slate-500 uppercase font-black text-[9px] tracking-wider">{t('monitor.details.model')}</span>
-                                            <span className="font-mono font-bold text-blue-600 dark:text-blue-400 truncate block text-[11px]" title={selectedLog.model}>{selectedLog.model || '-'}</span>
+                                            <span className="block text-gray-500 dark:text-gray-400 uppercase font-bold text-[10px] tracking-wider">{t('monitor.details.model')}</span>
+                                            <span className="font-mono font-bold text-blue-600 dark:text-blue-400 truncate block text-xs" title={selectedLog.model}>{selectedLog.model || '-'}</span>
                                             {selectedLog.mapped_model && selectedLog.model !== selectedLog.mapped_model && (
-                                                <span className="font-mono text-emerald-600 dark:text-emerald-400 truncate block text-[10px]" title={selectedLog.mapped_model}>➔ {selectedLog.mapped_model}</span>
+                                                <span className="font-mono text-emerald-600 dark:text-emerald-400 truncate block text-[11px]" title={selectedLog.mapped_model}>➔ {selectedLog.mapped_model}</span>
                                             )}
                                         </div>
                                         <div>
-                                            <span className="block text-slate-400 dark:text-slate-500 uppercase font-black text-[9px] tracking-wider">{t('monitor.details.account_used')}</span>
-                                            <span className="font-mono text-slate-800 dark:text-slate-200 truncate block text-[11px]" title={selectedLog.account_email || '-'}>{selectedLog.account_email || '-'}</span>
+                                            <span className="block text-gray-500 dark:text-gray-400 uppercase font-bold text-[10px] tracking-wider">{t('monitor.details.account_used')}</span>
+                                            <span className="font-mono font-medium text-gray-900 dark:text-white truncate block text-xs" title={selectedLog.account_email || '-'}>{selectedLog.account_email || '-'}</span>
                                         </div>
                                     </div>
                                 </div>
@@ -1833,17 +1839,17 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
                             {/* Mode & Toolbar Bar */}
                             <div className="flex flex-wrap items-center justify-between gap-2 px-1 shrink-0">
                                 <div className="flex items-center gap-2">
-                                    <div className="inline-flex items-center p-1 bg-slate-200/70 dark:bg-[#161b22] rounded-xl border border-slate-300/70 dark:border-slate-800 gap-1 shadow-inner">
+                                    <div className="inline-flex items-center p-1 bg-gray-200/70 dark:bg-base-200 rounded-xl border border-gray-300/70 dark:border-base-300 gap-1 shadow-inner">
                                         <button
                                             type="button"
                                             onClick={() => setPayloadViewMode('concise')}
                                             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all duration-150 cursor-pointer select-none ${
                                                 payloadViewMode === 'concise'
-                                                    ? 'bg-white dark:bg-[#21262d] text-blue-600 dark:text-blue-400 shadow-sm border border-slate-200 dark:border-slate-700'
-                                                    : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+                                                    ? 'bg-white dark:bg-base-100 text-blue-600 dark:text-blue-400 shadow-sm border border-gray-200 dark:border-base-300'
+                                                    : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
                                             }`}
                                         >
-                                            <Sparkles size={13} className={payloadViewMode === 'concise' ? 'text-blue-600 dark:text-blue-400' : 'text-slate-400'} />
+                                            <Sparkles size={13} className={payloadViewMode === 'concise' ? 'text-blue-600 dark:text-blue-400' : 'text-gray-400'} />
                                             <span>{t('monitor.details.concise_mode', '简要模式')}</span>
                                         </button>
                                         <button
@@ -1851,15 +1857,15 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
                                             onClick={() => setPayloadViewMode('full')}
                                             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all duration-150 cursor-pointer select-none ${
                                                 payloadViewMode === 'full'
-                                                    ? 'bg-white dark:bg-[#21262d] text-blue-600 dark:text-blue-400 shadow-sm border border-slate-200 dark:border-slate-700'
-                                                    : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+                                                    ? 'bg-white dark:bg-base-100 text-blue-600 dark:text-blue-400 shadow-sm border border-gray-200 dark:border-base-300'
+                                                    : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
                                             }`}
                                         >
-                                            <FileCode2 size={13} className={payloadViewMode === 'full' ? 'text-blue-600 dark:text-blue-400' : 'text-slate-400'} />
+                                            <FileCode2 size={13} className={payloadViewMode === 'full' ? 'text-blue-600 dark:text-blue-400' : 'text-gray-400'} />
                                             <span>{t('monitor.details.full_mode', '完整模式')}</span>
                                         </button>
                                     </div>
-                                    <span className="hidden sm:inline-block text-[11px] text-slate-500 dark:text-slate-400">
+                                    <span className="hidden sm:inline-block text-[11px] text-gray-500 dark:text-gray-400">
                                         {payloadViewMode === 'concise'
                                             ? t('monitor.details.concise_desc', '已为您精简工具参数与冗余字段，突出思考块、用量与对话主体')
                                             : '显示原始完整未修剪报文'}
@@ -1870,7 +1876,7 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
                                     <button
                                         type="button"
                                         onClick={() => setShowMetadata((prev) => !prev)}
-                                        className="btn btn-xs btn-ghost text-slate-500 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-800 gap-1 text-[11px]"
+                                        className="btn btn-xs btn-ghost text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-base-200 gap-1 text-[11px]"
                                         title={showMetadata ? '折叠元数据以增大报文视野' : '展开元数据信息'}
                                     >
                                         {showMetadata ? <EyeOff size={13} /> : <Eye size={13} />}
@@ -1881,11 +1887,11 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
 
                             {/* Horizontal 3-Column Grid */}
                             <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 flex-1 min-h-0 overflow-hidden">
-                                <PayloadViewerCard
+                                <VirtualizedPayloadViewer
                                     cardId="req"
                                     title={t('monitor.details.request_payload', '请求报文 (Request)')}
                                     badge="REQUEST"
-                                    badgeStyle="bg-blue-50 text-blue-700 dark:bg-blue-950/70 dark:text-blue-300 border-blue-200 dark:border-blue-800/60"
+                                    badgeStyle="bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 border-blue-200 dark:border-blue-800/60"
                                     rawPayload={selectedLog.request_body}
                                     concisePayload={conciseRequestBody}
                                     headersJson={selectedLog.request_headers}
@@ -1900,11 +1906,11 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
                                     }}
                                     isCopied={copiedCard === 'req'}
                                 />
-                                <PayloadViewerCard
+                                <VirtualizedPayloadViewer
                                     cardId="upstream"
                                     title={t('monitor.details.upstream_request_payload', '中转报文 (Forwarded)')}
                                     badge="FORWARDED"
-                                    badgeStyle="bg-amber-50 text-amber-700 dark:bg-amber-950/70 dark:text-amber-300 border-amber-200 dark:border-amber-800/60"
+                                    badgeStyle="bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300 border-amber-200 dark:border-amber-800/60"
                                     rawPayload={selectedLog.upstream_request_body}
                                     concisePayload={conciseUpstreamBody}
                                     headersJson={selectedLog.upstream_request_headers}
@@ -1919,17 +1925,18 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
                                     }}
                                     isCopied={copiedCard === 'upstream'}
                                 />
-                                <PayloadViewerCard
+                                <VirtualizedPayloadViewer
                                     cardId="resp"
                                     title={t('monitor.details.response_payload', '响应报文 (Response)')}
                                     badge="RESPONSE"
-                                    badgeStyle="bg-emerald-50 text-emerald-700 dark:bg-emerald-950/70 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800/60"
+                                    badgeStyle="bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800/60"
                                     rawPayload={selectedLog.response_body}
                                     concisePayload={conciseResponseBody}
                                     headersJson={selectedLog.response_headers}
                                     viewMode={payloadViewMode}
                                     emptyPlaceholder={t('monitor.details.payload_empty', '无响应报文')}
                                     duration={selectedLog.duration}
+                                    timingNode={timingNode}
                                     onCopy={async (text) => {
                                         const success = await copyToClipboard(text);
                                         if (success) {
@@ -1954,6 +1961,18 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
                 isDestructive={true}
                 onConfirm={executeClearLogs}
                 onCancel={() => setIsClearConfirmOpen(false)}
+            />
+
+            <ModalDialog
+                isOpen={isClearCacheModalOpen}
+                title={t('settings.advanced.clear_logs_title', { defaultValue: '清理日志缓存确认' })}
+                message={t('settings.advanced.clear_logs_msg', { defaultValue: '确定要清理所有日志缓存文件吗？这不会影响历史请求记录和账号数据。' })}
+                type="confirm"
+                confirmText={t('common.clear', { defaultValue: '清理' })}
+                cancelText={t('common.cancel', { defaultValue: '取消' })}
+                isDestructive={true}
+                onConfirm={handleClearCache}
+                onCancel={() => setIsClearCacheModalOpen(false)}
             />
         </div>
     );

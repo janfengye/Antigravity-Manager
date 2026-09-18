@@ -839,6 +839,7 @@ impl AxumServer {
             .route("/proxy/stats", get(admin_get_proxy_stats))
             .route("/logs", get(admin_get_proxy_logs_filtered))
             .route("/logs/count", get(admin_get_proxy_logs_count_filtered))
+            .route("/logs/disk-size", get(admin_get_proxy_db_disk_size))
             .route("/logs/clear", post(admin_clear_proxy_logs))
             .route("/logs/:logId", get(admin_get_proxy_log_detail))
             // Debug Console (Log Bridge)
@@ -1719,6 +1720,35 @@ async fn admin_save_config(
         *pool = new_config.clone().proxy.proxy_pool;
     }
 
+    // [FIX Web Mode] 同步全局内存配置（热更新思考预算、系统提示词、图像思考模式、压缩等级、阈值与审计策略）
+    crate::proxy::update_thinking_budget_config(new_config.proxy.thinking_budget.clone());
+    crate::proxy::update_global_system_prompt_config(new_config.proxy.global_system_prompt.clone());
+    crate::proxy::update_image_thinking_mode(new_config.proxy.image_thinking_mode.clone());
+    crate::proxy::config::update_global_compression_level(
+        new_config.proxy.experimental.compression_level.clone(),
+        new_config.proxy.experimental.enable_usage_scaling,
+    );
+    crate::proxy::config::update_global_thresholds(
+        new_config
+            .proxy
+            .experimental
+            .context_compression_threshold_l1,
+        new_config
+            .proxy
+            .experimental
+            .context_compression_threshold_l2,
+        new_config
+            .proxy
+            .experimental
+            .context_compression_threshold_l3,
+    );
+    crate::proxy::config::update_global_audit_config(
+        new_config.proxy.experimental.payload_storage_mode.clone(),
+        new_config.proxy.experimental.log_retention_days,
+        new_config.proxy.experimental.thinking_store_enabled,
+        new_config.proxy.experimental.thinking_retention_days,
+    );
+
     Ok(StatusCode::OK)
 }
 
@@ -2066,6 +2096,26 @@ async fn admin_clear_proxy_logs() -> impl IntoResponse {
     .await;
     logger::log_info("[API] 已清除所有反代日志");
     StatusCode::OK
+}
+
+async fn admin_get_proxy_db_disk_size(
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    let res: Result<Result<u64, String>, tokio::task::JoinError> =
+        tokio::task::spawn_blocking(move || proxy_db::get_proxy_db_disk_bytes()).await;
+
+    match res {
+        Ok(Ok(bytes)) => Ok(Json(bytes)),
+        Ok(Err(e)) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse { error: e }),
+        )),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )),
+    }
 }
 
 async fn admin_get_proxy_log_detail(
@@ -2726,6 +2776,9 @@ async fn admin_fetch_account_quota(
             Json(ErrorResponse { error: e }),
         )
     })?;
+
+    let mut quota = quota;
+    quota.ensure_subscription_tier();
 
     Ok(Json(quota))
 }

@@ -784,7 +784,9 @@
       "enable_logging_hint": "记录历史记录以便调试 (微小性能损耗)",
       "log_retention_title": "请求日志保留",
       "log_retention_body_hours": "请求体保留小时数",
-      "log_retention_age_days": "日志保留天数",
+      "log_retention_storage_gb": "日志保留空间上限 (GB)",
+      "log_retention_storage_gb_desc": "达到上限后自动触发滑动窗口，淘汰最尾部 30% 日志记录以容纳新日志入库",
+      "log_retention_current_usage": "当前数据库空间",
       "log_retention_rows": "最大日志行数",
       "upstream_proxy": {
         "title": "全局上游代理 (Global Proxy)",
@@ -910,6 +912,55 @@
           "sync_success_count": "已添加 {{count}} 个模型到 Droid",
           "sync_error": "同步失败: {{error}}"
         }
+      },
+      "thinking_budget": {
+        "title": "思考链预算控制 (Thinking Budget)",
+        "description": "跨协议归一化思考参数，统一调控 Gemini 与 Claude 模型的深度思考 Token 预算及自适应行为。",
+        "control_source_label": "控制权归属 (Top-Level Authority)",
+        "source_gateway": "网关权威控制",
+        "source_gateway_desc": "网关层统一掌控思维链预算与启发式档位，消除不同客户端参数差异，杜绝由于超额预算或格式不当引发的官方 400 报错。",
+        "source_client": "客户端直接控制",
+        "source_client_desc": "归一化后直接提取客户端上送的预算并透传。若客户端未传则由上游自适应。不恰当的预算可能直接导致 Google 报错。",
+        "recommended_tag": "首选 / 推荐",
+        "danger_tag": "危险 / 不推荐",
+        "client_warning_title": "危险警告：已切换为客户端直接控制",
+        "client_warning_desc": "不同客户端插件（如 Cline, Roo, Cherry 等）上送的 thinking.budget_tokens 或 effort 各不相同。若客户端指定了超过 Google API 支持的数值（如 Flash 超过 24576、或 Pro 传入非标准数值），Google 将直接返回 400 Bad Request 错误中断生成。",
+        "mode_default": "默认模式 (官方自适应)",
+        "mode_custom": "自定义思考预算模式 (推荐)",
+        "tier_low": "Low 档位",
+        "tier_medium": "Medium 档位",
+        "tier_high": "High 档位",
+        "tier_pro_high": "High 档位 (默认/主力档位)",
+        "tier_tiered": "Tiered (自由模型)",
+        "flash_family_title": "Gemini Flash 系列 (如 3-flash, 3.7-flash, tiered 等)",
+        "flash_family_desc": "控制 Flash 思考模型的四大档位预算（填 -1 则不指定走官方自适应）",
+        "flash_low_hint": "极低推理 (默认 1000)",
+        "flash_medium_hint": "标准平衡档 (默认 4000)",
+        "flash_high_hint": "深度推理档 (默认 10000)",
+        "flash_tiered_hint": "自适应/自由强度 (默认 -1)",
+        "flash_default_hint": "已启用官方默认模式：完全透传官方模型 ID，不注入 thinkingBudget，完全由 Google 上游模型自主决定思考行为。",
+        "tiered_desc": "💡 Tiered 自由模型说明：该模型专为谷歌动态自适应打造。设置为 -1 时，模型根据问题难度自动分配思考量；若指定具体数值（如 30000+），可突破 High 档位解锁 Max 极限思考。",
+        "pro_family_title": "Gemini Pro 系列 (如 3-pro, 3.1-pro 等)",
+        "pro_family_desc": "Google 官方 3.1 Pro 体系仅提供 Low 与 High 两个档位。未指定 effort 或 medium 将自动走 High 保证 Pro 深度思考。",
+        "pro_low_hint": "低思考档位 (默认 1001，填 -1 则走官方自适应)",
+        "pro_high_hint": "深度思考档位 (默认 10001，填 -1 则走官方自适应)",
+        "pro_default_hint": "已启用官方默认模式：Gemini Pro 系列将由 Google 官方动态确定思考强度。",
+        "claude_family_title": "Claude 系列思考模型 (如 claude-3-7-sonnet-thinking 等)",
+        "claude_family_desc": "调控 Claude 思考模型的 Token 预算（官方模型列表仅区分 -thinking 与普通模型，此项专用于思考模型）",
+        "claude_low_hint": "轻量思考 (默认 1024)",
+        "claude_medium_hint": "日常平衡档 (默认 4096)",
+        "claude_high_hint": "深度思考档 (默认 16000)",
+        "claude_default_hint": "已启用官方默认模式：完全按官方协议规范透传，不注入额外自定义预算限制。",
+        "store_enabled": "服务端思考块与签名回填",
+        "store_enabled_desc": "自动截获并持久化思考过程与加密签名；当商业 Agent（如 Cline, Roo, Claude Code 等）多轮对话未带回思考时由服务端自动补齐，杜绝上游 400 报错或上下文丢失。",
+        "default_on_tag": "默认开启",
+        "claude_thinking_note": "💡 Claude 模型说明：Anthropic 官方模型列表仅区分带 `-thinking`（如 claude-3-7-sonnet-thinking）与普通模型。本自定义预算专门控制带 thinking 模型的思考配额；若调用普通非 thinking 模型，上游不产生思考过程。"
+      },
+      "thinking_settings": {
+        "title": "思考设置 (Thinking Settings)"
+      },
+      "prompt_multimodal": {
+        "title": "全局提示词与多模态设置 (Prompt & Multimodal)"
       }
     },
     "cloudflared": {
@@ -1220,6 +1271,11 @@
       "full_mode": "完整模式",
       "concise_desc": "已为您精简工具参数与冗余字段，突出思考块、用量与对话主体",
       "search_placeholder": "搜索此报文...",
+      "search_placeholder_with_shortcut": "搜索此报文... (Enter 下一个, Shift+Enter 上一个)",
+      "case_sensitive": "区分大小写",
+      "wrap_lines": "自动折行",
+      "no_wrap": "单行模式",
+      "no_matches": "无匹配",
       "no_upstream_payload": "无中转报文 (直接转发或未记录)"
     },
     "timing": {
@@ -1242,6 +1298,20 @@
     "dialog": {
       "clear_title": "清除监控日志",
       "clear_msg": "确定要清除所有监控记录吗？此操作无法撤销。"
+    },
+    "settings": {
+      "toggle_button": "日志存储与维护设置",
+      "button_text": "日志设置",
+      "title": "日志存储周期与维护设置",
+      "subtitle": "统一管理请求日志保留天数、思考块滑动窗口与磁盘空间回收",
+      "retention_title": "请求日志保留策略",
+      "payload_thinking_title": "报文存储与思考块周期",
+      "maintenance_title": "日志维护与空间清理",
+      "save_retention": "保存保留策略",
+      "save_thinking": "保存思考与报文设置"
+    },
+    "actions": {
+      "clear_all_requests": "清空全部历史请求"
     }
   },
   "update_notification": {

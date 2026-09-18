@@ -223,13 +223,13 @@ impl UpstreamClient {
         tracing::debug!("UpstreamClient User-Agent override updated: {:?}", lock);
     }
 
-    /// Get current User-Agent
+    /// Get current User-Agent (sanitized with safety floor >= 4.3.0)
     pub async fn get_user_agent(&self) -> String {
         let ua_override = self.user_agent_override.read().await;
-        ua_override
-            .as_ref()
-            .cloned()
-            .unwrap_or_else(|| crate::constants::USER_AGENT.clone())
+        match ua_override.as_ref() {
+            Some(ua) => crate::constants::sanitize_egress_user_agent(ua),
+            None => crate::constants::USER_AGENT.clone(),
+        }
     }
 
     /// Get client for a specific account (or default if no proxy bound)
@@ -327,11 +327,17 @@ impl UpstreamClient {
         extra_headers: std::collections::HashMap<String, String>,
         account_id: Option<&str>, // [NEW] Account ID
     ) -> Result<UpstreamCallResult, String> {
-        // [DEFENSE] 全局终极防御拦截：净化所有发往上游报文中的损坏/空 inlineData
+        // [DEFENSE] 全局终极防御拦截：净化所有发往上游报文中的损坏/空 inlineData 以及触发 Google WAF 拦截的违规计费元数据
         if let Some(inner) = body.get_mut("request") {
             crate::proxy::mappers::common_utils::sanitize_gemini_payload_inline_data(inner);
+            crate::proxy::mappers::prompt_sanitizer::PromptSanitizer::sanitize_gemini_payload(
+                inner,
+            );
         } else {
             crate::proxy::mappers::common_utils::sanitize_gemini_payload_inline_data(&mut body);
+            crate::proxy::mappers::prompt_sanitizer::PromptSanitizer::sanitize_gemini_payload(
+                &mut body,
+            );
         }
 
         // [NEW] Get client based on account (cached in proxy pool manager)
@@ -396,7 +402,11 @@ impl UpstreamClient {
         }
 
         // 注入额外的 Headers (如 anthropic-beta)
+        // 严格禁止透传客户端入站的 user-agent，确保出站指纹始终为受支持的 Antigravity 版本
         for (k, v) in extra_headers {
+            if k.eq_ignore_ascii_case("user-agent") {
+                continue;
+            }
             if let Ok(hk) = header::HeaderName::from_bytes(k.as_bytes()) {
                 if let Ok(hv) = header::HeaderValue::from_str(&v) {
                     headers.insert(hk, hv);

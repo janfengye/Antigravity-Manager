@@ -888,6 +888,55 @@
           "sync_success_count": "Droid에 {{count}}개 모델을 추가했습니다",
           "sync_error": "동기화 실패: {{error}}"
         }
+      },
+      "thinking_budget": {
+        "title": "추론 예산 제어 (Thinking Budget)",
+        "description": "프로토콜 간 추론 매개변수를 정규화하고 Gemini 및 Claude 모델의 추론 토큰 예산 및 적응형 동작을 통합 관리합니다.",
+        "control_source_label": "제어 권한 귀속",
+        "source_gateway": "게이트웨이 권한 제어",
+        "source_gateway_desc": "게이트웨이에서 추론 예산과 계층을 통합 제어하여 클라이언트 매개변수 불일치 및 400 오류를 방지합니다.",
+        "source_client": "클라이언트 직접 제어",
+        "source_client_desc": "정규화 후 클라이언트가 전달한 예산을 직접 투과합니다. 부적절한 예산은 Google API 오류를 유발할 수 있습니다.",
+        "recommended_tag": "권장 / 우선",
+        "danger_tag": "위험 / 비권장",
+        "client_warning_title": "Warning: Switched to Client Direct Control",
+        "client_warning_desc": "Different clients (Cline, Roo, Cherry, etc.) submit varying thinking.budget_tokens or effort values. If a client specifies limits exceeding Google API constraints (e.g. Flash > 24576 or non-standard Pro budgets), Google will return 400 Bad Request.",
+        "mode_default": "기본 모드 (공식 적응형)",
+        "mode_custom": "사용자 지정 예산 모드 (권장)",
+        "tier_low": "Low 단계",
+        "tier_medium": "Medium 단계",
+        "tier_high": "High 단계",
+        "tier_pro_high": "High 단계 (기본 / 주요)",
+        "tier_tiered": "Tiered (자유 모델)",
+        "flash_family_title": "Gemini Flash Series (3-flash, 3.7-flash, tiered, etc.)",
+        "flash_family_desc": "Manage four tier budgets for Flash reasoning models (enter -1 for official adaptive)",
+        "flash_low_hint": "Light reasoning (Default 1000)",
+        "flash_medium_hint": "Balanced tier (Default 4000)",
+        "flash_high_hint": "Deep reasoning (Default 10000)",
+        "flash_tiered_hint": "Adaptive / Freeform (Default -1)",
+        "flash_default_hint": "Official default mode enabled: passes model ID directly without injecting thinkingBudget.",
+        "tiered_desc": "💡 Tiered Model Note: Designed for Google's dynamic adaptation. When set to -1, the model allocates reasoning dynamically based on task difficulty; setting 30000+ unlocks Max reasoning beyond High.",
+        "pro_family_title": "Gemini Pro Series (3-pro, 3.1-pro, etc.)",
+        "pro_family_desc": "Google's Gemini 3.1 Pro architecture officially provides only Low and High tiers. Unspecified effort or medium automatically routes to High for deep reasoning.",
+        "pro_low_hint": "Low reasoning tier (Default 1001, -1 for adaptive)",
+        "pro_high_hint": "Deep reasoning tier (Default 10001, -1 for adaptive)",
+        "pro_default_hint": "Official default mode enabled: Gemini Pro reasoning is determined dynamically by Google.",
+        "claude_family_title": "Claude 시리즈 추론 모델 (claude-3-7-sonnet-thinking 등)",
+        "claude_family_desc": "Claude 추론 모델 토큰 예산 제어 (공식 목록은 -thinking 과 일반 모델만 구분하며, 본 설정은 추론 모델 전용입니다)",
+        "claude_low_hint": "Light thinking (Default 1024)",
+        "claude_medium_hint": "Everyday balanced (Default 4096)",
+        "claude_high_hint": "Deep reasoning (Default 16000)",
+        "claude_default_hint": "Official default mode enabled: adheres to standard Anthropic specifications without custom limits.",
+        "store_enabled": "서버 측 추론 블록 및 서명 자동 보완",
+        "store_enabled_desc": "추론 과정과 암호화 서명을 자동으로 캡처하고 유지합니다. 상용 에이전트(Cline, Roo, Claude Code 등)가 다중 턴 대화에서 추론을 반환하지 않을 때 게이트웨이가 자동으로 보충하여 업스트림 400 오류나 컨텍스트 손실을 방지합니다.",
+        "default_on_tag": "기본 활성화",
+        "claude_thinking_note": "💡 Claude 모델 안내: Anthropic 공식 모델 목록은 `-thinking`이 붙은 모델(예: claude-3-7-sonnet-thinking)과 일반 모델만 구분합니다. 이 맞춤 예산은 thinking 모델의 추론 할당량을 제어하며, 일반 모델을 호출할 경우 상류에서 추론이 생성되지 않습니다."
+      },
+      "thinking_settings": {
+        "title": "추론 설정 (Thinking Settings)"
+      },
+      "prompt_multimodal": {
+        "title": "글로벌 프롬프트 및 멀티모달 설정"
       }
     },
     "cloudflared": {
@@ -1225,6 +1274,18 @@
         "start_time": "시작 시간",
         "duration": "소요 시간"
       }
+    },
+    "settings": {
+      "toggle_button": "로그 저장 및 유지 관리 설정",
+      "button_text": "로그 설정",
+      "title": "로그 보존 주기 및 유지 관리 설정",
+      "subtitle": "요청 로그 보존 기간, 추론 블록 슬라이딩 윈도우 및 디스크 공간 정리를 통합 관리",
+      "retention_title": "요청 로그 보존 정책",
+      "payload_thinking_title": "페이로드 저장 및 추론 주기",
+      "maintenance_title": "로그 유지 관리 및 공간 정리"
+    },
+    "actions": {
+      "clear_all_requests": "모든 기록 요청 지우기"
     }
   },
   "update_notification": {

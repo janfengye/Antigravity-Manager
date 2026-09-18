@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Antigravity Tools",
-  "version": "4.7.4",
+  "version": "4.7.5",
   "identifier": "com.lbjlaq.antigravity-tools",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -29,7 +29,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "createUpdaterArtifacts": false,
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -37,13 +37,22 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "resources": {
+      "resources/WebView2Loader.dll": "WebView2Loader.dll"
+    },
+    "windows": {
+      "nsis": {
+        "installerIcon": "icons/icon.ico",
+        "template": "installer.nsi"
+      }
+    },
     "macOS": {
       "entitlements": "Entitlements.plist"
     }
   },
   "plugins": {
     "updater": {
-      "active": false,
+      "active": true,
       "endpoints": [
         "https://github.com/lbjlaq/Antigravity-Manager/releases/latest/download/updater.json"
       ],

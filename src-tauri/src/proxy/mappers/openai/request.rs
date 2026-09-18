@@ -1010,89 +1010,100 @@ pub fn transform_openai_request_with_session(
                 "includeThoughts": false
             });
         } else {
-            // [CONFIGURABLE] 思考预算：全协议统一权威解析
-            // 启发式模型强制锁死对应字典预算，彻底忽略客户端参数
-            // 裸模型由客户端 reasoning_effort / thinkingLevel 接管（HIGH/MAX->10000/10001, LOW/EXTRA-LOW->1000/1001, MEDIUM/DEFAULT->4000/10001）
-            // 试图关闭或未填：绝不关闭，兜底填充 -medium (4000/10001)
+            // [CONFIGURABLE] 思考预算：全协议统一权威解析（归一化流水线后处理）
             let client_effort = request
                 .reasoning_effort
                 .as_deref()
                 .or_else(|| request.reasoning.as_ref().and_then(|r| r.effort.as_deref()))
                 .or_else(|| request.thinking.as_ref().and_then(|t| t.effort.as_deref()));
 
-            let default_budget = model_specs::resolve_authoritative_thinking_budget(
-                mapped_model,
-                client_effort,
-                request
-                    .thinking
-                    .as_ref()
-                    .and_then(|t| t.budget_tokens.map(|b| b as u64)),
-                token,
-            ) as i64;
+            let client_budget = request
+                .thinking
+                .as_ref()
+                .and_then(|t| t.budget_tokens.map(|b| b as u64));
 
             let tb_config = crate::proxy::config::get_thinking_budget_config();
-            let final_budget = match tb_config.mode {
-                crate::proxy::config::ThinkingBudgetMode::Custom => {
-                    let custom_value = tb_config.custom_value as i64;
-                    if custom_value > default_budget {
-                        default_budget
-                    } else {
-                        custom_value
-                    }
-                }
-                // Auto / Passthrough / anything else: authoritative model_specs budget
-                _ => default_budget,
-            };
-
-            gen_config["thinkingConfig"] = json!({
-                "includeThoughts": true,
-                "thinkingBudget": final_budget
-            });
-
-            // [CRITICAL] 思维模型的 maxOutputTokens 必须大于 thinkingBudget
-            // [FIX #1675] 针对图像模型使用更保守的 max_tokens 增量，避免触发 128k 限制
-            let overhead = if config.request_type == "image_gen" {
-                2048
-            } else {
-                32768
-            };
-            let min_overhead = if config.request_type == "image_gen" {
-                1024
-            } else {
-                8192
-            };
-
-            if mapped_model_lower.contains("claude-opus-4-6-thinking") {
-                gen_config["maxOutputTokens"] = json!(57344);
-                tracing::debug!(
-                    "[Opus-Alignment] Enforcing maxOutputTokens 57344 for Opus 4.6 (OpenAI)"
-                );
-            } else if let Some(max_tokens) = request.max_tokens {
-                if (max_tokens as i64) <= final_budget {
-                    gen_config["maxOutputTokens"] = json!(final_budget + min_overhead);
-                }
-            } else {
-                // [FIX #1592] Use a more conservative default to avoid 400 error on 128k context models
-                gen_config["maxOutputTokens"] = json!(final_budget + overhead);
-            }
-
-            let new_max = gen_config["maxOutputTokens"].as_i64().unwrap_or(0);
-            tracing::debug!(
-                "[OpenAI-Request] Adjusted maxOutputTokens to {} for thinking model (budget={})",
-                new_max,
-                final_budget
+            let resolved_budget = model_specs::resolve_custom_budget(
+                mapped_model,
+                client_effort,
+                client_budget,
+                &tb_config,
+                token,
             );
 
+            let is_client_control =
+                tb_config.control_source == crate::proxy::config::ThinkingControlSource::Client;
+            let mut tc = json!({
+                "includeThoughts": true
+            });
+
+            if let Some(final_budget) = resolved_budget {
+                tc["thinkingBudget"] = json!(final_budget);
+
+                // [CRITICAL] 思维模型的 maxOutputTokens 必须大于 thinkingBudget
+                // [FIX #1675] 针对图像模型使用更保守的 max_tokens 增量，避免触发 128k 限制
+                let overhead = if config.request_type == "image_gen" {
+                    2048
+                } else {
+                    32768
+                };
+                let min_overhead = if config.request_type == "image_gen" {
+                    1024
+                } else {
+                    8192
+                };
+
+                if mapped_model_lower.contains("claude-opus-4-6-thinking") {
+                    gen_config["maxOutputTokens"] = json!(57344);
+                    tracing::debug!(
+                        "[Opus-Alignment] Enforcing maxOutputTokens 57344 for Opus 4.6 (OpenAI)"
+                    );
+                } else if let Some(max_tokens) = request.max_tokens {
+                    if (max_tokens as i64) <= final_budget {
+                        gen_config["maxOutputTokens"] = json!(final_budget + min_overhead);
+                    }
+                } else {
+                    // [FIX #1592] Use a more conservative default to avoid 400 error on 128k context models
+                    gen_config["maxOutputTokens"] = json!(final_budget + overhead);
+                }
+
+                let new_max = gen_config["maxOutputTokens"].as_i64().unwrap_or(0);
+                tracing::debug!(
+                    "[OpenAI-Request] Adjusted maxOutputTokens to {} for thinking model (budget={})",
+                    new_max,
+                    final_budget
+                );
+            }
+
+            // 客户端直接控制模式：若客户端携带了 effort 等级字段（max, xhigh, high, medium, low 等），归一化后完整透传
+            if is_client_control {
+                if let Some(eff) = client_effort {
+                    if let Some(norm_level) = model_specs::normalize_client_thinking_level(eff) {
+                        let final_level =
+                            if mapped_model_lower.contains("pro") && norm_level == "MEDIUM" {
+                                "HIGH"
+                            } else {
+                                norm_level
+                            };
+                        tc["thinkingLevel"] = json!(final_level);
+                    }
+                }
+            }
+
+            gen_config["thinkingConfig"] = tc;
             tracing::debug!(
-                "[OpenAI-Request] Injected thinkingConfig for model {}: thinkingBudget={} (mode={:?})",
-                mapped_model, final_budget, tb_config.mode
+                "[OpenAI-Request] Configured thinkingConfig for model {}: {:?} (source={:?})",
+                mapped_model,
+                gen_config["thinkingConfig"],
+                tb_config.control_source
             );
         }
     }
 
-    // Tiered Flash models: includeThoughts only. Client reasoning.effort is ignored;
-    // thinking level/budget come from server model-id heuristics elsewhere.
-    if is_tiered_flash_model(mapped_model) {
+    // Tiered Flash models: if resolved_budget was None (default), ensure only includeThoughts is set
+    if is_tiered_flash_model(mapped_model)
+        && gen_config["thinkingConfig"].get("thinkingBudget").is_none()
+    {
         gen_config["thinkingConfig"] = json!({ "includeThoughts": true });
     }
 
@@ -1635,6 +1646,9 @@ mod tests {
 
     #[test]
     fn tiered_flash_ignores_client_effort_and_keeps_include_thoughts_only() {
+        let _lock = crate::proxy::config::TEST_CONFIG_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         // Server-authoritative: client reasoning.effort must not set thinkingLevel.
         for model in ["gemini-3.8-flash-tiered", "gemini-9.9-flash-tiered"] {
             assert!(is_tiered_flash_model(model));
@@ -1658,6 +1672,9 @@ mod tests {
 
     #[test]
     fn reasoning_effort_does_not_select_levels_for_pro_or_ordinary_flash() {
+        let _lock = crate::proxy::config::TEST_CONFIG_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         for model in ["gemini-3.1-pro-high", "gemini-3.8-flash"] {
             assert!(!is_tiered_flash_model(model));
             let body = tiered_request_body(model, Some("low"));
@@ -1672,6 +1689,9 @@ mod tests {
 
     #[test]
     fn test_openai_reasoning_effort_authority_resolution() {
+        let _lock = crate::proxy::config::TEST_CONFIG_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         // 1. 启发式模型忽略客户端 reasoning_effort
         let req_high: OpenAIRequest = serde_json::from_value(json!({
             "model": "gemini-3.7-flash-high",
@@ -1962,7 +1982,15 @@ mod tests {
             mode: ThinkingBudgetMode::Custom,
             custom_value: 32000,
             effort: None,
+            ..Default::default()
         });
+        struct ResetGuard;
+        impl Drop for ResetGuard {
+            fn drop(&mut self) {
+                update_thinking_budget_config(ThinkingBudgetConfig::default());
+            }
+        }
+        let _guard = ResetGuard;
 
         let req = OpenAIRequest {
             model: "gemini-2.0-flash-thinking".to_string(),
@@ -2118,6 +2146,7 @@ mod tests {
                 mode: crate::proxy::config::ThinkingBudgetMode::Passthrough,
                 custom_value: 16000,
                 effort: None,
+                ..Default::default()
             },
         );
         struct PassthroughResetGuard;
@@ -2364,8 +2393,19 @@ mod tests {
 
     #[test]
     fn test_openai_image_thinking_mode_disabled() {
+        let _lock = crate::proxy::config::TEST_CONFIG_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
         // 1. Set global mode to disabled
         crate::proxy::config::update_image_thinking_mode(Some("disabled".to_string()));
+        struct ImageResetGuard;
+        impl Drop for ImageResetGuard {
+            fn drop(&mut self) {
+                crate::proxy::config::update_image_thinking_mode(Some("enabled".to_string()));
+            }
+        }
+        let _guard = ImageResetGuard;
 
         let req = OpenAIRequest {
             model: "gemini-3-pro-image".to_string(),
@@ -2392,9 +2432,6 @@ mod tests {
         let thinking_config = gen_config["thinkingConfig"].as_object().unwrap();
 
         assert_eq!(thinking_config["includeThoughts"], false);
-
-        // 4. Reset global mode
-        crate::proxy::config::update_image_thinking_mode(Some("enabled".to_string()));
     }
 
     #[test]
@@ -2560,6 +2597,7 @@ mod tests {
                 mode: crate::proxy::config::ThinkingBudgetMode::Passthrough,
                 custom_value: 99999,
                 effort: None,
+                ..Default::default()
             },
         );
         struct ResetGuard;

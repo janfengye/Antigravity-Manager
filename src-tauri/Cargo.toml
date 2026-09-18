@@ -1,6 +1,6 @@
 [package]
 name = "antigravity-tools"
-version = "4.7.4"
+version = "4.7.5"
 description = "Antigravity Tools"
 authors = ["you"]
 license = "CC-BY-NC-SA-4.0"
@@ -66,6 +66,8 @@ tracing-appender = "0.2.4"
 tracing-log = "0.2.0"
 tauri-plugin-autostart = "2.5.1"
 tauri-plugin-updater = "2"
+# Unify features for reqwest 0.13 used by tauri-plugin-updater to support SOCKS5 upstream proxy
+reqwest_0_13 = { package = "reqwest", version = "0.13", default-features = false, features = ["socks"] }
 tauri-plugin-process = "2"
 sha2 = "0.10"
 toml = "0.8"

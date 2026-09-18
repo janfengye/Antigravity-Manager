@@ -2,7 +2,10 @@ import React, { useEffect, useState, useRef } from 'react';
 import { X, Sparkles, Loader2, CheckCircle, RotateCcw } from 'lucide-react';
 import { request as invoke } from '../utils/request';
 import { useTranslation } from 'react-i18next';
+import { check as tauriCheck } from '@tauri-apps/plugin-updater';
 import { relaunch as tauriRelaunch } from '@tauri-apps/plugin-process';
+import { isTauri } from '../utils/env';
+import { showToast } from './common/ToastContainer';
 
 interface UpdateInfo {
   has_update: boolean;
@@ -10,6 +13,7 @@ interface UpdateInfo {
   current_version: string;
   download_url: string;
   source?: string;
+  proxy_url?: string;
 }
 
 type UpdateState = 'checking' | 'downloading' | 'ready' | 'error' | 'none' | 'manual';
@@ -42,14 +46,69 @@ export const UpdateNotification: React.FC<UpdateNotificationProps> = ({ onClose 
 
       setUpdateInfo(info);
 
-      // 2. Custom build protection:
-      // Prevent automatic silent downloading and installation that overwrites custom build features
-      setUpdateState('manual');
+      // 2. If not in Tauri — no auto-update possible
+      if (!isTauri()) {
+        console.warn('Auto update is only available in Tauri environment');
+        onClose();
+        return;
+      }
+
+      // Check if Linux and not AppImage (e.g. RPM or DEB packages).
+      // Tauri updater only supports AppImage on Linux.
+      if (navigator.userAgent.toLowerCase().includes('linux')) {
+        const isAppImage = await invoke<boolean>('check_appimage_installation');
+        if (!isAppImage) {
+          setUpdateState('manual');
+          setTimeout(() => setIsVisible(true), 100);
+          return;
+        }
+      }
+
+      // 3. Start background download immediately
+      if (downloadStarted.current) return;
+      downloadStarted.current = true;
+
+      setUpdateState('downloading');
       setTimeout(() => setIsVisible(true), 100);
+
+      const update = await tauriCheck(
+        info.proxy_url ? { proxy: info.proxy_url } : undefined
+      );
+      if (!update) {
+        // updater.json not ready yet or no update via native channel
+        console.warn('Native updater returned null');
+        showToast(t('update_notification.toast.not_ready'), 'info');
+        handleClose();
+        return;
+      }
+
+      let downloaded = 0;
+      let contentLength = 0;
+
+      await update.downloadAndInstall((event) => {
+        switch (event.event) {
+          case 'Started':
+            contentLength = event.data.contentLength || 0;
+            break;
+          case 'Progress':
+            downloaded += event.data.chunkLength;
+            if (contentLength > 0) {
+              setDownloadProgress(Math.round((downloaded / contentLength) * 100));
+            }
+            break;
+          case 'Finished':
+            break;
+        }
+      });
+
+      // 4. Download complete — show restart prompt
+      setUpdateState('ready');
+      setDownloadProgress(100);
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
-      console.error('Update check failed:', errorMsg);
-      onClose();
+      console.error('Auto update failed:', errorMsg);
+      setUpdateState('error');
+      showToast(`${t('update_notification.toast.failed')}: ${errorMsg}`, 'error');
     }
   };
 
@@ -83,10 +142,10 @@ export const UpdateNotification: React.FC<UpdateNotificationProps> = ({ onClose 
         relative overflow-hidden
         w-80 p-5
         rounded-2xl
-        border border-white/20 dark:border-white/10
-        shadow-[0_8px_32px_0_rgba(31,38,135,0.15)]
+        border border-white/20 dark:border-base-200
+        shadow-[0_8px_32px_0_rgba(0,0,0,0.3)]
         backdrop-blur-xl
-        bg-white/70 dark:bg-slate-900/60
+        bg-white/70 dark:bg-base-100/90
         group
       ">
         <div className="absolute -top-10 -right-10 w-32 h-32 bg-blue-500/20 rounded-full blur-3xl pointer-events-none group-hover:bg-blue-500/30 transition-colors duration-500" />
@@ -140,8 +199,8 @@ export const UpdateNotification: React.FC<UpdateNotificationProps> = ({ onClose 
               {updateState === 'error' && `${t('update_notification.toast.failed')}`}
               {updateState === 'manual' && (
                 navigator.language.startsWith('zh')
-                  ? '检测到官方新版本发布。当前程序为定制增强版本（包含思考块与审计转出报文等定制功能），为防止定制功能被官方安装包覆盖，已关闭自动静默覆盖。您可以前往 GitHub 查看发布详情或手动下载。'
-                  : 'A new official version is available. Since you are running a custom enhanced build, automatic silent updates are disabled to prevent overwriting your customizations. You can view the release on GitHub or download manually.'
+                  ? '检测到您当前运行的不是 AppImage 格式，自动更新仅支持 AppImage。请点击下方按钮手动下载更新。'
+                  : 'We detected that you are not running the AppImage version. Auto-updates are only supported for AppImage. Please download the update manually.'
               )}
             </p>
           </div>
@@ -149,7 +208,7 @@ export const UpdateNotification: React.FC<UpdateNotificationProps> = ({ onClose 
           {/* Progress bar during download */}
           {updateState === 'downloading' && (
             <div className="mb-4">
-              <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+              <div className="w-full bg-gray-200 dark:bg-base-200 rounded-full h-2">
                 <div
                   className="bg-gradient-to-r from-blue-500 to-purple-600 h-2 rounded-full transition-all duration-300"
                   style={{ width: `${downloadProgress}%` }}
@@ -224,7 +283,7 @@ export const UpdateNotification: React.FC<UpdateNotificationProps> = ({ onClose 
                   active:scale-[0.98]
                 "
               >
-                <span>{navigator.language.startsWith('zh') ? '前往查看' : 'View on GitHub'}</span>
+                <span>{navigator.language.startsWith('zh') ? '手动下载' : 'Download Manually'}</span>
               </button>
               <button
                 onClick={handleClose}

@@ -3,6 +3,24 @@
 > Complete version history for Antigravity Tools. Return to project home at [README_EN.md](README_EN.md).
 
 *   **Version History**:
+    *   **v4.7.5 (2026-09-18)**:
+        -   **[Upstream WAF & Request Sanitization] Flawlessly Resolved Agent Client 404/429/503 Errors & Purged Pseudo-Headers (PR #3463, Fixes #3458, Fixes #3467, Fixes #3466, Fixes #3460, Fixes #3454, Fixes #3453)**:
+            -   **Outbound UA Normalization**: Upgraded outbound client User-Agent uniformly to `>= 4.3.0` to eliminate upstream WAF fingerprint blocking.
+            -   **PromptSanitizer Inbound Filter**: Intercepts and strips non-compliant pseudo-headers such as `*-billing` from payloads, completely resolving the root cause of Google WAF misclassifying requests as 429 and triggering cascading 503 account failures.
+        -   **[Deep Reasoning Control & Thinking Chain Preservation] Removed Poisonous 1,000-Token Budget, Unlocked 24,576/32,768 Reasoning Budgets (PR #3463)**:
+            -   **Eliminate Thought Truncation Collapse**: Empirical testing over 48 rounds verified that budgets `< 2048` (especially `1000`) caused Gemini 3.x to abort reasoning chains (reducing thought tokens to 0); completely purged hardcoded low budgets.
+            -   **Unleash Full Reasoning Potential**: Unlocked customizable reasoning budgets up to `24576` and `32768`, boosting thinking token generation by 130%–165% with full logical deduction trees; introduced decoupled gateway-authoritative vs client-controlled modes.
+        -   **[Traffic Log Virtualization & Physical Storage Eviction] DOM Virtual Scrolling & Sliding Window Eviction (PR #3463)**:
+            -   **Row-Level DOM Virtualization (@tanstack/react-virtual)**: Limits rendered DOM nodes to 40–50 viewport rows for massive multi-megabyte payloads, preventing browser freezing and crashes during payload inspection; implemented in-memory decoupled search with syntax-aware line tokenization.
+            -   **Physical Disk Cap & Sliding Window Eviction**: Replaced time-based retention with physical gigabyte-level bounds plus 30% sliding window pruning and defragmentation, preventing SQLite 1GB write lockups.
+        -   **[Load Balancing Failover & Session Deadlock Fix] Fast 429 Failover in Balance Mode & Sticky Session Cleansing (PR #3464)**:
+            -   **Disable In-Place GraceRetry in Balance Mode**: Under multi-account Balance or PerformanceFirst modes, 429 errors now trigger an immediate 50ms fast failover to rotate to healthy accounts.
+            -   **Break Session Sticky Deadlocks**: Unified invocation of `unbind_session_and_clear_last_used` on 429/529 errors across Claude, Gemini, and OpenAI handlers to unbind `session_id` and reset `last_used_account`.
+            -   **Extended Hard Quota Keywords**: Added `"credits"` to hard quota exhaustion signals to rotate accounts immediately upon credit expiration.
+        -   **[Native OS Experience & Installer Fixes] Windows COM Shortcut Healing & Clean NSIS Upgrades (PR #3463)**:
+            -   **Native Win32 COM Shortcut Healing**: Employs direct Win32 COM interfaces for silent shortcut icon recovery without antivirus false positives; refactored NSIS installer/uninstaller scripts to release stale process handles and eliminate file-in-use overwrite errors.
+            -   **Heal Legacy Account PRO Tiers**: Corrected `ineligibleTiers` misclassification, automatically inferring and backfilling missing PRO statuses from disk on startup without requiring re-login.
+            -   **Update Protocol Standardization & Proxy Support**: Restored standard update checks and added full HTTP / SOCKS5 proxy inheritance for version lookups and asset downloads.
     *   **v4.7.4 (2026-09-17)**:
         -   **[Unified Multi-Protocol Pipeline & Architecture Refactor] Introduced Unified Pipeline Engine to Standardize Four AI Protocols (PR #3459)**:
             -   **Four-Protocol Adapter Normalization**: Unified OpenAI Chat (`/v1/chat/completions`), Anthropic Claude (`/v1/messages`), OpenAI Responses (`/v1/responses`), and Google Gemini Native protocols; implemented modular `Inbound` sanitization and `Outbound` extraction/diffusion pipelines to eliminate friction caused by schema variances and metadata fragmentation across client libraries.

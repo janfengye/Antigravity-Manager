@@ -243,6 +243,8 @@ pub async fn fetch_account_quota(
     modules::update_account_quota(&account_id, quota.clone())
         .map_err(crate::error::AppError::Account)?;
 
+    quota.ensure_subscription_tier();
+
     crate::modules::tray::update_tray_menus(&app);
 
     // 5. 同步到运行中的反代服务（如果已启动）
@@ -403,8 +405,16 @@ pub async fn load_config() -> Result<AppConfig, String> {
 pub async fn save_config(
     app: tauri::AppHandle,
     proxy_state: tauri::State<'_, crate::commands::proxy::ProxyServiceState>,
-    config: AppConfig,
+    mut config: AppConfig,
 ) -> Result<(), String> {
+    // 确保保存的 User-Agent 满足最低版本要求 (>= 4.3.0) 避免上游拒绝
+    if let Some(ref ua) = config.proxy.user_agent_override {
+        config.proxy.user_agent_override = Some(crate::constants::sanitize_egress_user_agent(ua));
+    }
+    if let Some(ref ua) = config.proxy.saved_user_agent {
+        config.proxy.saved_user_agent = Some(crate::constants::sanitize_egress_user_agent(ua));
+    }
+
     modules::save_app_config(&config)?;
 
     // 通知托盘配置已更新

@@ -626,7 +626,6 @@ pub fn transform_claude_request_in_timed(
     }
 
     if !generation_config.is_null() {
-        println!("DEBUG: Assigning generation_config: {}", generation_config);
         inner_request["generationConfig"] = generation_config;
     }
 
@@ -910,7 +909,7 @@ fn has_valid_signature_for_function_calls(
 }
 
 fn clean_system_prompt_text(text: &str) -> String {
-    let mut s = text.to_string();
+    let mut s = crate::proxy::mappers::prompt_sanitizer::PromptSanitizer::clean_text(text);
     if s.contains("--- [SYSTEM_PROMPT_END] ---") {
         s = s.replace("--- [SYSTEM_PROMPT_END] ---", "");
     }
@@ -1925,30 +1924,47 @@ fn build_generation_config(
             .or_else(|| claude_req.thinking.as_ref().and_then(|t| t.effort.as_ref()))
             .or_else(|| tb_config.effort.as_ref());
 
-        let budget = crate::proxy::model_specs::resolve_authoritative_thinking_budget(
+        let budget_opt = crate::proxy::model_specs::resolve_custom_budget(
             mapped_model,
             effort.map(|s| s.as_str()),
             claude_req
                 .thinking
                 .as_ref()
                 .and_then(|t| t.budget_tokens.map(|b| b as u64)),
+            &tb_config,
             token,
         );
 
-        if should_use_adaptive {
+        if tb_config.control_source == crate::proxy::config::ThinkingControlSource::Client {
+            if let Some(budget) = budget_opt {
+                thinking_config["thinkingBudget"] = json!(budget);
+            }
+            if let Some(eff_str) = effort.map(|s| s.as_str()) {
+                if let Some(norm_level) =
+                    crate::proxy::model_specs::normalize_client_thinking_level(eff_str)
+                {
+                    let target_level =
+                        if mapped_model.to_lowercase().contains("pro") && norm_level == "MEDIUM" {
+                            "HIGH"
+                        } else {
+                            norm_level
+                        };
+                    thinking_config["thinkingLevel"] = json!(target_level);
+                }
+            }
+        } else if should_use_adaptive {
             let mapped_level = match effort.map(|e| e.to_lowercase()).as_deref() {
-                Some("low") => "low",
-                Some("medium") => "medium",
-                Some("high") | Some("max") => "high",
-                _ => "high",
+                Some("low") => "LOW",
+                Some("medium") => "MEDIUM",
+                Some("high") | Some("max") | Some("xhigh") => "HIGH",
+                _ => "HIGH",
             };
             tracing::debug!(
                 "[Claude-Request] Mapping adaptive mode to thinkingLevel: {} for Claude model",
                 mapped_level
             );
             thinking_config["thinkingLevel"] = json!(mapped_level);
-        } else {
-            // [USER RULE] 完全忽略客户端思考预算，统一使用根据模型规格与档位字典自动选取的规范预算
+        } else if let Some(budget) = budget_opt {
             thinking_config["thinkingBudget"] = json!(budget);
         }
 
@@ -3055,6 +3071,7 @@ mod tests {
             mode: crate::proxy::config::ThinkingBudgetMode::Adaptive,
             custom_value: 0,
             effort: Some("high".to_string()),
+            ..Default::default()
         };
         crate::proxy::config::update_thinking_budget_config(config);
         struct ResetGuard;

@@ -791,7 +791,9 @@
       "enable_logging_hint": "Record history for debugging (Minor perf cost)",
       "log_retention_title": "Request log retention",
       "log_retention_body_hours": "Request body age (hours)",
-      "log_retention_age_days": "Log age (days)",
+      "log_retention_storage_gb": "Log storage limit (GB)",
+      "log_retention_storage_gb_desc": "When reaching limit, sliding window evicts oldest 30% logs to accommodate new entries",
+      "log_retention_current_usage": "Current database disk usage",
       "log_retention_rows": "Maximum log rows",
       "upstream_proxy": {
         "title": "Global Upstream Proxy (Global Proxy)",
@@ -917,6 +919,55 @@
           "sync_success_count": "Added {{count}} model(s) to Droid",
           "sync_error": "Sync failed: {{error}}"
         }
+      },
+      "thinking_budget": {
+        "title": "Thinking Budget Control",
+        "description": "Normalize cross-protocol reasoning parameters and centrally manage thinking token budgets and adaptive behaviors for Gemini and Claude models.",
+        "control_source_label": "Authority Source",
+        "source_gateway": "Gateway Authoritative Control",
+        "source_gateway_desc": "The gateway centrally regulates thinking budgets and heuristic tiers, eliminating client inconsistencies and preventing upstream 400 errors caused by invalid limits.",
+        "source_client": "Client Direct Control",
+        "source_client_desc": "Extracts client-provided thinking parameters after normalization and forwards them directly. If omitted, upstream dynamic adaptive reasoning is used. Inappropriate values may trigger Google API errors.",
+        "recommended_tag": "Preferred / Recommended",
+        "danger_tag": "Dangerous / Not Recommended",
+        "client_warning_title": "Warning: Switched to Client Direct Control",
+        "client_warning_desc": "Different clients (Cline, Roo, Cherry, etc.) submit varying thinking.budget_tokens or effort values. If a client specifies limits exceeding Google API constraints (e.g. Flash > 24576 or non-standard Pro budgets), Google will return 400 Bad Request.",
+        "mode_default": "Default Mode (Upstream Adaptive)",
+        "mode_custom": "Custom Budget Mode (Recommended)",
+        "tier_low": "Low Tier",
+        "tier_medium": "Medium Tier",
+        "tier_high": "High Tier",
+        "tier_pro_high": "High Tier (Default / Flagship)",
+        "tier_tiered": "Tiered (Freeform Model)",
+        "flash_family_title": "Gemini Flash Series (3-flash, 3.7-flash, tiered, etc.)",
+        "flash_family_desc": "Manage four tier budgets for Flash reasoning models (enter -1 for official adaptive)",
+        "flash_low_hint": "Light reasoning (Default 1000)",
+        "flash_medium_hint": "Balanced tier (Default 4000)",
+        "flash_high_hint": "Deep reasoning (Default 10000)",
+        "flash_tiered_hint": "Adaptive / Freeform (Default -1)",
+        "flash_default_hint": "Official default mode enabled: passes model ID directly without injecting thinkingBudget.",
+        "tiered_desc": "💡 Tiered Model Note: Designed for Google's dynamic adaptation. When set to -1, the model allocates reasoning dynamically based on task difficulty; setting 30000+ unlocks Max reasoning beyond High.",
+        "pro_family_title": "Gemini Pro Series (3-pro, 3.1-pro, etc.)",
+        "pro_family_desc": "Google's Gemini 3.1 Pro architecture officially provides only Low and High tiers. Unspecified effort or medium automatically routes to High for deep reasoning.",
+        "pro_low_hint": "Low reasoning tier (Default 1001, -1 for adaptive)",
+        "pro_high_hint": "Deep reasoning tier (Default 10001, -1 for adaptive)",
+        "pro_default_hint": "Official default mode enabled: Gemini Pro reasoning is determined dynamically by Google.",
+        "claude_family_title": "Claude Series Thinking Models (claude-3-7-sonnet-thinking, etc.)",
+        "claude_family_desc": "Manage Claude thinking model token budgets (official models only differentiate between -thinking and standard models; this applies specifically to thinking models)",
+        "claude_low_hint": "Light thinking (Default 1024)",
+        "claude_medium_hint": "Everyday balanced (Default 4096)",
+        "claude_high_hint": "Deep reasoning (Default 16000)",
+        "claude_default_hint": "Official default mode enabled: adheres to standard Anthropic specifications without custom limits.",
+        "store_enabled": "Server-side Thought & Signature Restoration",
+        "store_enabled_desc": "Automatically captures and persists reasoning blocks and encrypted signatures. When client agents (e.g. Cline, Roo, Claude Code) omit thought content in multi-turn chats, the gateway restores them to prevent upstream 400 errors or context loss.",
+        "default_on_tag": "Default On",
+        "claude_thinking_note": "💡 Claude Model Note: Anthropic official models only differentiate between `-thinking` (e.g. claude-3-7-sonnet-thinking) and standard models. This custom budget specifically manages quotas for thinking models; calling standard models will not trigger upstream reasoning."
+      },
+      "thinking_settings": {
+        "title": "Thinking Settings"
+      },
+      "prompt_multimodal": {
+        "title": "Global Prompt & Multimodal Settings"
       }
     },
     "cloudflared": {
@@ -1227,6 +1278,11 @@
       "full_mode": "Full Mode",
       "concise_desc": "Tool arguments and verbose metadata are omitted, highlighting thinking, tokens, and messages",
       "search_placeholder": "Search payload...",
+      "search_placeholder_with_shortcut": "Search payload... (Enter next, Shift+Enter prev)",
+      "case_sensitive": "Match Case",
+      "wrap_lines": "Wrap Lines",
+      "no_wrap": "Single Line",
+      "no_matches": "No matches",
       "no_upstream_payload": "No forwarded payload (direct forwarding or unrecorded)"
     },
     "timing": {
@@ -1277,6 +1333,20 @@
         "start_time": "Start Time",
         "duration": "Duration"
       }
+    },
+    "settings": {
+      "toggle_button": "Log Storage & Maintenance Settings",
+      "button_text": "Log Settings",
+      "title": "Log Retention & Maintenance Settings",
+      "subtitle": "Centrally manage request retention days, sliding thought window, and disk space reclamation",
+      "retention_title": "Request Log Retention Policy",
+      "payload_thinking_title": "Payload Storage & Thought Retention",
+      "maintenance_title": "Log Maintenance & Space Cleanup",
+      "save_retention": "Save Retention Policy",
+      "save_thinking": "Save Thinking & Payload Settings"
+    },
+    "actions": {
+      "clear_all_requests": "Clear All Historical Requests"
     }
   },
   "update_notification": {

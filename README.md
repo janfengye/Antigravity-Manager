@@ -1,17 +1,18 @@
 # Antigravity Tools 🚀
-> 专业级 AI 账号管理与协议代理系统 (v4.7.4)
-<div align="center">
-  <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
+> 专业级 AI 账号管理与协议代理系统 (v4.7.5)
 
-  <h3>您的个人高性能 AI 调度网关</h3>
-  <p>不仅仅是账号管理，更是打破 API 调用壁垒的终极解决方案。</p>
-  
+<div align="center">
+  <img src="public/icon.png" width="100" height="100" alt="Antigravity Tools Logo">
+  <h3>Antigravity Tools</h3>
+  <p>多平台自动化运维与多账号矩阵调度控制台</p>
+
   <p>
-    <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.7.4-blue?style=flat-square" alt="Version">
+    <a href="https://github.com/lbjlaq/Antigravity-Manager/releases">
+      <img src="https://img.shields.io/github/v/release/lbjlaq/Antigravity-Manager?color=blue&style=flat-square" alt="GitHub release">
     </a>
-    <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
-    <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
+    <a href="https://github.com/lbjlaq/Antigravity-Manager">
+      <img src="https://img.shields.io/badge/Version-4.7.5-blue?style=flat-square" alt="Version">
+    </a>
     <img src="https://img.shields.io/badge/Frontend-React-61DAFB?style=flat-square" alt="React">
     <img src="https://img.shields.io/badge/License-CC--BY--NC--SA--4.0-lightgrey?style=flat-square" alt="License">
   </p>
@@ -457,7 +458,7 @@ response = client.chat.completions.create(
 
 ## 📝 更新日志
 
-> 最新版本 **v4.7.4**（2026-09-17）：引入统一 Pipeline 流水线引擎全面抹平四大 AI 协议差异（OpenAI Chat / Responses、Claude、Gemini Native）；建立权威思考与加密签名归一化回填机制；复用 SQLite 只读连接查询工具签名，消除写事务与 fsync，大上下文映射耗时降低 98.5%（从 14.7s 降至 0.22s）；彻底修复 Hermes 流式闪退、OpenAI 协议 429/503 异常及中文指纹 502 Panic。
+> 最新版本 **v4.7.5**（2026-09-18）：完美修复 Agent 客户端 404/429/503 报错，清洗 billing 头杜绝 Google WAF 误判；解除 1000 毒药预算导致思维链归零缺陷并开放至 24576/32768 大预算；重构日志大报文虚拟滚动渲染与内存解耦搜索，建立 30% 滑动窗口容量平滑淘汰；根治 Balance 负载均衡模式 429 故障转移与粘性会话死锁；支持 Windows 原生快捷方式自愈与覆盖安装冲突修复；自动补齐历史 PRO 账号标识。
 
 👉 **[查看完整更新日志 CHANGELOG.md →](CHANGELOG.md)**
 

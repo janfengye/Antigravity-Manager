@@ -303,6 +303,9 @@ pub async fn handle_generate(
                 &mut wrapped_body,
                 &mapped_model,
             );
+        crate::proxy::mappers::prompt_sanitizer::PromptSanitizer::sanitize_gemini_payload(
+            &mut wrapped_body,
+        );
 
         if let Some(ref recorder) = upstream_recorder {
             recorder.set_value(&wrapped_body);
@@ -835,9 +838,10 @@ pub async fn handle_generate(
             }
         }
 
-        // [FIX] 429 时立即解绑当前会话，确保换号重试与后续请求不会死锁在受限账号上
         if status_code == 429 || status_code == 529 {
-            token_manager.clear_session_binding(&session_id);
+            token_manager
+                .unbind_session_and_clear_last_used(Some(&session_id))
+                .await;
             tracing::debug!(
                 "[Gemini] Unbound session {} from account {} due to status {}",
                 session_id,
@@ -846,13 +850,23 @@ pub async fn handle_generate(
             );
         }
 
+        let scheduling_mode = token_manager.get_scheduling_mode().await;
+        let allow_grace = match scheduling_mode {
+            crate::proxy::sticky_config::SchedulingMode::Balance => {
+                token_manager.tokens_count() <= 1
+            }
+            crate::proxy::sticky_config::SchedulingMode::CacheFirst => true,
+            crate::proxy::sticky_config::SchedulingMode::PerformanceFirst => false,
+        };
+
         // 确定重试策略
-        let strategy = retry_state.determine_strategy(
+        let strategy = retry_state.determine_strategy_with_grace(
             &account_id,
             status_code,
             &error_text,
             retry_after.as_deref(),
             false,
+            allow_grace,
         );
         let needs_quota_refresh = if config.request_type == "image_gen" && status_code == 429 {
             token_manager

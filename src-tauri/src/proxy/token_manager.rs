@@ -35,7 +35,8 @@ fn classify_rate_limit_reason(error_body: &str) -> crate::proxy::rate_limit::Rat
         || body.contains("quota reset")
         || body.contains("quota limit")
         || body.contains("per day")
-        || body.contains("daily quota");
+        || body.contains("daily quota")
+        || body.contains("credits");
 
     if body.contains("model_capacity") {
         RateLimitReason::ModelCapacityExhausted
@@ -1606,7 +1607,7 @@ impl TokenManager {
                 let t = tier.as_deref().unwrap_or("").to_lowercase();
                 if t.contains("ultra") {
                     0
-                } else if t.contains("pro") {
+                } else if t.contains("pro") || t.contains("premium") || t.contains("advanced") {
                     1
                 } else if t.contains("free") {
                     2
@@ -3537,6 +3538,25 @@ impl TokenManager {
         self.session_accounts.remove(session_id);
     }
 
+    /// [FIX] 遭遇 429/529 等限流或过载时解绑会话并清空最近使用记录，打破粘性死锁
+    pub async fn unbind_session_and_clear_last_used(&self, session_id: Option<&str>) {
+        if let Some(sid) = session_id {
+            self.session_accounts.remove(sid);
+        }
+        let mut last_used = self.last_used_account.lock().await;
+        *last_used = None;
+    }
+
+    /// 获取当前 Token 池内有效账号数量
+    pub fn tokens_count(&self) -> usize {
+        self.tokens.len()
+    }
+
+    /// 获取当前生效的负载均衡调度模式（从内存中安全读取，无需触碰磁盘）
+    pub async fn get_scheduling_mode(&self) -> crate::proxy::sticky_config::SchedulingMode {
+        self.sticky_config.read().await.mode
+    }
+
     /// 清除所有会话的粘性映射
     pub fn clear_all_sessions(&self) {
         self.session_accounts.clear();
@@ -4666,7 +4686,7 @@ mod tests {
             let t = tier.as_deref().unwrap_or("").to_lowercase();
             if t.contains("ultra") {
                 0
-            } else if t.contains("pro") {
+            } else if t.contains("pro") || t.contains("premium") || t.contains("advanced") {
                 1
             } else if t.contains("free") {
                 2
@@ -4714,10 +4734,27 @@ mod tests {
         // ULTRA > PRO > FREE
         let ultra = create_test_token("ultra@test.com", Some("ULTRA"), 1.0, None, Some(50));
         let pro = create_test_token("pro@test.com", Some("PRO"), 1.0, None, Some(50));
+        let premium = create_test_token(
+            "premium@test.com",
+            Some("Google One AI Premium"),
+            1.0,
+            None,
+            Some(50),
+        );
+        let advanced = create_test_token(
+            "advanced@test.com",
+            Some("Gemini Advanced"),
+            1.0,
+            None,
+            Some(50),
+        );
         let free = create_test_token("free@test.com", Some("FREE"), 1.0, None, Some(50));
 
         assert_eq!(compare_tokens(&ultra, &pro), Ordering::Less);
+        assert_eq!(compare_tokens(&ultra, &premium), Ordering::Less);
         assert_eq!(compare_tokens(&pro, &free), Ordering::Less);
+        assert_eq!(compare_tokens(&premium, &free), Ordering::Less);
+        assert_eq!(compare_tokens(&advanced, &free), Ordering::Less);
         assert_eq!(compare_tokens(&ultra, &free), Ordering::Less);
         assert_eq!(compare_tokens(&free, &ultra), Ordering::Greater);
     }

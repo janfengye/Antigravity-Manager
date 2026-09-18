@@ -41,7 +41,26 @@ impl RequestRetryState {
         retry_after: Option<&str>,
         retried_without_thinking: bool,
     ) -> RetryStrategy {
-        let allow_grace_retry = !self.grace_retried_accounts.contains(account_id);
+        self.determine_strategy_with_grace(
+            account_id,
+            status_code,
+            error_text,
+            retry_after,
+            retried_without_thinking,
+            true,
+        )
+    }
+
+    pub fn determine_strategy_with_grace(
+        &mut self,
+        account_id: &str,
+        status_code: u16,
+        error_text: &str,
+        retry_after: Option<&str>,
+        retried_without_thinking: bool,
+        allow_grace: bool,
+    ) -> RetryStrategy {
+        let allow_grace_retry = allow_grace && !self.grace_retried_accounts.contains(account_id);
         let strategy = determine_retry_strategy_inner(
             status_code,
             error_text,
@@ -104,15 +123,25 @@ pub fn determine_retry_strategy(
     error_text: &str,
     retried_without_thinking: bool,
 ) -> RetryStrategy {
+    determine_retry_strategy_with_grace(status_code, error_text, retried_without_thinking, true)
+}
+
+pub fn determine_retry_strategy_with_grace(
+    status_code: u16,
+    error_text: &str,
+    retried_without_thinking: bool,
+    allow_grace: bool,
+) -> RetryStrategy {
     if status_code == 429 {
         let lower = error_text.to_lowercase();
         let is_hard_quota_exhausted = lower.contains("resource_exhausted")
             || lower.contains("quota_exhausted")
             || lower.contains("exceeded your current quota")
-            || lower.contains("insufficient_quota");
+            || lower.contains("insufficient_quota")
+            || lower.contains("credits");
 
-        // [FIX] 硬配额耗尽必须立即轮换账号，绝不走 Grace Retry
-        if is_hard_quota_exhausted {
+        // [FIX] 硬配额耗尽或不允许 grace retry 时必须立即轮换账号，绝不走 Grace Retry
+        if is_hard_quota_exhausted || !allow_grace {
             return RetryStrategy::FixedDelay(Duration::from_millis(50));
         }
 
@@ -137,7 +166,7 @@ pub fn determine_retry_strategy(
         error_text,
         None,
         retried_without_thinking,
-        true,
+        allow_grace,
     )
 }
 
@@ -170,10 +199,11 @@ fn determine_retry_strategy_inner(
             let is_hard_quota_exhausted = lower.contains("resource_exhausted")
                 || lower.contains("quota_exhausted")
                 || lower.contains("exceeded your current quota")
-                || lower.contains("insufficient_quota");
+                || lower.contains("insufficient_quota")
+                || lower.contains("credits");
 
-            // [FIX] 硬配额耗尽必须立即轮换账号，绝不走 Grace Retry
-            if is_hard_quota_exhausted {
+            // [FIX] 硬配额耗尽或不允许 grace retry (平衡/性能模式且多账号) 必须立即轮换账号，绝不走 Grace Retry 或长退避
+            if is_hard_quota_exhausted || !allow_grace_retry {
                 return RetryStrategy::FixedDelay(Duration::from_millis(50));
             }
 

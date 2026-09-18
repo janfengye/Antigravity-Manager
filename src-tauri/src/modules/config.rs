@@ -92,6 +92,27 @@ pub fn load_app_config() -> Result<AppConfig, String> {
             }
         }
 
+        // Migrate legacy User-Agent in user_agent_override and saved_user_agent to >= 4.3.0
+        // to prevent upstream Google 404/429 model rejections
+        for ua_field in ["user_agent_override", "saved_user_agent"] {
+            if let Some(ua_val) = proxy.get(ua_field).and_then(|v| v.as_str()) {
+                let sanitized = crate::constants::sanitize_egress_user_agent(ua_val);
+                if sanitized != ua_val {
+                    tracing::info!(
+                        field = %ua_field,
+                        old = %ua_val,
+                        new = %sanitized,
+                        "Migrating legacy User-Agent config to supported stable floor"
+                    );
+                    proxy
+                        .as_object_mut()
+                        .unwrap()
+                        .insert(ua_field.to_string(), serde_json::Value::String(sanitized));
+                    modified = true;
+                }
+            }
+        }
+
         if modified {
             proxy.as_object_mut().unwrap().insert(
                 "custom_mapping".to_string(),

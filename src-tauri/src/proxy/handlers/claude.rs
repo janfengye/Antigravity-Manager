@@ -1174,6 +1174,9 @@ pub async fn handle_messages(
                 &mut gemini_body,
                 &mapped_model,
             );
+        crate::proxy::mappers::prompt_sanitizer::PromptSanitizer::sanitize_gemini_payload(
+            &mut gemini_body,
+        );
 
         let norm_total_micros = norm_start.elapsed().as_micros() as u64;
         let tf_micros = transform_timing.think_fill_micros;
@@ -1707,10 +1710,11 @@ pub async fn handle_messages(
                 )
                 .await;
 
-            // [FIX] 遭遇 429 限流或服务端过载时，立即解绑会话，防止下一轮尝试或后续请求死锁在故障账号上
             if status_code == 429 || status_code == 529 {
+                token_manager
+                    .unbind_session_and_clear_last_used(session_id)
+                    .await;
                 if let Some(sid) = session_id {
-                    token_manager.clear_session_binding(sid);
                     debug!(
                         "[{}] Unbound session {} from account {} due to status {}",
                         trace_id, sid, email, status_code
@@ -1876,9 +1880,22 @@ pub async fn handle_messages(
             }
         }
 
+        let scheduling_mode = token_manager.get_scheduling_mode().await;
+        let allow_grace = match scheduling_mode {
+            crate::proxy::sticky_config::SchedulingMode::Balance => {
+                token_manager.tokens_count() <= 1
+            }
+            crate::proxy::sticky_config::SchedulingMode::CacheFirst => true,
+            crate::proxy::sticky_config::SchedulingMode::PerformanceFirst => false,
+        };
+
         // 确定重试策略
-        let retry_strategy =
-            determine_retry_strategy(status_code, &error_text, retried_without_thinking);
+        let retry_strategy = super::common::determine_retry_strategy_with_grace(
+            status_code,
+            &error_text,
+            retried_without_thinking,
+            allow_grace,
+        );
 
         // 执行退避
         if apply_retry_strategy(

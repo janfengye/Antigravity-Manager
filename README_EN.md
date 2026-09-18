@@ -1,15 +1,17 @@
 # Antigravity Tools 🚀
-> Professional AI Account Management & Protocol Proxy System (v4.7.4)
+> Professional AI Account Management & Protocol Proxy System (v4.7.5)
 
 <div align="center">
-  <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
+  <img src="public/icon.png" width="100" height="100" alt="Antigravity Tools Logo">
+  <h3>Antigravity Tools</h3>
+  <p>Multi-platform Automated Operations & Multi-Account Orchestration Console</p>
 
-  <h3>Your Personal High-Performance AI Gateway</h3>
-  <p>Not just account management, but the ultimate solution to break API barriers.</p>
-  
   <p>
+    <a href="https://github.com/lbjlaq/Antigravity-Manager/releases">
+      <img src="https://img.shields.io/github/v/release/lbjlaq/Antigravity-Manager?color=blue&style=flat-square" alt="GitHub release">
+    </a>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.7.4-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.7.5-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -446,7 +448,7 @@ In clients that support OpenAI protocol (e.g., Cherry Studio), you can configure
 
 ## 📝 Changelog
 
-> Latest version **v4.7.4** (2026-09-17): Unified Pipeline processing engine across OpenAI Chat/Responses, Claude, and Gemini Native protocols; authoritative thinking and cryptographic signature normalization; read-only SQLite connection reuse for tool signature lookups eliminating write transactions and fsync (reducing long-context overhead by 98.5%, from 14.7s to 0.22s); fixed Hermes streaming crash, OpenAI 429/503 errors, and UTF-8 multi-byte panic.
+> Latest version **v4.7.5** (2026-09-18): Resolved Agent client 404/429/503 errors and purged billing headers to eliminate upstream Google WAF false positives; eliminated the 1,000 thinking budget defect causing zero-token thought collapse and unlocked up to 24,576/32,768 deep reasoning budgets; rebuilt traffic log virtualization and in-memory search with 30% sliding window physical disk eviction; resolved Balance mode 429 failover delays and session sticky deadlocks; enabled native Windows COM shortcut healing and fixed installer conflicts; automatically healed legacy PRO tier statuses.
 
 👉 **[View Full Changelog → CHANGELOG_EN.md](CHANGELOG_EN.md)**
 
