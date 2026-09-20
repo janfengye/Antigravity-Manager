@@ -682,6 +682,11 @@ pub fn transform_claude_request_in_timed(
     // 深度清理 [undefined] 字符串 (Cherry Studio 等客户端常见注入)
     crate::proxy::mappers::common_utils::deep_clean_undefined(&mut inner_request, 0);
 
+    // [PIPELINE] 统一清洗提示词与风控伪 Header
+    crate::proxy::mappers::prompt_sanitizer::PromptSanitizer::sanitize_gemini_payload(
+        &mut inner_request,
+    );
+
     if config.inject_google_search && !has_web_search_tool {
         crate::proxy::mappers::common_utils::inject_google_search_tool(
             &mut inner_request,
@@ -1343,12 +1348,8 @@ fn build_contents(
                             pending_tool_use_ids.push(id.clone());
                         }
 
-                        // 存储 id -> name 映射
+                        // 记录 id -> name 映射与签名上下文
                         tool_id_to_name.insert(id.clone(), name.clone());
-
-                        // Signature resolution logic
-                        // Priority: Client -> Tool-specific cache -> Turn Context -> Turn Signature -> Session cache at msg_index
-                        // Strictly isolated to this turn: NEVER fall back to latest session or global store!
                         let final_sig = signature
                             .as_ref()
                             .filter(|s| {
@@ -1359,70 +1360,32 @@ fn build_contents(
                                 crate::proxy::SignatureCache::global().get_tool_signature(id)
                             })
                             .or_else(|| last_thought_signature.as_ref().cloned())
-                            .or_else(|| turn_signature.clone())
-                            .or_else(|| {
-                                // 只按当前轮次回填，禁止 latest/global 串签（官方回退会导致思考死循环）
-                                crate::proxy::SignatureCache::global()
-                                    .get_session_signature_at(session_id, msg_index)
-                            });
-                        // [FIX #752] Validate signature before using
-                        let is_google_cloud = mapped_model.starts_with("projects/");
-                        let is_claude_model = mapped_model.to_lowercase().contains("claude");
-                        let needs_sentinel = !is_google_cloud
-                            && !is_claude_model
-                            && (is_thinking_enabled
-                                || model_keeps_thinking_without_signature(&mapped_model));
+                            .or_else(|| turn_signature.clone());
 
-                        let mut signature_assigned = false;
-                        if let Some(sig) = final_sig {
-                            // [NEW] If this is a retry, do NOT backfill signatures to avoid issues.
-                            if is_retry && signature.is_none() {
-                                tracing::warn!("[Tool-Signature] Skipping signature backfill for tool_use: {} during retry.", id);
-                            } else if sig == SENTINEL_SIGNATURE {
-                                if !is_google_cloud && !is_claude_model {
-                                    part["thoughtSignature"] = json!(SENTINEL_SIGNATURE);
-                                    signature_assigned = true;
-                                }
-                            } else if sig.len() < MIN_SIGNATURE_LENGTH {
-                                tracing::warn!(
-                                    "[Tool-Signature] Signature too short for tool_use: {} (len: {} < {}), skipping.",
-                                    id, sig.len(), MIN_SIGNATURE_LENGTH
-                                );
-                            } else {
-                                // Check signature compatibility (optional for tool_use)
-                                let cached_family = crate::proxy::SignatureCache::global()
-                                    .get_signature_family(&sig);
-
-                                let should_use_sig = match cached_family {
-                                    Some(family) => {
-                                        if is_model_compatible(&family, mapped_model)
-                                            || (is_claude_model
-                                                && family.to_lowercase().contains("claude"))
-                                        {
-                                            true
-                                        } else {
-                                            tracing::warn!(
-                                                "[Tool-Signature] Incompatible signature for tool_use: {} (Family: {}, Target: {})",
-                                                id, family, mapped_model
-                                            );
-                                            false
-                                        }
-                                    }
-                                    None => true, // Unknown origin but valid length: trust it for Google upstream!
-                                };
-                                if should_use_sig {
-                                    part["thoughtSignature"] = json!(sig);
-                                    signature_assigned = true;
-                                }
-                            }
+                        if let Some(ref s) = final_sig {
+                            *last_thought_signature = Some(s.clone());
                         }
 
-                        if !signature_assigned && needs_sentinel {
-                            tracing::info!(
-                                "[Tool-Signature] Adding GEMINI_SKIP_SIGNATURE for tool_use: {} (model: {})",
-                                id, mapped_model
-                            );
-                            part["thoughtSignature"] = json!(SENTINEL_SIGNATURE);
+                        let is_claude_model = mapped_model.to_lowercase().contains("claude");
+                        if is_claude_model {
+                            // Claude 模型：Anthropic 官方验签引擎要求签名必须在思考块上，工具调用绝不携带签名，更不塞假哨兵
+                            if let Some(obj) = part.as_object_mut() {
+                                obj.remove("thoughtSignature");
+                                obj.remove("thought_signature");
+                            }
+                        } else {
+                            // Gemini 原生模型：首个工具调用挂载真实签名 (若有)，后续并行工具调用统一打上 32 字节哨兵占位
+                            let has_preceding_fc =
+                                parts.iter().any(|p| p.get("functionCall").is_some());
+                            if !has_preceding_fc {
+                                if let Some(sig) = final_sig {
+                                    part["thoughtSignature"] = json!(sig);
+                                } else {
+                                    part["thoughtSignature"] = json!(SENTINEL_SIGNATURE);
+                                }
+                            } else {
+                                part["thoughtSignature"] = json!(SENTINEL_SIGNATURE);
+                            }
                         }
                         parts.push(part);
                     }
@@ -1516,14 +1479,7 @@ fn build_contents(
                             }
                         });
 
-                        // [FIX] Tool Result 回填签名: 优先从 tool_use_id 缓存查询，其次上下文
-                        let tool_res_sig = crate::proxy::SignatureCache::global()
-                            .get_tool_signature(tool_use_id)
-                            .or_else(|| last_thought_signature.as_ref().cloned());
-                        if let Some(sig) = tool_res_sig {
-                            part["thoughtSignature"] = json!(sig);
-                        }
-
+                        // 危险测试分支法则：ToolResult (functionResponse) 绝不携带签名
                         parts.push(part);
 
                         // 追加图片 parts
@@ -1594,20 +1550,26 @@ fn build_contents(
                 parts.insert(0, thought_part);
             }
             None => {
-                // No thought block exists, insert a normalized placeholder thinking block
-                let sig_to_use = turn_signature.as_deref().unwrap_or(SENTINEL_SIGNATURE);
-                let mut thought_part = json!({
-                    "text": "...",
-                    "thought": true,
-                });
-                if !is_google_cloud || sig_to_use != SENTINEL_SIGNATURE {
-                    thought_part["thoughtSignature"] = json!(sig_to_use);
+                let is_claude_model = mapped_model.to_lowercase().contains("claude");
+                if is_claude_model && turn_signature.is_none() {
+                    // Claude 模型：若本轮无签名，绝不强行凭空插入无签名的 thinking 占位块！
+                    // Anthropic 官方规范要求有 thinking 块必须有 signature，否则报 Field required
+                } else {
+                    // Gemini 原生模型：允许使用哨兵占位块保证思考模型格式一致
+                    let sig_to_use = turn_signature.as_deref().unwrap_or(SENTINEL_SIGNATURE);
+                    let mut thought_part = json!({
+                        "text": "...",
+                        "thought": true,
+                    });
+                    if !is_google_cloud || sig_to_use != SENTINEL_SIGNATURE {
+                        thought_part["thoughtSignature"] = json!(sig_to_use);
+                    }
+                    parts.insert(0, thought_part);
+                    tracing::debug!(
+                        "Injected placeholder thinking block for assistant message at turn {}",
+                        msg_index
+                    );
                 }
-                parts.insert(0, thought_part);
-                tracing::debug!(
-                    "Injected placeholder thinking block for assistant message at turn {}",
-                    msg_index
-                );
             }
         }
     }
@@ -3505,9 +3467,9 @@ mod tests {
         assert_eq!(assistant_parts[0]["thought"], true);
         assert_eq!(assistant_parts[0]["thoughtSignature"], real_sig);
         assert_eq!(assistant_parts[1]["functionCall"]["name"], "list_directory");
-        assert_eq!(
-            assistant_parts[1]["thoughtSignature"], real_sig,
-            "functionCall must inherit thoughtSignature!"
+        assert!(
+            assistant_parts[1].get("thoughtSignature").is_none(),
+            "Claude model functionCall must NOT carry thoughtSignature!"
         );
     }
 

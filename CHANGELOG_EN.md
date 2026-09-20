@@ -3,6 +3,28 @@
 > Complete version history for Antigravity Tools. Return to project home at [README_EN.md](README_EN.md).
 
 *   **Version History**:
+    *   **v4.7.9 (2026-09-21)**:
+        -   **[Gemini Egress Minimization & Single Signature Anchor Law] Eliminate 10MB Signatures Overflowing 1,048,576 Tokens and 400 Validation Interceptions (PR #3482)**:
+            -   **Root Cause Remediation**: Resolved upstream production crashes where multi-turn complex reasoning generated 300KB to 509KB Protobuf signatures, causing legacy 3-5x duplication across parts to amass 9.93MB in signatures (95.2% of payload), breaching the 1,048,576 token ceiling.
+            -   **Single Real Signature Anchor**: Enforces that only the first `functionCall` part exclusively carries the genuine cryptographic signature, while `thought` blocks remain clean text, eliminating dual mirror redundancy.
+            -   **Parallel Tool Sentinel Contract**: Subsequent parallel tool calls within the same turn are unified with the standard 32-byte `skip_thought_signature_validator` sentinel, satisfying Google AST validation rules while slashing per-turn signature volume by over 80%.
+            -   **Egress FunctionResponse Sanitization**: Completely strips signatures from client-returned `functionResponse` blocks to eliminate downstream fake signature pollution.
+        -   **[Claude Dual-Engine Thinking Signature Closed-Loop] Eradicate Field Required and Invalid Signature Errors (PR #3482)**:
+            -   **Anthropic Contract Alignment**: Strictly respects Anthropic's rule that signatures belong exclusively in leading `thought` blocks (`messages[x].content[0].signature`); tool calls never carry signatures nor accept fake sentinels.
+            -   **Zero Dummy Thought Injection**: For non-thinking turns (rapid consecutive tool executions or direct answers), gateway strictly avoids injecting empty placeholder thinking blocks, eradicating `messages.x.content.0.thinking.signature: Field required`.
+            -   **Three-State State Machine**: Ingests and persists client-provided valid signatures; hydrates from store when client compresses history; and safely omits thinking blocks when no thinking was generated.
+            -   **Google Vertex Protobuf Normalization**: Transparently wraps incoming Claude ASCII signatures into Base64 format (`RXU4...`) and restores outgoing streams to raw ASCII for downstream clients.
+        -   **[Weekly Quota Sustained Circuit Breaking & Cycle Token Metering] (PR #3482, Fixes #3480, #3477, Merges #3484)**:
+            -   **Bucket Isolation & Hard Enforcement**: Decouples weekly quota tracking from temporary 429 limits, treating zero-quota depletion as a system-level hard constraint.
+            -   **Later Outstanding Deadline Alignment**: Reconciles dual-depleted quotas to the latest reset timestamp, preventing premature rotation loops.
+            -   **Weekly Token Usage Metering**: Displays exact cycle token consumption beneath each account card in compact `K/M/B` format (e.g. `206.99M`).
+        -   **[LAN and Public IPv6 / IPv4 Dual-Stack Listening] (PR #3482)**:
+            -   **Dual-Stack Wildcard Binding**: Binds `[::]:port` with `IPV6_V6ONLY` disabled to support public IPv6 DDNS (AAAA records) access, fixing `Connection refused` defects on pure IPv6 networks.
+            -   **IPv6 CIDR Filtering & Localization**: Supports up to 128-bit subnet masks and updates all 12 localized interface languages.
+        -   **[OpenAI / Codex Agent Identity Normalization] (PR #3489, Thanks to @cuteyuchen)**:
+            -   **Generic Adaptive Regex**: Introduces precompiled `RE_CODEX_IDENTITY` regex to strip competing model declarations (`based on GPT-5/GPT-6` etc.) while preserving arbitrary agent descriptors, preventing upstream 429 WAF throttling.
+        -   **[Frontend Security & Process Lifecycle Hardening] (PR #3482, Fixes #3485, #3488, #3481)**:
+            -   Enforces URL protocol allowlists, OAuth postMessage origin validation, resolves Classic/IDE detection collisions, and secures cross-platform process spawning.
     *   **v4.7.8 (2026-09-20)**:
         -   **[Quota Display & Merging Logic Fix] Fix 5H Quota Erroneously Displaying Weekly Quota and Reset Time (PR #3479, Fixes #3477)**:
             -   **Faithful Bucket Display**: Corrected multi-dimensional quota bucket blending so that 5H quota accurately reflects the rolling 5-hour window and hourly countdown unless weekly quota is completely depleted.

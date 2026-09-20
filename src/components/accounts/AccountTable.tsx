@@ -55,6 +55,7 @@ import { cn } from '../../utils/cn';
 
 import { useConfigStore } from '../../stores/useConfigStore';
 import { QuotaItem } from './QuotaItem';
+import { getModelQuotaDisplay } from '../../utils/quotaDisplay';
 import { MODEL_CONFIG, sortModels, resolveQuotaModels, ensurePinnedImageSelector } from '../../config/modelConfig';
 import { categorizeModel, getModelProtectionKey } from '../../utils/modelCategory';
 import { getValidationBlockedStatusLabel } from './accountValidationStatus';
@@ -364,53 +365,12 @@ function AccountRowContent({
                         label: b.display_name ? `${shortGroupName} (${b.display_name})` : `${shortGroupName} (周)`,
                         percentage: Math.round((b.remaining_fraction || 0) * 100),
                         resetTime: b.reset_time,
+                        cycleTokens: b.cycle_tokens,
                         Icon: shortGroupName.toLowerCase().includes('claude') ? Sparkles : Bot,
                     };
                 });
         });
     }, [quotaWindow, account.quota?.quota_groups]);
-
-    // 综合计算模型有效配额（结合周配额状态）
-    const getModelEffectiveQuota = (modelId: string, modelData?: { percentage: number; reset_time?: string }) => {
-        if (!account.quota?.quota_groups || account.quota.quota_groups.length === 0) {
-            return {
-                percentage: modelData?.percentage || 0,
-                resetTime: modelData?.reset_time,
-                isWeeklyConstrained: false,
-            };
-        }
-        const nameLower = modelId.toLowerCase();
-        const isClaudeOrGpt = nameLower.startsWith('claude') || nameLower.startsWith('gpt');
-        const isGemini = nameLower.startsWith('gemini');
-
-        for (const group of account.quota.quota_groups) {
-            const gname = group.display_name.toLowerCase();
-            const matches = isClaudeOrGpt
-                ? gname.includes('claude') || gname.includes('gpt') || gname.includes('3p')
-                : isGemini
-                ? gname.includes('gemini') || (!gname.includes('claude') && !gname.includes('gpt') && !gname.includes('3p'))
-                : false;
-
-            if (matches) {
-                const weeklyBucket = group.buckets.find(b =>
-                    b.window?.toLowerCase().includes('week') || b.bucket_id?.toLowerCase().includes('week') || b.window?.toLowerCase().includes('7d')
-                );
-                if (weeklyBucket && (weeklyBucket.remaining_fraction ?? 1) <= 0.001) {
-                    return {
-                        percentage: 0,
-                        resetTime: weeklyBucket.reset_time,
-                        isWeeklyConstrained: true,
-                    };
-                }
-            }
-        }
-
-        return {
-            percentage: modelData?.percentage || 0,
-            resetTime: modelData?.reset_time,
-            isWeeklyConstrained: false,
-        };
-    };
 
     // 获取要显示的模型列表
     const pinnedModels = ensurePinnedImageSelector(
@@ -633,23 +593,22 @@ function AccountRowContent({
                                     label={item.label}
                                     percentage={item.percentage}
                                     resetTime={item.resetTime}
+                                    weeklyTokens={item.cycleTokens ?? null}
                                     Icon={item.Icon}
                                 />
                             ))
                         ) : (
                             displayModels.map((model) => {
                                 const modelData = model.data;
-                                const effective = getModelEffectiveQuota(model.id, modelData);
+                                const display = getModelQuotaDisplay(model.id, modelData, account.quota?.quota_groups);
 
                                 return (
                                     <QuotaItem
                                         key={model.id}
                                         label={model.label}
-                                        percentage={effective.percentage}
-                                        resetTime={effective.resetTime}
+                                        {...display}
                                         isProtected={Boolean(config?.quota_protection?.enabled && isModelProtected(account.protected_models, model.protectedKey))}
                                         liveLimit={getLiveLimitForModel(account, model.id, model.protectedKey)}
-                                        isWeeklyConstrained={effective.isWeeklyConstrained}
                                         Icon={MODEL_CONFIG[model.id]?.Icon || Bot}
                                     />
                                 );
@@ -712,7 +671,7 @@ function AccountRowContent({
                     )}
                     <button
                         className={`p-1.5 text-gray-500 dark:text-gray-400 rounded-lg transition-all ${(isSwitching || isDisabled) ? 'bg-blue-50 dark:bg-blue-900/10 text-blue-600 dark:text-blue-400 cursor-not-allowed' : 'hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30'}`}
-                        onClick={(e) => { e.stopPropagation(); onSwitch(); }}
+                        onClick={(e) => { e.stopPropagation(); onSwitch('classic'); }}
                         title={isDisabled ? t('accounts.disabled_tooltip') : (isSwitching ? t('common.loading') : t('accounts.switch_to_classic', '切换到 Antigravity (经典版)'))}
                         disabled={isSwitching || isDisabled}
                     >

@@ -851,9 +851,8 @@ pub async fn handle_messages(
     let token_manager = state.token_manager;
 
     let pool_size = token_manager.len();
-    // [FIX] Ensure max_attempts is at least 2 to allow for internal retries (e.g. stripping signatures)
-    // even if the user has only 1 account.
-    let max_attempts = MAX_RETRY_ATTEMPTS.min(pool_size.saturating_add(1)).max(2);
+    // [FIX #3485] 自适应多账号池与单账号退避最大重试次数 (单账号3次，多账号整池两轮)
+    let max_attempts = super::common::calculate_max_retry_attempts(pool_size);
 
     let mut last_error = String::new();
     let mut retried_without_thinking = false;
@@ -1713,7 +1712,7 @@ pub async fn handle_messages(
                 )
                 .await;
 
-            if status_code == 429 || status_code == 529 {
+            if status_code == 429 || status_code == 529 || status_code == 503 {
                 token_manager
                     .unbind_session_and_clear_last_used(session_id)
                     .await;
@@ -1901,12 +1900,15 @@ pub async fn handle_messages(
             crate::proxy::sticky_config::SchedulingMode::PerformanceFirst => false,
         };
 
-        // 确定重试策略
-        let retry_strategy = super::common::determine_retry_strategy_with_grace(
+        // 确定重试策略：传入当前 attempt 与 pool_size，执行智能自适应裁决
+        let retry_strategy = super::common::determine_retry_strategy_adaptive(
             status_code,
             &error_text,
+            retry_after.as_deref(),
             retried_without_thinking,
             allow_grace,
+            attempt,
+            pool_size,
         );
 
         // 执行退避

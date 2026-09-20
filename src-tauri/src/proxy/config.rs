@@ -1102,7 +1102,7 @@ fn default_zai_haiku_model() -> String {
 impl ProxyConfig {
     /// 获取实际的监听地址
     /// - allow_lan_access = false: 返回 "127.0.0.1"（默认，隐私优先）
-    /// - allow_lan_access = true: 返回 "0.0.0.0"（允许局域网访问）
+    /// - allow_lan_access = true: 返回 "0.0.0.0"（通配监听：底层自动启用 IPv6/IPv4 双栈监听，允许局域网与外部公网 IPv4/IPv6 访问）
     pub fn get_bind_address(&self) -> &str {
         if self.allow_lan_access {
             "0.0.0.0"

@@ -150,7 +150,7 @@ pub struct CircuitBreakerConfig {
     #[serde(default = "default_backoff_steps")]
     pub backoff_steps: Vec<u64>,
 
-    /// Lock account until quota reset time when 5-hour rolling or weekly quota reaches 0
+    /// Optional 5h zero-quota lock; exhausted weekly quota always blocks scheduling.
     #[serde(default = "default_lock_on_zero_quota")]
     pub lock_on_zero_quota: bool,
 }

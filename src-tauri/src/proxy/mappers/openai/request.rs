@@ -254,6 +254,12 @@ pub fn transform_openai_request(
     )
 }
 
+/// 通用 Codex 身份声明归一化正则 (Thanks to @cuteyuchen for PR #3489)：
+/// 自动匹配并剥离 "You are Codex, <任意角色定语> based on <任意竞品模型>." 中的敏感模型特征
+static RE_CODEX_IDENTITY: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| {
+    regex::Regex::new(r"(?i)(You are Codex,\s+[^.]+?)\s+based on\s+[^.]+(\.?)").unwrap()
+});
+
 pub fn transform_openai_request_with_session(
     request: &OpenAIRequest,
     project_id: &str,
@@ -407,10 +413,12 @@ pub fn transform_openai_request_with_session(
     system_instructions = system_instructions
         .into_iter()
         .map(|s| {
-            let s = s.replace(
-                "You are Codex, an agent based on GPT-5.",
-                "You are Codex, an agent.",
-            );
+            // 通用自适应归一化：剥离基于 GPT-5 / GPT-6 等竞品模型的声明指纹，防止触发上游 WAF 伪限流
+            let s = if s.contains("Codex") && s.contains("based on") {
+                RE_CODEX_IDENTITY.replace_all(&s, "$1$2").into_owned()
+            } else {
+                s
+            };
             let raw_key = crate::proxy::cache_manager::CacheManager::compute_si_key(&s);
             if let Some(cached) = cm.lookup_si(&raw_key) {
                 si_layer_stats.0 += 1;
@@ -832,10 +840,16 @@ pub fn transform_openai_request_with_session(
                         effective_tc_sig = tool_specific_sig;
                     }
 
-                    if let Some(ref sig) = effective_tc_sig {
-                        func_call_part["thoughtSignature"] = json!(sig);
-                    } else if is_thinking_model || is_gemini_flash_thinking || actual_include_thinking {
-                        tracing::debug!("[OpenAI-Signature] Adding GEMINI_SKIP_SIGNATURE for tool_use: {}", tc.id);
+                    // 单轮单真签名原则：
+                    // 首个工具调用挂载真实签名 (若有)，后续并行工具调用统一打上 32 字节哨兵占位 (满足 Google AST 校验且绝不复制 500KB)
+                    let has_preceding_fc = parts.iter().any(|p| p.get("functionCall").is_some());
+                    if !has_preceding_fc {
+                        if let Some(ref sig) = effective_tc_sig {
+                            func_call_part["thoughtSignature"] = json!(sig);
+                        } else if is_thinking_model || is_gemini_flash_thinking || actual_include_thinking {
+                            func_call_part["thoughtSignature"] = json!("skip_thought_signature_validator");
+                        }
+                    } else {
                         func_call_part["thoughtSignature"] = json!("skip_thought_signature_validator");
                     }
 
@@ -918,17 +932,10 @@ pub fn transform_openai_request_with_session(
                        "id": msg.tool_call_id.clone().unwrap_or_default()
                     }
                 });
-                if actual_include_thinking {
-                    let mut effective_fr_sig = None;
-                    if let Some(ref call_id) = msg.tool_call_id {
-                        effective_fr_sig = crate::proxy::SignatureCache::global().get_tool_signature(call_id);
-                    }
-                    if effective_fr_sig.is_none() {
-                        effective_fr_sig = Some(crate::proxy::thinking_store::SENTINEL_SIGNATURE.to_string());
-                    }
-                    if let Some(sig) = effective_fr_sig {
-                        fr_part["thoughtSignature"] = json!(sig);
-                    }
+                // 危险测试分支法则：tool 响应 (functionResponse) 绝不携带签名
+                if let Some(obj) = fr_part.as_object_mut() {
+                    obj.remove("thoughtSignature");
+                    obj.remove("thought_signature");
                 }
                 parts.push(fr_part);
 
@@ -1207,6 +1214,11 @@ pub fn transform_openai_request_with_session(
 
     // 深度清理 [undefined] 字符串 (Cherry Studio 等客户端常见注入)
     crate::proxy::mappers::common_utils::deep_clean_undefined(&mut inner_request, 0);
+
+    // [PIPELINE] 统一清洗提示词与风控伪 Header
+    crate::proxy::mappers::prompt_sanitizer::PromptSanitizer::sanitize_gemini_payload(
+        &mut inner_request,
+    );
 
     // 4. Handle Tools (Merged Cleaning)
     let is_codex_style = request.model.contains("codex")
@@ -1677,27 +1689,41 @@ mod tests {
 
     #[test]
     fn prompt_log_identity_cleanup_only_changes_system_instructions() {
-        let old = "You are Codex, an agent based on GPT-5.";
-        let req: OpenAIRequest = serde_json::from_value(json!({
-            "model": "gemini-3.7-flash-high",
-            "instructions": format!("Top-level: {old}"),
-            "messages": [
-                {"role": "system", "content": format!("System: {old}")},
-                {"role": "developer", "content": format!("<model_switch>{old}</model_switch>")},
-                {"role": "user", "content": old},
-                {"role": "assistant", "tool_calls": [{"id": "call_identity", "type": "function", "function": {"name": "identity", "arguments": "{}"}}]},
-                {"role": "tool", "tool_call_id": "call_identity", "content": old}
-            ]
-        }))
-        .unwrap();
-        let (body, _, _, _) = transform_openai_request(&req, "test-project", &req.model, None);
-        let system = body["request"]["systemInstruction"].to_string();
-        assert!(!system.contains(old));
-        assert!(system.contains("Top-level: You are Codex, an agent."));
-        assert!(system.contains("System: You are Codex, an agent."));
-        assert!(system.contains("<model_switch>You are Codex, an agent.</model_switch>"));
-        let contents = body["request"]["contents"].to_string();
-        assert_eq!(contents.matches(old).count(), 2);
+        for (old, normalized) in [
+            (
+                "You are Codex, an agent based on GPT-5.",
+                "You are Codex, an agent.",
+            ),
+            (
+                "You are Codex, a coding agent based on GPT-5.",
+                "You are Codex, a coding agent.",
+            ),
+            (
+                "You are Codex, an advanced coding agent based on GPT-6.",
+                "You are Codex, an advanced coding agent.",
+            ),
+        ] {
+            let req: OpenAIRequest = serde_json::from_value(json!({
+                "model": "gemini-3.7-flash-high",
+                "instructions": format!("Top-level: {old}"),
+                "messages": [
+                    {"role": "system", "content": format!("System: {old}")},
+                    {"role": "developer", "content": format!("<model_switch>{old}</model_switch>")},
+                    {"role": "user", "content": old},
+                    {"role": "assistant", "tool_calls": [{"id": "call_identity", "type": "function", "function": {"name": "identity", "arguments": "{}"}}]},
+                    {"role": "tool", "tool_call_id": "call_identity", "content": old}
+                ]
+            }))
+            .unwrap();
+            let (body, _, _, _) = transform_openai_request(&req, "test-project", &req.model, None);
+            let system = body["request"]["systemInstruction"].to_string();
+            assert!(!system.contains(old));
+            assert!(system.contains(&format!("Top-level: {normalized}")));
+            assert!(system.contains(&format!("System: {normalized}")));
+            assert!(system.contains(&format!("<model_switch>{normalized}</model_switch>")));
+            let contents = body["request"]["contents"].to_string();
+            assert_eq!(contents.matches(old).count(), 2);
+        }
     }
     fn tiered_request_body(model: &str, effort: Option<&str>) -> Value {
         let mut raw = json!({

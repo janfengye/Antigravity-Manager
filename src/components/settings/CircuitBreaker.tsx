@@ -67,10 +67,10 @@ export default function CircuitBreaker({
             <div className="flex items-center justify-between p-3.5 bg-gray-50/90 dark:bg-base-200 rounded-xl border border-gray-200/80 dark:border-base-300">
                 <div className="space-y-0.5">
                     <div className="text-xs font-bold text-gray-900 dark:text-white">
-                        {t("proxy.config.circuit_breaker.lock_on_zero_quota", { defaultValue: "Lock on Zero Quota (5h / Weekly)" })}
+                        {t("proxy.config.circuit_breaker.lock_on_zero_quota", { defaultValue: "Lock on Zero 5h Quota" })}
                     </div>
                     <div className="text-xs text-gray-500 dark:text-gray-400">
-                        {t("proxy.config.circuit_breaker.lock_on_zero_quota_desc", { defaultValue: "Automatically locks the account until its exact quota reset time whenever 5-hour rolling or weekly quota hits 0%, skipping short backoffs." })}
+                        {t("proxy.config.circuit_breaker.lock_on_zero_quota_desc", { defaultValue: "With the circuit breaker enabled, locks exhausted 5h quota until its official reset. Exhausted weekly quota always blocks the affected model group, independently of these switches, until the official reset or a fresh quota refresh confirms recovery." })}
                     </div>
                 </div>
                 <label className="relative inline-flex items-center cursor-pointer">

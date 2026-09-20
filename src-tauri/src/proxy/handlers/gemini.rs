@@ -155,7 +155,8 @@ pub async fn handle_generate(
     let request_timeout = state.request_timeout;
     let token_manager = state.token_manager;
     let pool_size = token_manager.len();
-    let max_attempts = MAX_RETRY_ATTEMPTS.min(pool_size).max(1);
+    // [FIX #3485] 自适应多账号池与单账号退避最大重试次数 (单账号3次，多账号整池两轮)
+    let max_attempts = crate::proxy::handlers::common::calculate_max_retry_attempts(pool_size);
 
     let mut last_error = String::new();
     let mut last_email: Option<String> = None;
@@ -897,28 +898,31 @@ pub async fn handle_generate(
             crate::proxy::sticky_config::SchedulingMode::PerformanceFirst => false,
         };
 
-        // 确定重试策略
-        let strategy = retry_state.determine_strategy_with_grace(
+        // 确定重试策略：传入当前 attempt 与 pool_size，执行智能自适应裁决
+        let strategy = retry_state.determine_strategy_adaptive(
             &account_id,
             status_code,
             &error_text,
             retry_after.as_deref(),
             false,
-            allow_grace,
+            attempt,
+            pool_size,
         );
-        let needs_quota_refresh = if config.request_type == "image_gen" && status_code == 429 {
-            token_manager
-                .mark_rate_limited_fast(
-                    &email,
-                    status_code,
-                    retry_after.as_deref(),
-                    &error_text,
-                    Some(&mapped_model),
-                )
-                .await
-        } else {
-            false
-        };
+        let needs_quota_refresh =
+            if status_code == 429 || status_code == 529 || status_code == 503 || status_code == 500
+            {
+                token_manager
+                    .mark_rate_limited_fast(
+                        &email,
+                        status_code,
+                        retry_after.as_deref(),
+                        &error_text,
+                        Some(&mapped_model),
+                    )
+                    .await
+            } else {
+                false
+            };
         if !matches!(&strategy, RetryStrategy::GraceRetry(_)) {
             drop(image_permit.take());
         }

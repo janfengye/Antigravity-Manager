@@ -41,7 +41,7 @@ function Settings() {
     const { config, loadConfig, saveConfig, updateLanguage, updateTheme } = useConfigStore();
     const { enable, disable, isEnabled } = useDebugConsole();
     const [activeTab, setActiveTab] = useState<'general' | 'account' | 'proxy' | 'advanced' | 'debug' | 'about'>('general');
-    const [appVersion, setAppVersion] = useState<string>('4.7.8');
+    const [appVersion, setAppVersion] = useState<string>('4.7.9');
     const [formData, setFormData] = useState<AppConfig>({
         language: 'zh',
         theme: 'system',
@@ -402,11 +402,11 @@ function Settings() {
             } catch (err) {
                 console.error('Failed to trigger update event:', err);
                 if (updateInfo?.downloadUrl) {
-                    window.open(updateInfo.downloadUrl, '_blank');
+                    window.open(updateInfo.downloadUrl, '_blank', 'noopener,noreferrer');
                 }
             }
         } else if (updateInfo?.downloadUrl) {
-            window.open(updateInfo.downloadUrl, '_blank');
+            window.open(updateInfo.downloadUrl, '_blank', 'noopener,noreferrer');
         }
     };
 

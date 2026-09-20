@@ -163,19 +163,8 @@ async fn auth_middleware_internal(
         // 尝试验证 UserToken
         let token = api_key.unwrap();
 
-        // 提取 IP (复用逻辑)
-        let client_ip = request
-            .headers()
-            .get("x-forwarded-for")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.split(',').next().unwrap_or(s).trim().to_string())
-            .or_else(|| {
-                request
-                    .headers()
-                    .get("x-real-ip")
-                    .and_then(|v| v.to_str().ok())
-                    .map(|s| s.to_string())
-            })
+        // 提取 IP (复用 ip_filter 规范化逻辑，支持 IPv4/IPv6 及 ConnectInfo)
+        let client_ip = crate::proxy::middleware::ip_filter::extract_client_ip(&request)
             .unwrap_or_else(|| "127.0.0.1".to_string()); // Default fallback
 
         // 验证 Token

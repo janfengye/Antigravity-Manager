@@ -45,8 +45,10 @@ pub fn get_all_candidate_db_paths(target_ide: Option<&str>) -> Vec<PathBuf> {
         &["Antigravity IDE", "Antigravity"]
     } else if target_ide == Some("code") || target_ide == Some("cursor") {
         &["Antigravity", "Antigravity IDE"]
+    } else if target_ide == Some("classic") {
+        &["Antigravity"]
     } else {
-        &["Antigravity IDE", "Antigravity"]
+        &["Antigravity", "Antigravity IDE"]
     };
 
     #[cfg(target_os = "macos")]

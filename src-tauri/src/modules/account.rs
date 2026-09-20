@@ -1234,6 +1234,9 @@ pub fn list_accounts() -> Result<Vec<Account>, String> {
         }
     }
 
+    if let Err(error) = crate::modules::token_stats::populate_weekly_usage(&mut accounts) {
+        tracing::warn!("Weekly token usage unavailable: {}", error);
+    }
     Ok(accounts)
 }
 

@@ -18,6 +18,54 @@ pub trait SystemIntegration: Send + Sync {
     fn show_notification(&self, title: &str, body: &str);
 }
 
+/// 根据目标参数、进程运行态及可执行文件存在性决策最终切换环境
+pub fn resolve_effective_target(
+    target_ide: Option<&str>,
+    classic_running: bool,
+    ide_running: bool,
+    has_classic_exe: bool,
+    ide_exe_path: Option<&str>,
+) -> (bool, Option<&'static str>) {
+    let is_explicit_ide = target_ide == Some("ide");
+    let is_explicit_classic = target_ide == Some("classic");
+
+    if is_explicit_ide {
+        return (true, Some("ide"));
+    }
+    if is_explicit_classic {
+        return (false, Some("classic"));
+    }
+
+    // target_ide 为 None 或未指定时进行智能环境探查（经典版桌面端优先，严禁仅凭静态 IDE 数据库文件劫持经典版目标）
+    let mut is_ide = false;
+    if classic_running {
+        // 原生经典版正在运行，确定目标为经典版
+        is_ide = false;
+    } else if ide_running {
+        // 经典版未运行，但 IDE 正在运行，推导为 IDE
+        is_ide = true;
+    } else if has_classic_exe {
+        // 原生经典版可执行文件存在，优先保持经典版
+        is_ide = false;
+    } else if let Some(exe_str) = ide_exe_path {
+        // 原生经典版不存在，检查是否存在 IDE 可执行文件
+        let path_lower = exe_str.to_lowercase();
+        if path_lower.contains("antigravity ide") || path_lower.contains("antigravity-ide") {
+            is_ide = true;
+        }
+    }
+
+    let effective = if is_ide {
+        Some("ide")
+    } else if is_explicit_classic {
+        Some("classic")
+    } else {
+        None
+    };
+
+    (is_ide, effective)
+}
+
 /// 桌面版实现：包含完整的进程控制 and UI 同步
 pub struct DesktopIntegration {
     pub app_handle: tauri::AppHandle,
@@ -61,56 +109,35 @@ impl SystemIntegration for DesktopIntegration {
             return Ok(());
         }
 
-        // 1. 智能决策：判断目标是否为 Antigravity IDE (基于 VS Code 定制/经典架构)
-        let mut is_ide = target_ide == Some("ide");
+        // 1. 智能决策：判断目标是 Antigravity IDE (VS Code 定制版) 还是 Antigravity 经典版 (原生桌面端)
+        let classic_running = process::is_antigravity_running(None);
+        let ide_running = process::is_antigravity_running(Some("ide"));
+        let classic_exe = process::get_antigravity_executable_path(None);
+        let ide_exe = process::get_antigravity_executable_path(Some("ide"));
+        let ide_exe_str = ide_exe.as_ref().map(|p| p.to_string_lossy().to_string());
 
-        // Auto-detect IDE: if target_ide is not explicitly "ide", perform multi-dimensional detection
-        if !is_ide {
-            // 1.1 依据 target_ide 查找可执行文件
-            let mut detected_exe = process::get_antigravity_executable_path(target_ide);
+        let (is_ide, effective_target) = resolve_effective_target(
+            target_ide,
+            classic_running,
+            ide_running,
+            classic_exe.is_some(),
+            ide_exe_str.as_deref(),
+        );
 
-            // 1.2 若 target_ide 为 None 且未找到原生 Antigravity 可执行文件，回退查找 IDE 可执行文件
-            if detected_exe.is_none() && target_ide.is_none() {
-                detected_exe = process::get_antigravity_executable_path(Some("ide"));
-            }
-
-            if let Some(ref exe_path) = detected_exe {
-                let path_lower = exe_path.to_string_lossy().to_lowercase();
-                if path_lower.contains("antigravity ide") || path_lower.contains("antigravity-ide")
-                {
-                    is_ide = true;
-                    crate::modules::logger::log_info(
-                        "[Desktop] Auto-detected Antigravity IDE executable, using IDE account switch logic.",
-                    );
-                }
-            }
-
-            // 1.3 检查是否存在正在运行的 IDE 进程
-            if !is_ide && target_ide.is_none() {
-                if process::is_antigravity_running(Some("ide")) {
-                    is_ide = true;
-                    crate::modules::logger::log_info(
-                        "[Desktop] Auto-detected running Antigravity IDE process, using IDE account switch logic.",
-                    );
-                }
-            }
-
-            // 1.4 检查是否存在已配置或标准路径下的 IDE 数据库 (state.vscdb)
-            if !is_ide && target_ide.is_none() {
-                if let Ok(db_path) = db::get_db_path(Some("ide")) {
-                    if db_path.exists() {
-                        is_ide = true;
-                        crate::modules::logger::log_info(&format!(
-                            "[Desktop] Auto-detected Antigravity IDE database at {:?}, using IDE account switch logic.",
-                            db_path
-                        ));
-                    }
-                }
-            }
+        if is_ide {
+            crate::modules::logger::log_info(
+                "[Desktop] Determined target environment is Antigravity IDE, using IDE account switch logic.",
+            );
+        } else {
+            crate::modules::logger::log_info(
+                "[Desktop] Determined target environment is Antigravity classic, using classic account switch logic.",
+            );
         }
 
-        // 计算真实操作的 IDE 标识（若已探查出实际环境为 IDE，则统一映射为 "ide"）
-        let effective_target = if is_ide { Some("ide") } else { target_ide };
+        // 0. 在关闭外部进程前，预先快照捕获正在运行的客户端可执行文件路径与启动参数
+        // 彻底防止杀死进程后由于安装在非标准路径而丢失路径导致启动失败 (Unable to start)
+        let active_exe_path = process::get_antigravity_executable_path(effective_target);
+        let active_args = process::get_args_from_running_process(effective_target);
 
         // 2. 先关闭外部正在运行的进程（无论是原生还是IDE，先安全关闭，避免文件或凭据冲突）
         if process::is_antigravity_running(effective_target) {
@@ -126,8 +153,11 @@ impl SystemIntegration for DesktopIntegration {
         let mut use_keyring = false;
 
         if !is_ide {
-            // 经典原生版：自动探测版本号
-            match version::get_antigravity_version(effective_target) {
+            // 经典原生版：自动探测版本号（优先使用预快照路径）
+            match version::get_antigravity_version_with_path(
+                effective_target,
+                active_exe_path.as_deref(),
+            ) {
                 Ok(ver) => {
                     // 如果版本号 >= 2.0.0
                     if version::compare_version(&ver.short_version, "2.0.0")
@@ -149,7 +179,6 @@ impl SystemIntegration for DesktopIntegration {
                     // 如果探测失败，优先检查本地是否存在可用的 SQLite 数据库 (state.vscdb)
                     // 若存在数据库，说明是经典的 VS Code/IDE 架构，优先使用 SQLite 注入，防止无 secret-tool 时报错
                     let has_sqlite_db = db::get_db_path(effective_target)
-                        .or_else(|_| db::get_db_path(Some("ide")))
                         .map(|p| p.exists())
                         .unwrap_or(false);
 
@@ -176,9 +205,7 @@ impl SystemIntegration for DesktopIntegration {
             if let Err(keyring_err) = write_to_system_keyring(account) {
                 // 如果写入系统 Keyring 失败（例如 Linux 下未安装 secret-tool 或无桌面会话 D-Bus）
                 // 检查本地是否存在可用的 SQLite 数据库，若存在则自动降级回退到 SQLite 注入，确保账号切换顺利完成
-                let db_fallback = if let Ok(db_path) =
-                    db::get_db_path(effective_target).or_else(|_| db::get_db_path(Some("ide")))
-                {
+                let db_fallback = if let Ok(db_path) = db::get_db_path(effective_target) {
                     if db_path.exists() {
                         crate::modules::logger::log_warn(&format!(
                             "[Desktop] Keyring write failed ({}), but found SQLite DB at {:?}. Falling back to SQLite token injection.",
@@ -256,8 +283,12 @@ impl SystemIntegration for DesktopIntegration {
             }
         }
 
-        // 3. 重启外部进程
-        process::start_antigravity(effective_target)?;
+        // 3. 重启外部进程（优先使用预快照路径与启动参数）
+        process::start_antigravity_with_fallback_path(
+            effective_target,
+            active_exe_path.as_deref(),
+            active_args.as_deref(),
+        )?;
 
         // 4. 更新托盘
         let _ = crate::modules::tray::update_tray_menus(&self.app_handle);
@@ -981,5 +1012,91 @@ mod tests {
         let payload = r#"{ "auth_method": "consumer" }"#;
         let res = parse_keyring_payload(payload);
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_resolve_effective_target_explicit_classic() {
+        // 显式指定 classic，即便 IDE 正在运行或只有 IDE exe，也必须严格判定为经典版
+        let (is_ide, effective) = resolve_effective_target(
+            Some("classic"),
+            false,
+            true,
+            false,
+            Some("/Applications/Antigravity IDE.app"),
+        );
+        assert!(!is_ide);
+        assert_eq!(effective, Some("classic"));
+    }
+
+    #[test]
+    fn test_resolve_effective_target_explicit_ide() {
+        // 显式指定 ide，必须判定为 ide
+        let (is_ide, effective) = resolve_effective_target(Some("ide"), true, false, true, None);
+        assert!(is_ide);
+        assert_eq!(effective, Some("ide"));
+    }
+
+    #[test]
+    fn test_resolve_effective_target_autodetect_classic_running() {
+        // target_ide 为 None，经典版正在运行，必须优先保持经典版
+        let (is_ide, effective) = resolve_effective_target(
+            None,
+            true,
+            true,
+            true,
+            Some("/Applications/Antigravity IDE.app"),
+        );
+        assert!(!is_ide);
+        assert_eq!(effective, None);
+    }
+
+    #[test]
+    fn test_resolve_effective_target_autodetect_ide_running_only() {
+        // target_ide 为 None，仅 IDE 正在运行，推导为 IDE
+        let (is_ide, effective) = resolve_effective_target(
+            None,
+            false,
+            true,
+            true,
+            Some("/Applications/Antigravity IDE.app"),
+        );
+        assert!(is_ide);
+        assert_eq!(effective, Some("ide"));
+    }
+
+    #[test]
+    fn test_resolve_effective_target_autodetect_classic_exe_exists() {
+        // target_ide 为 None，两者均未运行，但经典版 exe 存在，优先经典版
+        let (is_ide, effective) = resolve_effective_target(
+            None,
+            false,
+            false,
+            true,
+            Some("/Applications/Antigravity IDE.app"),
+        );
+        assert!(!is_ide);
+        assert_eq!(effective, None);
+    }
+
+    #[test]
+    fn test_resolve_effective_target_autodetect_fallback_ide_exe() {
+        // target_ide 为 None，两者均未运行，无经典版但有 IDE exe，推导为 IDE
+        let (is_ide, effective) = resolve_effective_target(
+            None,
+            false,
+            false,
+            false,
+            Some("/Applications/Antigravity IDE.app"),
+        );
+        assert!(is_ide);
+        assert_eq!(effective, Some("ide"));
+    }
+
+    #[test]
+    fn test_resolve_effective_target_autodetect_default_fallback() {
+        // target_ide 为 None，均未运行且均未检测到 exe，默认保底经典版
+        let (is_ide, effective) = resolve_effective_target(None, false, false, false, None);
+        assert!(!is_ide);
+        assert_eq!(effective, None);
     }
 }

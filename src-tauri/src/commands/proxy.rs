@@ -488,7 +488,7 @@ pub async fn get_proxy_logs_paginated(
 #[tauri::command]
 pub async fn get_proxy_log_detail(
     log_id: Option<String>,
-    logId: Option<String>,
+    #[allow(non_snake_case)] logId: Option<String>,
 ) -> Result<ProxyRequestLog, String> {
     let id = log_id
         .or(logId)

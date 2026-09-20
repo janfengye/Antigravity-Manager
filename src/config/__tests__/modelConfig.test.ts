@@ -17,6 +17,7 @@ import {
     resolveQuotaModels,
     type ModelCategory,
 } from '../../utils/modelCategory';
+import { getModelQuotaDisplay } from '../../utils/quotaDisplay';
 // Compile-time guard: if findImageQuotaModel is removed from the config re-export,
 // the type alias test below fails with TS2724 on `pnpm tsc --noEmit`.
 function __noop<T>(): void { const _x: T[] = []; void _x; }
@@ -255,6 +256,39 @@ test('resolveQuotaModels + ensurePinnedImageSelector: live pin gap resolves Gemi
     const image = results.find(r => r.selectionKey === 'category:gemini-image');
     assertEqual(image?.model?.name, 'gemini-3.1-flash-image');
     assertEqual(image?.model?.display_name, 'Gemini 3.1 Flash Image');
+});
+
+test('quota display: weekly exhaustion overrides raw 5h without changing protection quota', () => {
+    const reset = new Date(Date.now() + 7200000).toISOString();
+    const model = { name: 'gemini-3.1-pro-high', percentage: 1, reset_time: reset };
+    const groups = [{ display_name: 'Gemini Models', buckets: [
+        { bucket_id: 'gemini-weekly', window: 'weekly', remaining_fraction: 0.01, reset_time: reset },
+        { bucket_id: 'gemini-5h', window: '5h', remaining_fraction: 1, reset_time: '2030-01-01T00:00:00Z' },
+    ] }];
+    const display = getModelQuotaDisplay(model.name, model, groups);
+    assertEqual(display.percentage, 100);
+    assertEqual(display.resetTime, groups[0].buckets[1].reset_time);
+    assertEqual(display.isWeeklyConstrained, false);
+    assertEqual(model.percentage < 2, true);
+    for (const fraction of [0, 0.0005, 0.001]) {
+        groups[0].buckets[0].remaining_fraction = fraction;
+        const blocked = getModelQuotaDisplay(model.name, model, groups);
+        assertEqual(blocked.percentage, 0);
+        assertEqual(blocked.resetTime, reset);
+        assertEqual(blocked.isWeeklyConstrained, true);
+        assertEqual(blocked.weeklyResetTime, reset);
+    }
+    for (const fraction of [0.0011, 0.00285638, 0.01223943]) {
+        groups[0].buckets[0].remaining_fraction = fraction;
+        const protectedDisplay = getModelQuotaDisplay(model.name, model, groups);
+        assertEqual(protectedDisplay.isWeeklyConstrained, false);
+        assertEqual(protectedDisplay.percentage, 100);
+    }
+    groups[0].buckets[0].remaining_fraction = 0;
+    groups[0].buckets[0].reset_time = new Date(Date.now() - 1000).toISOString();
+    assertEqual(getModelQuotaDisplay(model.name, model, groups).isWeeklyConstrained, false);
+    assertEqual(getModelQuotaDisplay('claude-sonnet-4-6', undefined, groups).isWeeklyConstrained, false);
+    assertEqual(getModelQuotaDisplay(model.name, model).percentage, 1);
 });
 
 if (failed > 0) {

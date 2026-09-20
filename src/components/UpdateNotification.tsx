@@ -267,7 +267,7 @@ export const UpdateNotification: React.FC<UpdateNotificationProps> = ({ onClose 
                       const { openUrl } = await import('@tauri-apps/plugin-opener');
                       await openUrl(updateInfo.download_url);
                     } catch (e) {
-                      window.open(updateInfo.download_url, '_blank');
+                      window.open(updateInfo.download_url, '_blank', 'noopener,noreferrer');
                     }
                   }
                 }}

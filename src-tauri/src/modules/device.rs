@@ -46,9 +46,11 @@ pub fn get_storage_path(target_ide: Option<&str>) -> Result<PathBuf, String> {
         &["Antigravity IDE"]
     } else if target_ide == Some("code") || target_ide == Some("cursor") {
         &["Antigravity"]
+    } else if target_ide == Some("classic") {
+        &["Antigravity"]
     } else {
-        // target_ide = None: try IDE folder first, fall back to classic name
-        &["Antigravity IDE", "Antigravity"]
+        // target_ide = None: 优先查找 Antigravity 经典版，回退查找 Antigravity IDE
+        &["Antigravity", "Antigravity IDE"]
     };
 
     // 3) Standard installation location

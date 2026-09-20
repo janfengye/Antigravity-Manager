@@ -484,12 +484,13 @@ pub async fn fetch_quota_with_cache(
 
                                 let chosen_bucket = match (bucket_5h, bucket_weekly) {
                                     (Some(h), Some(w)) => {
-                                        // 若周配额耗尽 (<= 0.001)，模型直接受限于周配额为 0%，重置时间使用周重置
+                                        // 若周配额耗尽 (<= 0.001)，模型直接受限于周配额，重置时间使用周重置
                                         if w.remaining_fraction <= 0.001 {
                                             Some(w)
-                                        } else {
-                                            // 周配额未耗尽时，必须始终使用 5h 桶以准确展示 5 小时滚动窗口配额与重置时间
+                                        } else if h.remaining_fraction <= w.remaining_fraction {
                                             Some(h)
+                                        } else {
+                                            Some(w)
                                         }
                                     }
                                     (Some(h), None) => Some(h),
@@ -593,13 +594,18 @@ async fn fetch_quota_summary(
                         buckets: g
                             .buckets
                             .into_iter()
-                            .map(|b| crate::models::quota::QuotaBucket {
-                                bucket_id: b.bucket_id.unwrap_or_default(),
-                                window: b.window.unwrap_or_default(),
-                                remaining_fraction: b.remaining_fraction.unwrap_or(0.0),
-                                reset_time: b.reset_time.unwrap_or_default(),
-                                display_name: b.display_name,
-                                description: b.description,
+                            .filter_map(|b| {
+                                Some(crate::models::quota::QuotaBucket {
+                                    bucket_id: b.bucket_id.unwrap_or_default(),
+                                    window: b.window.unwrap_or_default(),
+                                    remaining_fraction: b.remaining_fraction?,
+                                    reset_time: b.reset_time.unwrap_or_default(),
+                                    observed_at: Some(chrono::Utc::now().timestamp_millis()),
+                                    cycle_start: None,
+                                    cycle_tokens: None,
+                                    display_name: b.display_name,
+                                    description: b.description,
+                                })
                             })
                             .collect(),
                     })

@@ -266,7 +266,6 @@ impl TokenManager {
 
         // Reload should reflect current on-disk state (accounts can be added/removed/disabled).
         self.tokens.clear();
-        self.rate_limit_tracker.clear_all();
         self.sync_image_scheduler_accounts();
         self.current_index.store(0, Ordering::SeqCst);
         {
@@ -322,12 +321,6 @@ impl TokenManager {
 
         match self.load_single_account(&path).await {
             Ok(Some(token)) => {
-                // 如果账号配额恢复（存在 >0% 的配额），自动清除此前的账号级全局限流
-                if let Some(quota) = token.remaining_quota {
-                    if quota > 0 {
-                        self.rate_limit_tracker.clear_account_only(account_id);
-                    }
-                }
                 self.tokens.insert(account_id.to_string(), token);
                 self.sync_image_scheduler_accounts();
                 Ok(())
@@ -689,7 +682,7 @@ impl TokenManager {
                 ) else {
                     continue;
                 };
-                if !crate::proxy::rate_limit::is_active_persisted_long_image_limit(
+                if !crate::proxy::rate_limit::is_active_persisted_long_limit(
                     model_key, &status, now,
                 ) {
                     continue;
@@ -700,7 +693,7 @@ impl TokenManager {
                 ) else {
                     continue;
                 };
-                self.rate_limit_tracker.restore_persisted_long_image_limit(
+                self.rate_limit_tracker.restore_persisted_long_limit(
                     &account_id,
                     std::time::SystemTime::UNIX_EPOCH
                         + std::time::Duration::from_secs(until_seconds),
@@ -728,7 +721,7 @@ impl TokenManager {
             }
         }
 
-        // [NEW] 同步零配额持续熔断状态（若开启 lock_on_zero_quota 且 5h/周配额为 0，持续熔断至 reset_time）
+        // Weekly availability is mandatory; the optional switch only controls 5h locks.
         self.sync_zero_quota_circuit_breaker(&account_id, &account);
 
         Ok(Some(ProxyToken {
@@ -2194,11 +2187,19 @@ impl TokenManager {
                                 // 清除所有限流记录
                                 self.rate_limit_tracker.clear_for_optimistic_reset();
 
-                                // 再次尝试选择账号
+                                // 再次尝试选择账号 (必须重新校验剩余限流状态，严禁放行周配额耗尽等长锁定账号)
                                 let final_token = tokens_snapshot.iter().find(|t| {
                                     !attempted.contains(&t.account_id)
+                                        && !self.rate_limit_tracker.is_rate_limited(
+                                            &t.account_id,
+                                            Some(&normalized_target),
+                                        )
                                         && !(quota_protection_enabled
                                             && t.protected_models.contains(&normalized_target))
+                                        && !self.rate_limit_tracker.is_rate_limited(
+                                            &t.account_id,
+                                            Some(&normalized_target),
+                                        )
                                 });
 
                                 if let Some(t) = final_token {
@@ -2762,7 +2763,10 @@ impl TokenManager {
         // [NEW] 检查熔断是否启用
         let config = self.circuit_breaker_config.read().await;
         if !config.enabled {
-            return false;
+            return self
+                .rate_limit_tracker
+                .get_quota_wait(account_id, model, true)
+                > 0;
         }
         self.rate_limit_tracker.is_rate_limited(account_id, model)
     }
@@ -3723,7 +3727,7 @@ impl TokenManager {
         earliest_ts
     }
 
-    /// [NEW] 检查并同步零配额持续熔断（5小时窗口或周配额用光直接持续熔断至重置时间）
+    /// Restore official quota windows without replacing independent upstream limits.
     fn sync_zero_quota_circuit_breaker(&self, account_id: &str, account: &serde_json::Value) {
         let lock_on_zero = if let Ok(cfg) = self.circuit_breaker_config.try_read() {
             cfg.enabled && cfg.lock_on_zero_quota
@@ -3731,16 +3735,16 @@ impl TokenManager {
             false
         };
 
-        if !lock_on_zero {
-            return;
-        }
-
         let quota = match account.get("quota") {
             Some(q) => q,
             None => return,
         };
 
-        // 1. 优先检查 quota_groups 中的 5h 和 weekly buckets，按模型组精准隔离，杜绝全账号误杀
+        let observed_at = quota
+            .get("last_updated")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0)
+            .saturating_mul(1000);
         if let Some(groups) = quota.get("quota_groups").and_then(|g| g.as_array()) {
             for group in groups {
                 let group_name = group
@@ -3753,53 +3757,94 @@ impl TokenManager {
 
                 if let Some(buckets) = group.get("buckets").and_then(|b| b.as_array()) {
                     for bucket in buckets {
-                        let remaining_fraction = bucket
-                            .get("remaining_fraction")
-                            .and_then(|v| v.as_f64())
-                            .unwrap_or(1.0);
-
-                        let reset_time = bucket
-                            .get("reset_time")
+                        let bucket_id = bucket
+                            .get("bucket_id")
                             .and_then(|v| v.as_str())
                             .unwrap_or("");
-
-                        // 如果 5h 或 weekly 配额耗尽 (<= 0.001)
-                        if remaining_fraction <= 0.001 && !reset_time.is_empty() {
-                            let bucket_id = bucket
-                                .get("bucket_id")
+                        let window = bucket.get("window").and_then(|v| v.as_str()).unwrap_or("");
+                        let window_key = format!("{} {}", bucket_id, window).to_lowercase();
+                        let weekly = window_key.contains("week") || window_key.contains("7d");
+                        if !weekly
+                            && (!lock_on_zero
+                                || !(window_key.contains("5h") || window_key.contains("hour")))
+                        {
+                            continue;
+                        }
+                        let Some(fraction) =
+                            bucket.get("remaining_fraction").and_then(|v| v.as_f64())
+                        else {
+                            continue;
+                        };
+                        let exhausted_until = if fraction <= 0.001 {
+                            let Some(reset) = bucket
+                                .get("reset_time")
                                 .and_then(|v| v.as_str())
-                                .unwrap_or("unknown");
-
-                            let target_models = if is_claude_group || bucket_id.contains("3p") {
-                                vec!["claude".to_string(), "claude-sonnet-4-6".to_string()]
-                            } else if is_gemini_group || bucket_id.contains("gemini") {
-                                vec![
-                                    "gemini-3-flash".to_string(),
-                                    "gemini-3.1-pro-high".to_string(),
-                                    "gemini-3.1-flash-image".to_string(),
-                                    "gemini-3.8-flash-tiered".to_string(),
-                                    "gemini-3.8-flash-high".to_string(),
-                                ]
-                            } else {
-                                vec![]
+                                .and_then(|v| chrono::DateTime::parse_from_rfc3339(v).ok())
+                            else {
+                                continue;
                             };
-
-                            for tm in &target_models {
-                                self.rate_limit_tracker.set_lockout_until_iso_with_cap(
-                                    account_id,
-                                    reset_time,
-                                    crate::proxy::rate_limit::RateLimitReason::QuotaExhausted,
-                                    Some(tm.clone()),
-                                    false,
-                                );
-                            }
+                            Some(std::time::SystemTime::from(reset))
+                        } else {
+                            None
+                        };
+                        let third_party = is_claude_group || bucket_id.contains("3p");
+                        let gemini = is_gemini_group || bucket_id.contains("gemini");
+                        let mut models: Vec<&str> = if third_party {
+                            vec!["claude", "claude-sonnet-4-6", "gpt-oss-120b-medium"]
+                        } else if gemini {
+                            vec![
+                                "gemini-3-flash",
+                                "gemini-3.1-pro-high",
+                                "gemini-3.1-flash-image",
+                                "gemini-3-pro-image",
+                            ]
+                        } else {
+                            Vec::new()
+                        };
+                        if let Some(available) = quota.get("models").and_then(|v| v.as_array()) {
+                            models.extend(
+                                available
+                                    .iter()
+                                    .filter_map(|m| m.get("name")?.as_str())
+                                    .filter(|name| {
+                                        if third_party {
+                                            name.starts_with("claude") || name.starts_with("gpt")
+                                        } else {
+                                            gemini && name.starts_with("gemini")
+                                        }
+                                    }),
+                            );
+                        }
+                        for model in models {
+                            let normalized =
+                                crate::proxy::common::model_mapping::normalize_to_standard_id(
+                                    model,
+                                )
+                                .unwrap_or_else(|| model.to_string());
+                            self.rate_limit_tracker.sync_quota_bucket(
+                                account_id,
+                                &normalized,
+                                bucket_id,
+                                bucket
+                                    .get("observed_at")
+                                    .and_then(|v| v.as_i64())
+                                    .unwrap_or(observed_at),
+                                exhausted_until,
+                                weekly,
+                            );
                         }
                     }
                 }
             }
+            if !groups.is_empty() {
+                return;
+            }
         }
 
         // 2. 回退到 models 配额检查
+        if !lock_on_zero {
+            return;
+        }
         if let Some(models) = quota.get("models").and_then(|m| m.as_array()) {
             // 只要受监控核心模型或全部模型为 0%，且有有效 reset_time
             let all_zero = models
@@ -3808,6 +3853,11 @@ impl TokenManager {
 
             if all_zero && !models.is_empty() {
                 if let Some(reset_time_str) = self.get_quota_reset_time(account_id) {
+                    if !chrono::DateTime::parse_from_rfc3339(&reset_time_str)
+                        .is_ok_and(|reset| reset > chrono::Utc::now())
+                    {
+                        return;
+                    }
                     tracing::warn!(
                         "[CircuitBreaker] 账号 {} 的模型配额已全部为 0%, 持续锁定至 {}",
                         account_id,
@@ -4011,6 +4061,195 @@ fn truncate_reason(reason: &str, max_len: usize) -> String {
 mod tests {
     use super::*;
     use std::cmp::Ordering;
+    use std::time::Duration;
+
+    fn weekly_quota_account(now: i64) -> serde_json::Value {
+        let reset = |seconds| {
+            chrono::DateTime::from_timestamp(now + seconds, 0)
+                .unwrap()
+                .to_rfc3339()
+        };
+        serde_json::json!({
+            "id": "weekly-test", "email": "quota@test.invalid", "created_at": now, "last_used": now,
+            "token": {"access_token": "test", "refresh_token": "test", "token_type": "Bearer",
+                "expires_in": 3600, "expiry_timestamp": now + 3600, "project_id": "test"},
+            "quota": {"last_updated": now, "models": [
+                {"name": "gemini-3.1-pro-high", "percentage": 0, "reset_time": reset(7200)},
+                {"name": "claude-sonnet-4-6", "percentage": 100, "reset_time": reset(1800)}
+            ], "quota_groups": [
+                {"display_name": "Gemini Models", "buckets": [
+                    {"bucket_id": "gemini-weekly", "window": "weekly", "remaining_fraction": 0.0, "reset_time": reset(7200)},
+                    {"bucket_id": "gemini-5h", "window": "5h", "remaining_fraction": 1.0, "reset_time": reset(1800)}
+                ]},
+                {"display_name": "Claude and GPT models", "buckets": [
+                    {"bucket_id": "3p-weekly", "window": "weekly", "remaining_fraction": 1.0, "reset_time": reset(7200)}
+                ]}
+            ]}
+        })
+    }
+
+    #[tokio::test]
+    async fn weekly_quota_blocks_by_default_and_survives_reload_and_resets() {
+        let _data_dir = crate::proxy::monitor::prompt_log_tests::TestDataDir::new();
+        let data_dir = crate::modules::account::get_data_dir().unwrap();
+        let accounts = data_dir.join("accounts");
+        std::fs::create_dir(&accounts).unwrap();
+        let mut snapshot = weekly_quota_account(chrono::Utc::now().timestamp());
+        snapshot["quota"]["quota_groups"][0]["buckets"][0]["remaining_fraction"] =
+            serde_json::json!(0.0005);
+        std::fs::write(accounts.join("weekly-test.json"), snapshot.to_string()).unwrap();
+        let manager = TokenManager::new(data_dir);
+        manager.load_accounts().await.unwrap();
+        assert!(
+            manager
+                .is_rate_limited("weekly-test", Some("gemini-3-pro-high"))
+                .await
+        );
+        assert!(!manager.is_rate_limited("weekly-test", Some("claude")).await);
+        manager.circuit_breaker_config.write().await.enabled = false;
+        manager.reload_account("weekly-test").await.unwrap();
+        manager.load_accounts().await.unwrap();
+        manager.rate_limit_tracker.clear_for_optimistic_reset();
+        manager.clear_all_rate_limits();
+        assert!(
+            manager
+                .is_rate_limited("weekly-test", Some("gemini-3-pro-high"))
+                .await
+        );
+        assert!(manager
+            .get_token("gemini", false, None, "gemini-3.1-pro-high")
+            .await
+            .is_err());
+        assert!(manager
+            .get_token("claude", false, None, "claude-sonnet-4-6")
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn weekly_quota_recovery_requires_new_same_bucket_and_preserves_other_limits() {
+        let manager = TokenManager::new(PathBuf::new());
+        let now = chrono::Utc::now().timestamp();
+        let mut snapshot = weekly_quota_account(now);
+        snapshot["quota"]["quota_groups"][0]["buckets"][0]["remaining_fraction"] =
+            serde_json::json!(0.001);
+        let tracker = &manager.rate_limit_tracker;
+        manager
+            .circuit_breaker_config
+            .write()
+            .await
+            .lock_on_zero_quota = true;
+        snapshot["quota"]["quota_groups"][0]["buckets"][1]["remaining_fraction"] =
+            serde_json::json!(0);
+        manager.sync_zero_quota_circuit_breaker("a", &snapshot);
+        tracker.set_lockout_until_with_cap(
+            "a",
+            std::time::SystemTime::now() + Duration::from_secs(10800),
+            crate::proxy::rate_limit::RateLimitReason::QuotaExhausted,
+            Some("gemini-3-pro-image".into()),
+            false,
+        );
+        tracker.set_lockout_until(
+            "a",
+            std::time::SystemTime::now() + Duration::from_secs(120),
+            crate::proxy::rate_limit::RateLimitReason::RateLimitExceeded,
+            None,
+        );
+        let mut positive = snapshot.clone();
+        positive["quota"]["quota_groups"][0]["buckets"][0]["remaining_fraction"] =
+            serde_json::json!(0.0011);
+        manager.sync_zero_quota_circuit_breaker("a", &positive); // Same old snapshot cannot unlock.
+        manager.sync_zero_quota_circuit_breaker("a", &serde_json::json!({"quota": {"models": []}}));
+        assert!(tracker.get_quota_wait("a", Some("gemini-3-pro-high"), true) > 7000);
+        for (offset, fraction) in [(1, 0.0005), (2, 0.001)] {
+            positive["quota"]["last_updated"] = serde_json::json!(now + offset);
+            positive["quota"]["quota_groups"][0]["buckets"][0]["remaining_fraction"] =
+                serde_json::json!(fraction);
+            manager.sync_zero_quota_circuit_breaker("a", &positive);
+            assert!(tracker.get_quota_wait("a", Some("gemini-3-pro-high"), true) > 7000);
+        }
+        positive["quota"]["last_updated"] = serde_json::json!(now + 3);
+        positive["quota"]["quota_groups"][0]["buckets"][0]["remaining_fraction"] =
+            serde_json::json!(0.0011);
+        manager.sync_zero_quota_circuit_breaker("a", &positive);
+        assert_eq!(
+            tracker.get_quota_wait("a", Some("gemini-3-pro-high"), true),
+            0
+        );
+        assert!(tracker.get_remaining_wait("a", Some("gemini-3-pro-high")) > 1700); // 5h still exhausted.
+        assert!(tracker.get_remaining_wait("a", Some("gemini-3-pro-image")) > 10000);
+        assert!(tracker.is_rate_limited("a", None)); // Independent account-level upstream limit.
+        manager.sync_zero_quota_circuit_breaker("a", &snapshot); // Older zero must not relock.
+        assert_eq!(
+            tracker.get_quota_wait("a", Some("gemini-3-pro-high"), true),
+            0
+        );
+    }
+
+    #[test]
+    fn weekly_quota_missing_data_persists_for_restart_without_renewing_observation() {
+        let now = chrono::Utc::now().timestamp();
+        let mut account: crate::models::Account =
+            serde_json::from_value(weekly_quota_account(now)).unwrap();
+        let mut refresh = account.quota.clone().unwrap();
+        refresh.last_updated += 1;
+        refresh.quota_groups.as_mut().unwrap()[0].buckets.remove(0); // Partial summary / 5h recovery.
+        account.update_quota(refresh);
+        let mut failed = account.quota.clone().unwrap();
+        failed.last_updated += 1;
+        failed.quota_groups = None;
+        account.update_quota(failed);
+        let snapshot = serde_json::to_value(&account).unwrap();
+        let bucket = &snapshot["quota"]["quota_groups"][0]["buckets"][1];
+        assert_eq!(bucket["bucket_id"], "gemini-weekly");
+        assert_eq!(bucket["observed_at"], now * 1000);
+        let restarted = TokenManager::new(PathBuf::new());
+        restarted.sync_zero_quota_circuit_breaker("a", &snapshot);
+        assert!(restarted
+            .rate_limit_tracker
+            .is_rate_limited("a", Some("gemini-3-pro-high")));
+    }
+
+    #[tokio::test]
+    async fn weekly_quota_windows_are_order_independent_and_expired_snapshots_stay_expired() {
+        let now = chrono::Utc::now().timestamp();
+        for reverse in [false, true] {
+            let manager = TokenManager::new(PathBuf::new());
+            manager
+                .circuit_breaker_config
+                .write()
+                .await
+                .lock_on_zero_quota = true;
+            let mut snapshot = weekly_quota_account(now);
+            let buckets = snapshot["quota"]["quota_groups"][0]["buckets"]
+                .as_array_mut()
+                .unwrap();
+            buckets[1]["remaining_fraction"] = serde_json::json!(0);
+            if reverse {
+                buckets.reverse();
+            }
+            manager.sync_zero_quota_circuit_breaker("a", &snapshot);
+            for model in [
+                "gemini-3-pro-high",
+                "gemini-3-flash",
+                "gemini-3.1-flash-image",
+                "gemini-3-pro-image",
+            ] {
+                assert!(
+                    manager
+                        .rate_limit_tracker
+                        .get_remaining_wait("a", Some(model))
+                        > 7000
+                );
+            }
+            let expired = weekly_quota_account(now - 8000);
+            manager.sync_zero_quota_circuit_breaker("expired", &expired);
+            manager.sync_zero_quota_circuit_breaker("expired", &expired);
+            assert!(!manager
+                .rate_limit_tracker
+                .is_rate_limited("expired", Some("gemini-3-pro-high")));
+        }
+    }
 
     #[test]
     fn test_build_dynamic_model_candidates_agent() {
@@ -5400,5 +5639,128 @@ mod tests {
             ],
             "Sonnet should sort by quota first, then by tier as tiebreaker"
         );
+    }
+
+    #[test]
+    fn test_sync_zero_quota_circuit_breaker_later_deadline_and_recovery() {
+        let manager = TokenManager::new(PathBuf::from("/tmp/test"));
+
+        // 1. 周配额为 0，5H 配额为 0，两者均耗尽
+        // 周配额 reset_time 为 5天后，5H reset_time 为 2小时后
+        let now = chrono::Utc::now();
+        let base_timestamp = now.timestamp();
+        let reset_5h = (now + chrono::Duration::hours(2)).to_rfc3339();
+        let reset_weekly = (now + chrono::Duration::days(5)).to_rfc3339();
+
+        let account = serde_json::json!({
+            "quota": {
+                "last_updated": base_timestamp,
+                "quota_groups": [
+                    {
+                        "display_name": "Claude & 3P Models",
+                        "buckets": [
+                            {
+                                "bucket_id": "3p-5h",
+                                "window": "5h",
+                                "remaining_fraction": 0.0,
+                                "reset_time": reset_5h
+                            },
+                            {
+                                "bucket_id": "3p-weekly",
+                                "window": "7d",
+                                "remaining_fraction": 0.0,
+                                "reset_time": reset_weekly
+                            }
+                        ]
+                    }
+                ]
+            }
+        });
+
+        // 即使 lock_on_zero 为 false，周配额耗尽依然无条件锁定至周截止时间
+        manager.sync_zero_quota_circuit_breaker("acc1", &account);
+        assert!(manager
+            .rate_limit_tracker
+            .is_rate_limited("acc1", Some("claude-sonnet-4-6")));
+        let wait = manager
+            .rate_limit_tracker
+            .get_remaining_wait("acc1", Some("claude-sonnet-4-6"));
+        assert!(
+            wait > 4 * 86400,
+            "Should be locked for > 4 days due to weekly constraint"
+        );
+
+        // 2. 模拟 provider 提前重置：周配额恢复为 100%，5H 配额仍为 0
+        // 若开启 lock_on_zero，应自动对齐到较短的 5H 截止时间 (2小时)
+        {
+            let mut cfg = manager.circuit_breaker_config.blocking_write();
+            cfg.enabled = true;
+            cfg.lock_on_zero_quota = true;
+        }
+
+        let account_recovered_weekly = serde_json::json!({
+            "quota": {
+                "last_updated": base_timestamp + 1,
+                "quota_groups": [
+                    {
+                        "display_name": "Claude & 3P Models",
+                        "buckets": [
+                            {
+                                "bucket_id": "3p-5h",
+                                "window": "5h",
+                                "remaining_fraction": 0.0,
+                                "reset_time": reset_5h
+                            },
+                            {
+                                "bucket_id": "3p-weekly",
+                                "window": "7d",
+                                "remaining_fraction": 1.0,
+                                "reset_time": reset_weekly
+                            }
+                        ]
+                    }
+                ]
+            }
+        });
+
+        manager.sync_zero_quota_circuit_breaker("acc1", &account_recovered_weekly);
+        let wait_5h = manager
+            .rate_limit_tracker
+            .get_remaining_wait("acc1", Some("claude-sonnet-4-6"));
+        assert!(
+            wait_5h <= 2 * 3600 && wait_5h > 0,
+            "Should reconcile to 5h deadline (<= 2h)"
+        );
+
+        // 3. 模拟 5H 也完全恢复 (全部配额为正)
+        let account_fully_recovered = serde_json::json!({
+            "quota": {
+                "last_updated": base_timestamp + 2,
+                "quota_groups": [
+                    {
+                        "display_name": "Claude & 3P Models",
+                        "buckets": [
+                            {
+                                "bucket_id": "3p-5h",
+                                "window": "5h",
+                                "remaining_fraction": 1.0,
+                                "reset_time": reset_5h
+                            },
+                            {
+                                "bucket_id": "3p-weekly",
+                                "window": "7d",
+                                "remaining_fraction": 1.0,
+                                "reset_time": reset_weekly
+                            }
+                        ]
+                    }
+                ]
+            }
+        });
+
+        manager.sync_zero_quota_circuit_breaker("acc1", &account_fully_recovered);
+        assert!(!manager
+            .rate_limit_tracker
+            .is_rate_limited("acc1", Some("claude-sonnet-4-6")));
     }
 }

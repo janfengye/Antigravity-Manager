@@ -2057,7 +2057,8 @@ pub async fn handle_chat_completions(
     let request_timeout = state.request_timeout;
     let token_manager = state.token_manager;
     let pool_size = token_manager.len();
-    let max_attempts = MAX_RETRY_ATTEMPTS.min(pool_size).max(1);
+    // [FIX #3485] 自适应多账号池与单账号退避最大重试次数 (单账号3次，多账号整池两轮)
+    let max_attempts = crate::proxy::handlers::common::calculate_max_retry_attempts(pool_size);
 
     let mut last_error = String::new();
     let mut last_email: Option<String> = None;
@@ -2737,14 +2738,15 @@ pub async fn handle_chat_completions(
             crate::proxy::sticky_config::SchedulingMode::PerformanceFirst => false,
         };
 
-        // 确定重试策略
-        let strategy = retry_state.determine_strategy_with_grace(
+        // 确定重试策略：传入当前 attempt 与 pool_size，执行智能自适应裁决
+        let strategy = retry_state.determine_strategy_adaptive(
             &account_id,
             status_code,
             &error_text,
             retry_after.as_deref(),
             false,
-            allow_grace,
+            attempt,
+            pool_size,
         );
         let should_mark_limited =
             status_code == 429 || status_code == 529 || status_code == 503 || status_code == 500;
@@ -4028,7 +4030,8 @@ pub async fn handle_completions(
 
     let upstream = state.upstream.clone();
     let pool_size = token_manager.len();
-    let max_attempts = MAX_RETRY_ATTEMPTS.min(pool_size).max(1);
+    // [FIX #3485] 自适应多账号池与单账号退避最大重试次数 (单账号3次，多账号整池两轮)
+    let max_attempts = crate::proxy::handlers::common::calculate_max_retry_attempts(pool_size);
 
     let mut last_error = String::new();
     let mut last_email: Option<String> = None;
@@ -4867,13 +4870,14 @@ pub async fn handle_completions(
             crate::proxy::sticky_config::SchedulingMode::PerformanceFirst => false,
         };
 
-        let strategy = retry_state.determine_strategy_with_grace(
+        let strategy = retry_state.determine_strategy_adaptive(
             &account_id,
             status_code,
             &error_text,
             retry_after.as_deref(),
             false,
-            allow_grace,
+            attempt,
+            pool_size,
         );
 
         // 执行退备
@@ -5193,7 +5197,8 @@ pub async fn handle_images_generations_internal(
     let image_scheduler = state.image_scheduler.clone();
     let request_timeout = state.request_timeout;
     let max_pool_size = token_manager.len();
-    let max_attempts = MAX_RETRY_ATTEMPTS.min(max_pool_size).max(1);
+    // [FIX #3485] 自适应多账号池与单账号退避最大重试次数 (单账号3次，多账号整池两轮)
+    let max_attempts = crate::proxy::handlers::common::calculate_max_retry_attempts(max_pool_size);
 
     let mut tasks = JoinSet::new();
 
@@ -5714,7 +5719,8 @@ pub async fn handle_images_edits(
     let image_scheduler = state.image_scheduler.clone();
     let request_timeout = state.request_timeout;
     let max_pool_size = token_manager.len();
-    let max_attempts = MAX_RETRY_ATTEMPTS.min(max_pool_size).max(1);
+    // [FIX #3485] 自适应多账号池与单账号退避最大重试次数 (单账号3次，多账号整池两轮)
+    let max_attempts = crate::proxy::handlers::common::calculate_max_retry_attempts(max_pool_size);
 
     let mut tasks = JoinSet::new();
     for _ in 0..n {

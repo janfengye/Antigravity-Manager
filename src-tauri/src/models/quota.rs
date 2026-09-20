@@ -11,10 +11,51 @@ pub struct QuotaBucket {
     pub remaining_fraction: f64,
     /// 重置时间 (RFC3339)
     pub reset_time: String,
+    /// Successful bucket observation time in milliseconds; absent in older snapshots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_at: Option<i64>,
+    /// First observed early reset, in seconds; normal cycles start seven days before reset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cycle_start: Option<i64>,
+    /// Usage recorded by this instance, populated only when returning the account list.
+    #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
+    pub cycle_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+}
+
+impl QuotaBucket {
+    /// Valid current weekly interval, with an inclusive start and exclusive reset.
+    pub(crate) fn weekly_cycle_bounds(&self, now: i64) -> Option<(i64, i64)> {
+        let window = format!("{} {}", self.window, self.bucket_id).to_lowercase();
+        if !(window.contains("week") || window.contains("7d"))
+            || !(0.0..=1.0).contains(&self.remaining_fraction)
+        {
+            return None;
+        }
+        let end = chrono::DateTime::parse_from_rfc3339(&self.reset_time)
+            .ok()?
+            .timestamp();
+        let normal_start = end.checked_sub(7 * 24 * 60 * 60)?;
+        let start = self.cycle_start.unwrap_or(normal_start);
+        (normal_start <= start && start <= now && now < end).then_some((start, end))
+    }
+
+    /// Called only for a newer observation of the same bucket by the existing merge.
+    pub(crate) fn retain_cycle_boundary(&mut self, previous: &Self, observed_at: i64) {
+        if self.reset_time == previous.reset_time {
+            self.cycle_start = previous.cycle_start;
+        }
+        let observed_secs = observed_at.div_euclid(1000);
+        if self.weekly_cycle_bounds(observed_secs).is_some()
+            && previous.weekly_cycle_bounds(observed_secs).is_some()
+            && self.remaining_fraction > previous.remaining_fraction + 1e-9
+        {
+            self.cycle_start = Some(observed_secs);
+        }
+    }
 }
 
 /// 一个模型组 (如 Gemini Models / Claude and GPT models)

@@ -331,6 +331,8 @@ struct QuotaBucketDto {
     remaining_fraction: f64,
     reset_time: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    cycle_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     display_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     description: Option<String>,
@@ -349,6 +351,7 @@ fn quota_group_to_dto(g: &crate::models::quota::QuotaGroup) -> QuotaGroupDto {
                 window: b.window.clone(),
                 remaining_fraction: b.remaining_fraction,
                 reset_time: b.reset_time.clone(),
+                cycle_tokens: b.cycle_tokens,
                 display_name: b.display_name.clone(),
                 description: b.description.clone(),
             })
@@ -1001,9 +1004,16 @@ impl AxumServer {
             app
         };
 
-        // 绑定地址（使用 socket2 开启 SO_REUSEADDR，防止端口残留和 TIME_WAIT 占用）
+        // 绑定地址（使用 socket2 开启 SO_REUSEADDR，通配地址自动开启 IPv6/IPv4 双栈支持）
         let listener = bind_tcp_listener(&host, port)?;
-        tracing::info!("反代服务器启动在 http://{}:{}", host, port);
+        let display_host = if host == "0.0.0.0" || host == "::" || host == "[::]" {
+            "0.0.0.0 / [::] (IPv4/IPv6 Dual-Stack)".to_string()
+        } else if host.contains(':') && !host.starts_with('[') {
+            format!("[{}]", host)
+        } else {
+            host.to_string()
+        };
+        tracing::info!("反代服务器启动在 http://{}:{}", display_host, port);
 
         // 创建统一取消令牌
         let cancel_token = tokio_util::sync::CancellationToken::new();
@@ -1043,11 +1053,23 @@ impl AxumServer {
                             Ok((stream, remote_addr)) => {
                                 let io = TokioIo::new(stream);
 
+                                // 若为 IPv4 映射的 IPv6 地址 (如 ::ffff:192.168.1.1)，将其规范化为原生 IPv4 地址
+                                let normalized_remote_addr = match remote_addr {
+                                    std::net::SocketAddr::V6(v6_addr) => {
+                                        if let Some(v4) = v6_addr.ip().to_ipv4_mapped() {
+                                            std::net::SocketAddr::V4(std::net::SocketAddrV4::new(v4, v6_addr.port()))
+                                        } else {
+                                            std::net::SocketAddr::V6(v6_addr)
+                                        }
+                                    }
+                                    v4_addr => v4_addr,
+                                };
+
                                 // 注入 ConnectInfo (用于获取真实 IP)
                                 use tower::ServiceExt;
                                 use hyper::body::Incoming;
                                 let app_with_info = app.clone().map_request(move |mut req: axum::http::Request<Incoming>| {
-                                    req.extensions_mut().insert(axum::extract::ConnectInfo(remote_addr));
+                                    req.extensions_mut().insert(axum::extract::ConnectInfo(normalized_remote_addr));
                                     req
                                 });
 
@@ -1102,16 +1124,10 @@ impl AxumServer {
     }
 }
 
-/// 绑定 TCP 监听器（启用地址复用，防止 Windows 下端口残留及 TIME_WAIT 导致的占用报错）
-fn bind_tcp_listener(host: &str, port: u16) -> Result<tokio::net::TcpListener, String> {
-    use std::net::ToSocketAddrs;
-    let addr_str = format!("{}:{}", host, port);
-    let socket_addr = addr_str
-        .to_socket_addrs()
-        .map_err(|e| format!("无法解析地址 {}: {}", addr_str, e))?
-        .next()
-        .ok_or_else(|| format!("无法解析地址: {}", addr_str))?;
-
+/// 绑定单个地址（IPv4 或指定 IPv6 专用）
+fn bind_single_socket(
+    socket_addr: std::net::SocketAddr,
+) -> Result<tokio::net::TcpListener, String> {
     let domain = if socket_addr.is_ipv6() {
         socket2::Domain::IPV6
     } else {
@@ -1119,7 +1135,7 @@ fn bind_tcp_listener(host: &str, port: u16) -> Result<tokio::net::TcpListener, S
     };
 
     let socket = socket2::Socket::new(domain, socket2::Type::STREAM, Some(socket2::Protocol::TCP))
-        .map_err(|e| format!("创建套接字失败 ({}): {}", addr_str, e))?;
+        .map_err(|e| format!("创建套接字失败 ({}): {}", socket_addr, e))?;
 
     // 在 Windows 和 Unix 上开启地址复用，避免在服务重启或连接处于 TIME_WAIT 状态时报 10048 端口占用
     let _ = socket.set_reuse_address(true);
@@ -1129,19 +1145,100 @@ fn bind_tcp_listener(host: &str, port: u16) -> Result<tokio::net::TcpListener, S
 
     socket
         .set_nonblocking(true)
-        .map_err(|e| format!("设置非阻塞模式失败 ({}): {}", addr_str, e))?;
+        .map_err(|e| format!("设置非阻塞模式失败 ({}): {}", socket_addr, e))?;
 
     socket
         .bind(&socket_addr.into())
-        .map_err(|e| format!("地址 {} 绑定失败: {}", addr_str, e))?;
+        .map_err(|e| format!("地址 {} 绑定失败: {}", socket_addr, e))?;
 
     socket
         .listen(1024)
-        .map_err(|e| format!("监听地址 {} 失败: {}", addr_str, e))?;
+        .map_err(|e| format!("监听地址 {} 失败: {}", socket_addr, e))?;
 
     let std_listener: std::net::TcpListener = socket.into();
     tokio::net::TcpListener::from_std(std_listener)
-        .map_err(|e| format!("转换为 Tokio TcpListener 失败 ({}): {}", addr_str, e))
+        .map_err(|e| format!("转换为 Tokio TcpListener 失败 ({}): {}", socket_addr, e))
+}
+
+/// 绑定 IPv6 / IPv4 双栈通配监听器 ([::]:port)，实现单套接字同时接收 IPv6 与 IPv4 客户端连接
+fn bind_dual_stack_socket(port: u16) -> Result<tokio::net::TcpListener, String> {
+    use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
+
+    let socket = socket2::Socket::new(
+        socket2::Domain::IPV6,
+        socket2::Type::STREAM,
+        Some(socket2::Protocol::TCP),
+    )
+    .map_err(|e| format!("创建 IPv6 双栈套接字失败: {}", e))?;
+
+    // 关键：Windows 默认 only_v6 为 true，必须显式设为 false 才能同时监听 IPv4
+    if let Err(e) = socket.set_only_v6(false) {
+        return Err(format!("开启双栈支持失败 (set_only_v6(false)): {}", e));
+    }
+
+    let _ = socket.set_reuse_address(true);
+
+    #[cfg(unix)]
+    let _ = socket.set_reuse_port(true);
+
+    socket
+        .set_nonblocking(true)
+        .map_err(|e| format!("设置非阻塞模式失败: {}", e))?;
+
+    let addr = SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, port, 0, 0));
+    socket
+        .bind(&addr.into())
+        .map_err(|e| format!("双栈地址 [::]:{} 绑定失败: {}", port, e))?;
+
+    socket
+        .listen(1024)
+        .map_err(|e| format!("双栈监听 [::]:{} 失败: {}", port, e))?;
+
+    let std_listener: std::net::TcpListener = socket.into();
+    tokio::net::TcpListener::from_std(std_listener)
+        .map_err(|e| format!("转换为 Tokio TcpListener 失败 ([::]:{}): {}", port, e))
+}
+
+/// 绑定 TCP 监听器（启用地址复用，遇通配地址如 0.0.0.0 / :: 时自动开启 IPv6/IPv4 双栈支持）
+fn bind_tcp_listener(host: &str, port: u16) -> Result<tokio::net::TcpListener, String> {
+    let clean_host = host.trim_matches('[').trim_matches(']');
+    let is_wildcard = clean_host == "0.0.0.0" || clean_host == "::";
+
+    if is_wildcard {
+        // 优先尝试以 IPv6 / IPv4 双栈模式绑定 [::]:port
+        match bind_dual_stack_socket(port) {
+            Ok(listener) => {
+                tracing::info!("TCP 监听器就绪: [::]:{} (IPv6 / IPv4 双栈模式)", port);
+                return Ok(listener);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "IPv6 双栈监听绑定失败 ({})，正在优雅降级到 IPv4 监听 (0.0.0.0:{})",
+                    e,
+                    port
+                );
+            }
+        }
+        // 优雅降级到 IPv4 0.0.0.0
+        let v4_addr =
+            std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), port);
+        return bind_single_socket(v4_addr);
+    }
+
+    // 精确地址绑定 (如 127.0.0.1、::1 或特定网卡 IP)
+    use std::net::ToSocketAddrs;
+    let addr_str = if clean_host.contains(':') {
+        format!("[{}]:{}", clean_host, port)
+    } else {
+        format!("{}:{}", clean_host, port)
+    };
+    let socket_addr = addr_str
+        .to_socket_addrs()
+        .map_err(|e| format!("无法解析地址 {}: {}", addr_str, e))?
+        .next()
+        .ok_or_else(|| format!("无法解析地址: {}", addr_str))?;
+
+    bind_single_socket(socket_addr)
 }
 
 // ===== API 处理器 (旧代码已移除，由 src/proxy/handlers/* 接管) =====
@@ -4404,5 +4501,16 @@ mod image_scheduler_tests {
         let listener2 = super::bind_tcp_listener("127.0.0.1", port)
             .expect("immediate re-bind must succeed with SO_REUSEADDR");
         drop(listener2);
+    }
+
+    #[tokio::test]
+    async fn test_bind_tcp_listener_wildcard_dual_stack() {
+        let port = 18100;
+        let listener = super::bind_tcp_listener("0.0.0.0", port)
+            .expect("wildcard dual-stack bind should succeed");
+        drop(listener);
+        let listener_v6 = super::bind_tcp_listener("::", port)
+            .expect("wildcard v6 dual-stack bind should succeed");
+        drop(listener_v6);
     }
 }

@@ -38,6 +38,11 @@ pub fn wrap_request_v2(
     // 深度清理 [undefined] 字符串 (Cherry Studio 等客户端常见注入)
     crate::proxy::mappers::common_utils::deep_clean_undefined(&mut inner_request, 0);
 
+    // [PIPELINE] 统一清洗提示词与风控伪 Header（兼容第三方聚合器如 New API 以 Gemini 原生协议转入时的特征残留）
+    crate::proxy::mappers::prompt_sanitizer::PromptSanitizer::sanitize_gemini_payload(
+        &mut inner_request,
+    );
+
     // [FIX #1522] Inject dummy IDs for Claude models in Gemini protocol
     let is_target_claude = final_model_name.to_lowercase().contains("claude");
 
@@ -497,13 +502,33 @@ pub fn wrap_request_v2(
                                     );
                                 }
 
-                                if let Some(sig) = effective_fc_sig {
-                                    obj.insert("thoughtSignature".to_string(), json!(sig));
+                                // 单轮单真签名原则：
+                                // 首个工具调用挂载真实签名 (若有)，后续并行工具调用统一打上 32 字节哨兵占位 (满足 Google AST 校验且绝不复制 500KB)
+                                let has_preceding_fc =
+                                    new_parts.iter().any(|p| p.get("functionCall").is_some());
+                                if !has_preceding_fc {
+                                    if let Some(sig) = effective_fc_sig {
+                                        obj.insert("thoughtSignature".to_string(), json!(sig));
+                                    } else {
+                                        obj.insert(
+                                            "thoughtSignature".to_string(),
+                                            json!(crate::proxy::thinking_store::SENTINEL_SIGNATURE),
+                                        );
+                                    }
+                                } else {
+                                    obj.insert(
+                                        "thoughtSignature".to_string(),
+                                        json!(crate::proxy::thinking_store::SENTINEL_SIGNATURE),
+                                    );
                                 }
                                 obj.remove("thought_signature");
                             }
 
                             // 2. 处理 functionResponse (User 回复工具结果)
+                            if obj.contains_key("functionResponse") {
+                                obj.remove("thoughtSignature");
+                                obj.remove("thought_signature");
+                            }
                             if let Some(fr) = obj.get_mut("functionResponse") {
                                 if fr.get("id").is_none() && is_target_claude {
                                     let name = fr
