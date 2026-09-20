@@ -321,6 +321,356 @@ fn extract_output_tokens(usage: &Value) -> Option<u32> {
     Some(c.output_tokens)
 }
 
+fn build_canonical_consolidated_response(
+    thinking_content: String,
+    mut thinking_signature: String,
+    response_content: String,
+    tool_calls: Vec<Value>,
+    session_id: Option<&str>,
+    log_id: &str,
+    timing_obj: serde_json::Map<String, Value>,
+    usage_obj: Option<serde_json::Map<String, Value>>,
+) -> Value {
+    // 权威网关签名回填：若当前签名为空，尝试通过工具调用ID或会话ID从网关状态机(内存 L1 / SQLite L2 DB 思考持久化)恢复
+    if thinking_signature.is_empty() {
+        for tc in &tool_calls {
+            if let Some(call_id) = tc.get("id").and_then(|v| v.as_str()) {
+                if !call_id.is_empty() {
+                    if let Some(sig) =
+                        crate::proxy::SignatureCache::global().get_tool_signature(call_id)
+                    {
+                        thinking_signature = sig;
+                        break;
+                    }
+                }
+            }
+        }
+        if thinking_signature.is_empty() {
+            if let Some(sid) = session_id {
+                if let Some(sig) = crate::proxy::SignatureCache::global().get_session_signature(sid)
+                {
+                    thinking_signature = sig;
+                }
+            }
+        }
+    }
+
+    let mut consolidated = serde_json::Map::new();
+
+    // 1. 会话/思考唯一标识
+    let candidate_id = session_id.unwrap_or(log_id);
+    consolidated.insert(
+        "_session_thinking_id".to_string(),
+        Value::String(candidate_id.to_string()),
+    );
+
+    // 2. 思考文本与权威签名
+    if !thinking_content.is_empty() {
+        consolidated.insert("thinking".to_string(), Value::String(thinking_content));
+    }
+    if !thinking_signature.is_empty() {
+        consolidated.insert(
+            "thinking_signature".to_string(),
+            Value::String(thinking_signature),
+        );
+    }
+
+    // 3. 正文输出
+    if !response_content.is_empty() {
+        consolidated.insert("content".to_string(), Value::String(response_content));
+    }
+
+    // 4. 工具调用列表 (过滤 Null)
+    let clean_tool_calls: Vec<Value> = tool_calls.into_iter().filter(|v| !v.is_null()).collect();
+    if !clean_tool_calls.is_empty() {
+        consolidated.insert("tool_calls".to_string(), Value::Array(clean_tool_calls));
+    }
+
+    // 5. 耗时诊断
+    if !timing_obj.is_empty() {
+        consolidated.insert("_timing".to_string(), Value::Object(timing_obj));
+    }
+
+    // 6. 用量统计
+    if let Some(usage) = usage_obj {
+        if !usage.is_empty() {
+            consolidated.insert("usage".to_string(), Value::Object(usage));
+        }
+    }
+
+    Value::Object(consolidated)
+}
+
+fn consolidate_non_streaming_response(
+    raw_json: &Value,
+    log: &ProxyRequestLog,
+    headers_map: &serde_json::Map<String, Value>,
+) -> Option<Value> {
+    // 若本就已是统一的 consolidated 格式 (例如带有顶层 thinking/tool_calls 且无 choices/candidates)，直接返回 None
+    if (raw_json.get("thinking").is_some()
+        || raw_json.get("tool_calls").is_some()
+        || raw_json.get("_session_thinking_id").is_some())
+        && raw_json.get("choices").is_none()
+        && raw_json.get("candidates").is_none()
+    {
+        return None;
+    }
+
+    let mut thinking_content = String::new();
+    let mut thinking_signature = String::new();
+    let mut response_content = String::new();
+    let mut tool_calls = Vec::new();
+
+    // 1. OpenAI 格式 (choices)
+    if let Some(choices) = raw_json.get("choices").and_then(|c| c.as_array()) {
+        for choice in choices {
+            if let Some(msg) = choice.get("message") {
+                if let Some(rc) = msg.get("reasoning_content").and_then(|v| v.as_str()) {
+                    thinking_content.push_str(rc);
+                }
+                if let Some(th) = msg.get("thinking").and_then(|v| v.as_str()) {
+                    thinking_content.push_str(th);
+                }
+                if let Some(sig) = msg
+                    .get("thoughtSignature")
+                    .or_else(|| msg.get("thought_signature"))
+                    .or_else(|| msg.get("signature"))
+                    .and_then(|v| v.as_str())
+                {
+                    thinking_signature = sig.to_string();
+                }
+                if let Some(c) = msg.get("content").and_then(|v| v.as_str()) {
+                    response_content.push_str(c);
+                }
+                if let Some(tcs) = msg.get("tool_calls").and_then(|t| t.as_array()) {
+                    for tc in tcs {
+                        let id = tc.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                        let name = tc
+                            .get("function")
+                            .and_then(|f| f.get("name"))
+                            .and_then(|n| n.as_str())
+                            .unwrap_or("");
+                        let args = tc
+                            .get("function")
+                            .and_then(|f| f.get("arguments"))
+                            .map(|a| {
+                                if let Some(s) = a.as_str() {
+                                    s.to_string()
+                                } else {
+                                    a.to_string()
+                                }
+                            })
+                            .unwrap_or_else(|| "{}".to_string());
+                        tool_calls.push(serde_json::json!({
+                            "id": id,
+                            "type": "function",
+                            "function": { "name": name, "arguments": args }
+                        }));
+                    }
+                }
+            }
+        }
+    }
+    // 2. Gemini 格式 (candidates)
+    else if let Some(candidates) = raw_json.get("candidates").and_then(|c| c.as_array()) {
+        for cand in candidates {
+            if let Some(parts) = cand
+                .get("content")
+                .and_then(|c| c.get("parts"))
+                .and_then(|p| p.as_array())
+            {
+                for part in parts {
+                    if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
+                        if part
+                            .get("thought")
+                            .and_then(|t| t.as_bool())
+                            .unwrap_or(false)
+                        {
+                            thinking_content.push_str(text);
+                        } else {
+                            response_content.push_str(text);
+                        }
+                    }
+                    if let Some(sig) = part
+                        .get("thoughtSignature")
+                        .or_else(|| part.get("thought_signature"))
+                        .or_else(|| part.get("signature"))
+                        .or_else(|| {
+                            part.get("functionCall")
+                                .and_then(|fc| fc.get("thoughtSignature"))
+                        })
+                        .or_else(|| {
+                            part.get("functionCall")
+                                .and_then(|fc| fc.get("thought_signature"))
+                        })
+                        .and_then(|s| s.as_str())
+                    {
+                        thinking_signature = sig.to_string();
+                    }
+                    if let Some(fc) = part.get("functionCall") {
+                        if let Some(name) = fc.get("name").and_then(|n| n.as_str()) {
+                            let call_id = if let Some(id_str) = fc
+                                .get("id")
+                                .and_then(|i| i.as_str())
+                                .filter(|s| !s.is_empty())
+                            {
+                                id_str.to_string()
+                            } else {
+                                crate::proxy::thinking_store::synthesize_tool_id(
+                                    name,
+                                    fc.get("args"),
+                                    "root",
+                                    tool_calls.len(),
+                                )
+                            };
+                            let args = fc
+                                .get("args")
+                                .map(|a| a.to_string())
+                                .unwrap_or_else(|| "{}".to_string());
+                            tool_calls.push(serde_json::json!({
+                                "id": call_id,
+                                "type": "function",
+                                "function": { "name": name, "arguments": args }
+                            }));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // 3. Claude 格式 (content 数组)
+    else if let Some(content) = raw_json.get("content").and_then(|c| c.as_array()) {
+        for block in content {
+            match block.get("type").and_then(|t| t.as_str()) {
+                Some("thinking") => {
+                    if let Some(th) = block.get("thinking").and_then(|t| t.as_str()) {
+                        thinking_content.push_str(th);
+                    }
+                    if let Some(sig) = block
+                        .get("signature")
+                        .or_else(|| block.get("thought_signature"))
+                        .or_else(|| block.get("thoughtSignature"))
+                        .and_then(|s| s.as_str())
+                    {
+                        thinking_signature = sig.to_string();
+                    }
+                }
+                Some("text") => {
+                    if let Some(txt) = block.get("text").and_then(|t| t.as_str()) {
+                        response_content.push_str(txt);
+                    }
+                }
+                Some("tool_use") => {
+                    let id = block.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                    let name = block.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                    let args = block
+                        .get("input")
+                        .map(|a| a.to_string())
+                        .unwrap_or_else(|| "{}".to_string());
+                    tool_calls.push(serde_json::json!({
+                        "id": id,
+                        "type": "function",
+                        "function": { "name": name, "arguments": args }
+                    }));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    if thinking_content.is_empty()
+        && thinking_signature.is_empty()
+        && response_content.is_empty()
+        && tool_calls.is_empty()
+    {
+        return None;
+    }
+
+    // 提取耗时诊断
+    let mut timing_obj = serde_json::Map::new();
+    for key in [
+        "clean_ms",
+        "norm_ms",
+        "thinking_ms",
+        "ttft_ms",
+        "stream_ms",
+        "total_ms",
+    ] {
+        let hdr_key = format!("x-timing-{}", key);
+        if let Some(val) = headers_map.get(&hdr_key).and_then(|v| v.as_str()) {
+            if let Ok(n) = val.parse::<f64>() {
+                let out_key = key.replace("_ms", "_s");
+                timing_obj.insert(out_key, serde_json::json!(n / 1000.0));
+            }
+        }
+    }
+    if !timing_obj.contains_key("total_s") {
+        timing_obj.insert(
+            "total_s".to_string(),
+            serde_json::json!(log.duration as f64 / 1000.0),
+        );
+    }
+
+    // 提取 Token 用量与缓存命中率
+    let usage_source = raw_json
+        .get("usage")
+        .or_else(|| raw_json.get("usageMetadata"));
+    let mut usage_obj = serde_json::Map::new();
+    let input_toks = log
+        .input_tokens
+        .or_else(|| usage_source.and_then(extract_input_tokens))
+        .unwrap_or(0);
+    let output_toks = log
+        .output_tokens
+        .or_else(|| usage_source.and_then(extract_output_tokens))
+        .unwrap_or(0);
+    let cached_toks = log
+        .cached_tokens
+        .or_else(|| usage_source.and_then(extract_cached_tokens))
+        .unwrap_or(0);
+    let reasoning_toks = usage_source.and_then(extract_reasoning_tokens).unwrap_or(0);
+
+    let total_in = if cached_toks > input_toks {
+        input_toks + cached_toks
+    } else {
+        input_toks
+    };
+    let total_toks = total_in + output_toks;
+
+    usage_obj.insert("input_tokens".to_string(), serde_json::json!(total_in));
+    usage_obj.insert("output_tokens".to_string(), serde_json::json!(output_toks));
+    usage_obj.insert("total_tokens".to_string(), serde_json::json!(total_toks));
+    if cached_toks > 0 {
+        usage_obj.insert("cached_tokens".to_string(), serde_json::json!(cached_toks));
+        if total_in > 0 {
+            let hit_rate = (cached_toks as f64 / total_in as f64 * 100.0)
+                .min(100.0)
+                .max(0.0);
+            usage_obj.insert(
+                "cache_hit_rate".to_string(),
+                serde_json::json!(format!("{:.1}%", hit_rate)),
+            );
+        }
+    }
+    if reasoning_toks > 0 {
+        usage_obj.insert(
+            "reasoning_tokens".to_string(),
+            serde_json::json!(reasoning_toks),
+        );
+    }
+
+    Some(build_canonical_consolidated_response(
+        thinking_content,
+        thinking_signature,
+        response_content,
+        tool_calls,
+        log.session_id.as_deref(),
+        &log.id,
+        timing_obj,
+        Some(usage_obj),
+    ))
+}
+
 pub async fn monitor_middleware(
     State(state): State<AppState>,
     request: Request,
@@ -483,6 +833,14 @@ pub async fn monitor_middleware(
         .map(|identity| identity.username.clone());
     let is_image_route = uri.contains("/v1/images/");
 
+    // Extract session ID from response headers (e.g. X-Session-Id or X-Antigravity-Session-Id)
+    let session_id = response
+        .headers()
+        .get("X-Session-Id")
+        .or_else(|| response.headers().get("X-Antigravity-Session-Id"))
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
     let monitor = state.monitor.clone();
     let mut log = ProxyRequestLog {
         id: uuid::Uuid::new_v4().to_string(),
@@ -507,6 +865,7 @@ pub async fn monitor_middleware(
         cached_tokens: None,
         protocol,
         username,
+        session_id,
     };
 
     if content_type.contains("text/event-stream") {
@@ -680,23 +1039,46 @@ pub async fn monitor_middleware(
                                                     response_content.push_str(text);
                                                 }
                                             }
-                                            if let Some(sig) = part
-                                                .get("thought_signature")
+                                            let sig = part
+                                                .get("thoughtSignature")
+                                                .or_else(|| part.get("thought_signature"))
                                                 .or_else(|| part.get("signature"))
-                                                .and_then(|s| s.as_str())
-                                            {
-                                                thinking_signature = sig.to_string();
+                                                .or_else(|| {
+                                                    part.get("functionCall")
+                                                        .and_then(|fc| fc.get("thoughtSignature"))
+                                                })
+                                                .or_else(|| {
+                                                    part.get("functionCall")
+                                                        .and_then(|fc| fc.get("thought_signature"))
+                                                })
+                                                .and_then(|s| s.as_str());
+                                            if let Some(s) = sig {
+                                                thinking_signature = s.to_string();
                                             }
                                             if let Some(fc) = part.get("functionCall") {
                                                 if let Some(name) =
                                                     fc.get("name").and_then(|n| n.as_str())
                                                 {
+                                                    let call_id = if let Some(id_str) = fc
+                                                        .get("id")
+                                                        .and_then(|i| i.as_str())
+                                                        .filter(|s| !s.is_empty())
+                                                    {
+                                                        id_str.to_string()
+                                                    } else {
+                                                        crate::proxy::thinking_store::synthesize_tool_id(
+                                                            name,
+                                                            fc.get("args"),
+                                                            "root",
+                                                            tool_calls.len(),
+                                                        )
+                                                    };
                                                     let args = fc
                                                         .get("args")
                                                         .map(|a| a.to_string())
-                                                        .unwrap_or_default();
+                                                        .unwrap_or_else(|| "{}".to_string());
                                                     tool_calls.push(serde_json::json!({
-                                                        "id": "",
+                                                        "id": call_id,
                                                         "type": "function",
                                                         "function": { "name": name, "arguments": args }
                                                     }));
@@ -743,6 +1125,7 @@ pub async fn monitor_middleware(
                                     if let Some(sig) = block
                                         .get("signature")
                                         .or_else(|| block.get("thought_signature"))
+                                        .or_else(|| block.get("thoughtSignature"))
                                         .and_then(|v| v.as_str())
                                     {
                                         thinking_signature = sig.to_string();
@@ -756,19 +1139,20 @@ pub async fn monitor_middleware(
                                 ) {
                                     let idx = index as usize;
 
-                                    // Tool use input delta
-                                    if let Some(delta_json) =
-                                        delta.get("input_json_delta").and_then(|v| v.as_str())
-                                    {
+                                    // Tool use input delta (Anthropic 官方协议为 partial_json 增量)
+                                    let delta_json = delta
+                                        .get("partial_json")
+                                        .or_else(|| delta.get("input_json_delta"))
+                                        .or_else(|| delta.get("text"))
+                                        .and_then(|v| v.as_str());
+
+                                    if let Some(delta_str) = delta_json {
                                         if idx < tool_calls.len() && !tool_calls[idx].is_null() {
                                             let old_args = tool_calls[idx]["function"]["arguments"]
                                                 .as_str()
                                                 .unwrap_or("");
                                             tool_calls[idx]["function"]["arguments"] =
-                                                Value::String(format!(
-                                                    "{}{}",
-                                                    old_args, delta_json
-                                                ));
+                                                Value::String(format!("{}{}", old_args, delta_str));
                                         }
                                     }
                                     // Legacy/Native thinking block
@@ -781,6 +1165,7 @@ pub async fn monitor_middleware(
                                     if let Some(sig) = delta
                                         .get("signature")
                                         .or_else(|| delta.get("thought_signature"))
+                                        .or_else(|| delta.get("thoughtSignature"))
                                         .and_then(|v| v.as_str())
                                     {
                                         thinking_signature = sig.to_string();
@@ -889,34 +1274,6 @@ pub async fn monitor_middleware(
                     }
                 }
 
-                // Build consolidated response object
-                let mut consolidated = serde_json::Map::new();
-                let has_actual_content = !response_content.is_empty()
-                    || !tool_calls.is_empty()
-                    || !thinking_content.is_empty();
-
-                if !thinking_content.is_empty() {
-                    consolidated.insert("thinking".to_string(), Value::String(thinking_content));
-                }
-                if !thinking_signature.is_empty() {
-                    consolidated.insert(
-                        "thinking_signature".to_string(),
-                        Value::String(thinking_signature),
-                    );
-                }
-                if !response_content.is_empty() {
-                    consolidated.insert("content".to_string(), Value::String(response_content));
-                }
-
-                if !tool_calls.is_empty() {
-                    let clean_tool_calls: Vec<Value> =
-                        tool_calls.into_iter().filter(|v| !v.is_null()).collect();
-                    if !clean_tool_calls.is_empty() {
-                        consolidated
-                            .insert("tool_calls".to_string(), Value::Array(clean_tool_calls));
-                    }
-                }
-
                 // [Timing Diagnostics] 注入耗时诊断元数据 (秒)
                 let mut timing_obj = serde_json::Map::new();
                 if let Some(clean) = headers_map
@@ -950,74 +1307,108 @@ pub async fn monitor_middleware(
                     serde_json::json!(stream_ms / 1000.0),
                 );
                 timing_obj.insert("total_s".to_string(), serde_json::json!(total_ms / 1000.0));
-                consolidated.insert("_timing".to_string(), Value::Object(timing_obj));
-                if has_actual_content {
-                    let mut usage_obj = serde_json::Map::new();
+
+                // 优先从 tail 兜底提取 token（若当前尚无 token 数据）
+                if log.input_tokens.is_none() && log.output_tokens.is_none() {
+                    if let Ok(full_tail) = std::str::from_utf8(&last_few_bytes) {
+                        for line in full_tail.lines().rev() {
+                            if line.starts_with("data: ")
+                                && (line.contains("\"usage\"")
+                                    || line.contains("\"usageMetadata\""))
+                            {
+                                let json_str = line.trim_start_matches("data: ").trim();
+                                if let Ok(json) = serde_json::from_str::<Value>(json_str) {
+                                    if let Some(usage) = json
+                                        .get("usage")
+                                        .or(json.get("usageMetadata"))
+                                        .or(json.get("response").and_then(|r| r.get("usage")))
+                                        .or(json
+                                            .get("response")
+                                            .and_then(|r| r.get("usageMetadata")))
+                                    {
+                                        log.input_tokens = extract_input_tokens(usage);
+                                        log.output_tokens = extract_output_tokens(usage);
+                                        cached_tokens =
+                                            cached_tokens.or_else(|| extract_cached_tokens(usage));
+                                        log.cached_tokens = log.cached_tokens.or(cached_tokens);
+                                        reasoning_tokens = reasoning_tokens
+                                            .or_else(|| extract_reasoning_tokens(usage));
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                let has_actual_content = !response_content.is_empty()
+                    || !tool_calls.is_empty()
+                    || !thinking_content.is_empty();
+
+                let mut usage_obj = serde_json::Map::new();
+                if has_actual_content || log.input_tokens.is_some() || log.output_tokens.is_some() {
                     let input_toks = log.input_tokens.unwrap_or(0);
                     let output_toks = log.output_tokens.unwrap_or(0);
-                    let cached_toks = cached_tokens.unwrap_or(0);
+                    let cached_toks = cached_tokens.or(log.cached_tokens).unwrap_or(0);
                     let reasoning_toks = reasoning_tokens.unwrap_or(0);
-                    let is_responses_api =
-                        log.url.contains("/responses") || log.url.contains("/interactions");
 
-                    if is_responses_api {
-                        usage_obj
-                            .insert("input_tokens".to_string(), Value::Number(input_toks.into()));
-                        usage_obj.insert(
-                            "input_tokens_details".to_string(),
-                            serde_json::json!({ "cached_tokens": cached_toks }),
-                        );
-                        usage_obj.insert(
-                            "output_tokens".to_string(),
-                            Value::Number(output_toks.into()),
-                        );
-                        usage_obj.insert(
-                            "output_tokens_details".to_string(),
-                            serde_json::json!({ "reasoning_tokens": reasoning_toks }),
-                        );
-                        usage_obj.insert(
-                            "total_tokens".to_string(),
-                            Value::Number((input_toks + output_toks).into()),
-                        );
+                    let total_in = if cached_toks > input_toks {
+                        input_toks + cached_toks
                     } else {
-                        usage_obj.insert(
-                            "prompt_tokens".to_string(),
-                            Value::Number(input_toks.into()),
-                        );
-                        usage_obj.insert(
-                            "completion_tokens".to_string(),
-                            Value::Number(output_toks.into()),
-                        );
-                        usage_obj.insert(
-                            "total_tokens".to_string(),
-                            Value::Number((input_toks + output_toks).into()),
-                        );
-                        if cached_tokens.is_some() {
+                        input_toks
+                    };
+                    let total_toks = total_in + output_toks;
+
+                    usage_obj.insert("input_tokens".to_string(), serde_json::json!(total_in));
+                    usage_obj.insert("output_tokens".to_string(), serde_json::json!(output_toks));
+                    usage_obj.insert("total_tokens".to_string(), serde_json::json!(total_toks));
+                    if cached_toks > 0 {
+                        usage_obj
+                            .insert("cached_tokens".to_string(), serde_json::json!(cached_toks));
+                        if total_in > 0 {
+                            let hit_rate = (cached_toks as f64 / total_in as f64 * 100.0)
+                                .min(100.0)
+                                .max(0.0);
                             usage_obj.insert(
-                                "cache_read_input_tokens".to_string(),
-                                Value::Number(cached_toks.into()),
-                            );
-                            usage_obj.insert(
-                                "prompt_tokens_details".to_string(),
-                                serde_json::json!({ "cached_tokens": cached_toks }),
-                            );
-                        }
-                        if reasoning_tokens.is_some() {
-                            usage_obj.insert(
-                                "completion_tokens_details".to_string(),
-                                serde_json::json!({ "reasoning_tokens": reasoning_toks }),
+                                "cache_hit_rate".to_string(),
+                                serde_json::json!(format!("{:.1}%", hit_rate)),
                             );
                         }
                     }
-                    consolidated.insert("usage".to_string(), Value::Object(usage_obj));
+                    if reasoning_toks > 0 {
+                        usage_obj.insert(
+                            "reasoning_tokens".to_string(),
+                            serde_json::json!(reasoning_toks),
+                        );
+                    }
                 }
 
-                if consolidated.is_empty() {
+                // 🌟 构建统一的满血简要版响应报文 (包含网关权威签名回填与确定性 Tool ID)
+                let consolidated = build_canonical_consolidated_response(
+                    thinking_content,
+                    thinking_signature,
+                    response_content,
+                    tool_calls,
+                    log.session_id.as_deref(),
+                    &log.id,
+                    timing_obj,
+                    if usage_obj.is_empty() {
+                        None
+                    } else {
+                        Some(usage_obj)
+                    },
+                );
+
+                if consolidated
+                    .as_object()
+                    .map(|m| m.is_empty())
+                    .unwrap_or(true)
+                {
                     // Fallback: store raw SSE data if parsing failed
                     log.response_body = Some(full_response.to_string());
                 } else {
                     log.response_body = Some(
-                        serde_json::to_string_pretty(&Value::Object(consolidated))
+                        serde_json::to_string_pretty(&consolidated)
                             .unwrap_or_else(|_| full_response.to_string()),
                     );
                 }
@@ -1100,7 +1491,7 @@ pub async fn monitor_middleware(
             "x-timing-total-ms".to_string(),
             serde_json::json!(format!("{:.3}", total_ms)),
         );
-        log.response_headers = serde_json::to_string(&Value::Object(headers_map)).ok();
+        log.response_headers = serde_json::to_string(&Value::Object(headers_map.clone())).ok();
 
         let (parts, body) = response.into_parts();
         match axum::body::to_bytes(body, MAX_RESPONSE_LOG_SIZE).await {
@@ -1133,6 +1524,17 @@ pub async fn monitor_middleware(
                             .ok()
                             .and_then(|json| summarize_image_json_response(&json))
                             .or_else(|| Some(s.to_string()));
+                    } else if let Ok(json) = serde_json::from_str::<Value>(&s) {
+                        // 🌟 非流式响应入库统一转换为满血简要版 (包含网关权威签名回填与防雪崩确定性 Tool ID)
+                        if let Some(canonical) =
+                            consolidate_non_streaming_response(&json, &log, &headers_map)
+                        {
+                            log.response_body = serde_json::to_string_pretty(&canonical)
+                                .ok()
+                                .or_else(|| Some(s.to_string()));
+                        } else {
+                            log.response_body = Some(s.to_string());
+                        }
                     } else {
                         log.response_body = Some(s.to_string());
                     }

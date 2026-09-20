@@ -89,6 +89,13 @@ impl PromptSanitizer {
         let mut cleaned_count = 0;
         for part in parts.iter_mut() {
             if let Some(obj) = part.as_object_mut() {
+                // 思考块受数字签名 (thoughtSignature) 严格保护，其文本必须保持字节级绝对不可变，严禁执行清洗
+                if obj.get("thought").and_then(Value::as_bool).unwrap_or(false)
+                    || obj.contains_key("thoughtSignature")
+                {
+                    continue;
+                }
+
                 if let Some(text_val) = obj.get("text").and_then(Value::as_str) {
                     let cleaned = Self::clean_text(text_val);
                     if cleaned != text_val {

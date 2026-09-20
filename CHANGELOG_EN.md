@@ -3,6 +3,38 @@
 > Complete version history for Antigravity Tools. Return to project home at [README_EN.md](README_EN.md).
 
 *   **Version History**:
+    *   **v4.7.8 (2026-09-20)**:
+        -   **[Quota Display & Merging Logic Fix] Fix 5H Quota Erroneously Displaying Weekly Quota and Reset Time (PR #3479, Fixes #3477)**:
+            -   **Faithful Bucket Display**: Corrected multi-dimensional quota bucket blending so that 5H quota accurately reflects the rolling 5-hour window and hourly countdown unless weekly quota is completely depleted.
+            -   **Clear Depletion Circuit Breaker**: Only when the weekly quota reaches total exhaustion (`remaining_fraction <= 0.001`) does it lock to 0% and inherit the weekly reset countdown, avoiding 429 loops while eliminating normal 5H quota pollution.
+            -   **Unified View Behavior**: Aligned AccountCard grid view with table view using `getModelEffectiveQuota`.
+        -   **[Claude Protocol & Thinking Signature Fix] Fix Multi-Turn Tool Calling Thinking Block Invalid Signature Errors (PR #3479, Fixes #3478)**:
+            -   **Universal Claude Compatibility**: Generalized `common_utils::is_model_compatible` to support Claude 4/5 series and arbitrary variants, preventing valid signatures from being stripped.
+            -   **Trust Client Valid Signatures**: Directly accepts and transparently forwards valid client signatures while automatically indexing them into `ThinkingStore`.
+            -   **Forbid Fake Sentinel Injection**: Explicitly forbids injecting Gemini-specific `skip_thought_signature_validator` into Claude models to prevent Anthropic 400 validation errors.
+            -   **Byte-level Thinking Block Preservation**: Disallows `.trim()` on thoughts with valid signatures and skips thinking blocks in `PromptSanitizer` to maintain cryptographic hash integrity.
+        -   **[Monitor Logging & Telemetry Optimization] Compact Authoritative Response Payload Logging (PR #3479)**:
+            -   **Payload Normalization**: Unified monitor logs with informative compact payloads across all protocols and collected streaming events with authoritative signatures.
+    *   **v4.7.7 (2026-09-20)**:
+        -   **[Cache Optimization & Pipeline Refactor] Reconstruct Message Building for Dramatically Improved Cache Hit Retention (PR #3476)**:
+            -   **Absolute Top-level System Instruction Freezing**: Only leading continuous `system` messages populate `systemInstruction`; dynamically injected mid-conversation `system` messages are rewritten on the fly into `<system-reminder>` wrapped within adjacent `user` turns, completely preventing KV Cache collapse and sustaining 80% ~ 90%+ hit rates in multi-turn interactions.
+            -   **3D Orthogonal Session Isolation (Fixes #3467)**: Deterministic UUIDs derived from tenant identity, client session headers (`x-session-id`, `session-id`), query, and body are injected upstream, totally preventing cross-session pollution and thought bleeding across multi-user or concurrent sub-agent requests.
+        -   **[Responses Protocol & Thought Preservation] Fix Process Commentary & Thought Deletion in Tool Calls (PR #3476)**:
+            -   **Dual Preservation & Topological Ordering**: Thinking blocks are strictly prepended at the top, followed by process commentary text as separate text blocks preceding `tool_calls`, completely eliminating lost progress commentary or 400 schema validation errors caused by inverted tool placement.
+            -   **Historical Prefix Absolute Freezing**: In multi-turn Responses requests containing tool calls, previously committed thoughts and signatures are permanently frozen across all subsequent turns.
+        -   **[Thinking Chain Decoupling & Misalignment Prevention] Strict Separation Between Thought Content and Thought Signature (PR #3476)**:
+            -   **Signature Rule**: Plain-text turns without tool calls are assigned a sentinel signature placeholder and excluded from tool signature storage; tool signatures are strictly anchored to `tool_id`, eliminating cross-matching of multi-kilobyte text signatures to tool calls.
+            -   **Thought Text Rule**: Restores real thought text when present and pads with `...` when absent; completely decoupled so plain-text reasoning remains 100% visible even under sentinel signatures.
+        -   **[Gemini Tooling & Parameter Sanitization] Deterministic Tool ID Synthesis & Shell Argument Sanitization (PR #3476, Fixes #3474)**:
+            -   **Deterministic Tool ID Synthesis**: Synthesizes unique symmetrical `tool_id`s based on `canonical_json_hash` and causal anchors, paired with monotonic topological funnels to prevent phase shifts after context trimming.
+            -   **Shell Parameter Sanitization**: Strips `description` from terminal tool schemas sent upstream to eliminate command injection into descriptions, restoring them downstream; returns non-zero `exit 1` instead of fake `echo [OK]` on empty commands to prompt agent self-healing.
+        -   **[Storage Evolution & Internationalization] ThinkingStore Optimization, Clear Thinking Data & Request Log Sliding Window (PR #3476)**:
+            -   **One-click Thinking Store Purge**: Added a "Clear Thinking Store" button with double confirmation in Settings, clearing RAM cache and SQLite thinking data while strictly preserving all `request_logs`; fully localized across 12 languages (zh, zh-TW, en, ja, ko, es, pt, ru, ar, tr, vi, my).
+            -   **Safe Request Log Sliding Window**: Replaced the legacy 24h payload nullification with a FIFO capacity- and count-based sliding window eviction, preserving 100% full raw request/response bodies.
+            -   **SQLite Covering Indexes**: Added indexes for `primary_tool_id`, `session_key`, and `id` for microsecond-level point lookups and eviction.
+        -   **[System Resilience & Quota Guard] Weekly Quota Depletion Circuit Breaker & Headless Linux Keyring Fallback (PR #3476, Fixes #3472, Fixes #3473)**:
+            -   **Weekly Quota Circuit Breaker**: Accounts with depleted weekly quota (0%) are locked and excluded from rotation pools, ending recursive 429 retries.
+            -   **Linux Keyring Graceful Fallback**: Automatically falls back to local SQLite `state.vscdb` injection and `~/.gemini/oauth_creds.json` synchronization in headless environments lacking `secret-tool` or D-Bus.
     *   **v4.7.6 (2026-09-18)**:
         -   **[Official IDE Subscription Alignment & Authoritative Parsing] Architectural Subscription Refactor to Fix Free Accounts Misidentified as PRO (PR #3470, Fixes #3469)**:
             -   **Align with Machine Identifier `paidTier.id`**: Tier extraction is now strictly prioritized by machine-readable `id` (`free-tier` / `g1-pro-tier` / `g1-ultra-tier`) rather than mutable text `name`, accurately handling internal codenames like `helium` (Ultra) and `starter` (Free).

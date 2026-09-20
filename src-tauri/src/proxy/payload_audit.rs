@@ -496,6 +496,11 @@ pub fn simplify_payload_json(value: &Value) -> Value {
         concise.insert("usageMetadata".into(), usage.clone());
     }
 
+    // 9.5 耗时诊断指标 (_timing)
+    if let Some(timing) = inner.get("_timing").or_else(|| value.get("_timing")) {
+        concise.insert("_timing".into(), timing.clone());
+    }
+
     // 10. Choices & Candidates
     if let Some(choices) = value.get("choices").or_else(|| inner.get("choices")) {
         if let Some(arr) = choices.as_array() {
