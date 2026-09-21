@@ -79,6 +79,20 @@ pub fn load_app_config() -> Result<AppConfig, String> {
             modified = true;
         }
 
+        // 预设无后缀 3.6+ Flash 模型到 Tiered 自适应模型的默认映射规则
+        // 自动注入到用户的自定义模型列表中，用户可在 UI 界面查阅、删除或自定义修改保存；默认按此预设执行
+        for (k, v) in [
+            ("gemini-3.6-flash", "gemini-3.6-flash-tiered"),
+            ("gemini-3.7-flash", "gemini-3.7-flash-tiered"),
+            ("gemini-3.8-flash", "gemini-3.8-flash-tiered"),
+            ("gemini-3.x-flash", "3.x-flash-tiered"),
+        ] {
+            if !custom_mapping.contains_key(k) {
+                custom_mapping.insert(k.to_string(), serde_json::Value::String(v.to_string()));
+                modified = true;
+            }
+        }
+
         // Migrate log retention max_disk_mb: if 0, smoothly recover to 1024 MiB default
         if let Some(log_retention) = proxy
             .get_mut("log_retention")

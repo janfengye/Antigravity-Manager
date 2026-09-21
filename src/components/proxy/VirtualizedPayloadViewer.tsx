@@ -126,6 +126,14 @@ const getVisualCharCount = (str: string): number => {
     return count;
 };
 
+// 行号槽 44px + 正文左内边距 10px，用于无折行时的横向定位
+const LINE_GUTTER_PX = 54;
+
+// 打断 TanStack scrollToIndex 内部最多 10 帧的对齐重试，避免把已对准的 mark 再拽回整行中心
+const cancelVirtualizerScrollToIndex = (virtualizer: unknown) => {
+    (virtualizer as { currentScrollToIndex: number | null }).currentScrollToIndex = null;
+};
+
 // 渲染单行文本：基于整行无损 Token 结合搜索高亮区间切片，100% 保证字符与引号绝对不丢失
 const renderLineContent = (
     line: string,
@@ -197,6 +205,9 @@ const renderLineContent = (
                 <mark
                     key={`${tokenKey}-m-${i}`}
                     id={isActive ? `active-match-${cardId}` : undefined}
+                    data-card-id={cardId}
+                    data-match-index={m.globalIndex}
+                    data-active-match={isActive ? 'true' : undefined}
                     className={`rounded-sm px-0.5 font-bold transition-all duration-150 select-text ${
                         isActive
                             ? 'bg-amber-400 text-gray-950 ring-2 ring-amber-500 shadow-sm z-10'
@@ -309,6 +320,7 @@ export const VirtualizedPayloadViewer: React.FC<VirtualizedPayloadViewerProps> =
     const containerRef = useRef<HTMLDivElement>(null);
     const searchInputRef = useRef<HTMLInputElement>(null);
     const fontMeasureRef = useRef<HTMLSpanElement>(null);
+    const scrollGenRef = useRef(0);
 
     // 测量当前环境等宽字体的精准字符宽度与行高
     useEffect(() => {
@@ -389,6 +401,24 @@ export const VirtualizedPayloadViewer: React.FC<VirtualizedPayloadViewerProps> =
             return headersJson;
         }
     }, [headersJson]);
+
+    // 独立复制 Headers
+    const [isHeadersCopied, setIsHeadersCopied] = useState(false);
+    const handleCopyHeaders = useCallback(async (e?: React.MouseEvent) => {
+        if (e) e.stopPropagation();
+        if (!prettyHeaders) return;
+        try {
+            await navigator.clipboard.writeText(prettyHeaders);
+            setIsHeadersCopied(true);
+            setTimeout(() => setIsHeadersCopied(false), 2000);
+        } catch {
+            if (onCopy) {
+                await onCopy(prettyHeaders);
+                setIsHeadersCopied(true);
+                setTimeout(() => setIsHeadersCopied(false), 2000);
+            }
+        }
+    }, [prettyHeaders, onCopy]);
 
     // 极速行级搜索索引 (20,000 行扫描实测 < 1.5ms)
     const { matches, matchesByLine } = useMemo(() => {
@@ -480,39 +510,143 @@ export const VirtualizedPayloadViewer: React.FC<VirtualizedPayloadViewerProps> =
         rowVirtualizer.measure();
     }, [formattedContent, isWrap, containerWidth]);
 
-    // 当搜索内容改变时，重置当前高亮项为第 0 个，并跳转至首个命中行
+    // 命中点在虚拟行内的像素偏移：折行按视觉列宽换算 wrapRow，避免 scrollToIndex 只对准整行中心
+    const getMatchContentOffset = useCallback((match: SearchMatch) => {
+        const cw = fontMetrics.charWidth || 6.62;
+        const lh = fontMetrics.lineHeight || 20;
+        const line = lines[match.lineIndex] || '';
+        const visualBefore = getVisualCharCount(line.slice(0, match.colStart));
+
+        const measured = rowVirtualizer.measurementsCache[match.lineIndex];
+        let lineStart = 0;
+        if (measured && Number.isFinite(measured.start)) {
+            lineStart = measured.start;
+        } else if (lineHeights) {
+            for (let i = 0; i < match.lineIndex && i < lineHeights.length; i++) {
+                lineStart += lineHeights[i];
+            }
+        } else {
+            lineStart = match.lineIndex * lh;
+        }
+
+        if (!isWrap) {
+            return {
+                top: lineStart,
+                left: LINE_GUTTER_PX + visualBefore * cw,
+            };
+        }
+
+        const usableWidth = Math.max(100, (containerRef.current?.clientWidth || containerWidth || 600) - 70);
+        const charsPerLine = Math.max(10, Math.floor(usableWidth / cw));
+        const wrapRow = Math.floor(visualBefore / charsPerLine);
+        return {
+            top: lineStart + wrapRow * lh,
+            left: 0,
+        };
+    }, [fontMetrics, lines, rowVirtualizer, lineHeights, isWrap, containerWidth]);
+
+    // 小视口 + 超长折行：禁止 scrollToIndex(center)+smooth。先按命中点瞬时跳转，再在 mark 入 DOM 后几何微调。
+    const ensureActiveMatchInView = useCallback((targetIndex: number) => {
+        const match = matches[targetIndex];
+        if (!match) return;
+
+        const gen = ++scrollGenRef.current;
+        const lh = fontMetrics.lineHeight || 20;
+
+        const jumpByMath = () => {
+            const el = containerRef.current;
+            if (!el) return;
+            const { top, left } = getMatchContentOffset(match);
+            el.scrollTop = Math.max(0, Math.round(top - el.clientHeight / 2 + lh / 2));
+            el.scrollLeft = isWrap ? 0 : Math.max(0, Math.round(left - el.clientWidth / 2));
+        };
+
+        cancelVirtualizerScrollToIndex(rowVirtualizer);
+        jumpByMath();
+
+        const MAX_FRAMES = 30;
+        const step = (frame: number) => {
+            if (scrollGenRef.current !== gen) return;
+
+            const el = containerRef.current;
+            if (!el) return;
+
+            const activeMark = el.querySelector(
+                `mark[data-card-id="${cardId}"][data-match-index="${targetIndex}"]`
+            ) as HTMLElement | null;
+
+            if (activeMark) {
+                // mark 已在 DOM：立刻掐掉 scrollToIndex 重试，再按真实几何把命中点滚进小视口中心
+                cancelVirtualizerScrollToIndex(rowVirtualizer);
+                const containerRect = el.getBoundingClientRect();
+                const markRect = activeMark.getBoundingClientRect();
+                const pad = 8;
+                const visible =
+                    markRect.bottom > containerRect.top + pad &&
+                    markRect.top < containerRect.bottom - pad &&
+                    markRect.right > containerRect.left + pad &&
+                    markRect.left < containerRect.right - pad;
+
+                const dy = markRect.top + markRect.height / 2 - (containerRect.top + containerRect.height / 2);
+                const dx = isWrap
+                    ? 0
+                    : markRect.left + markRect.width / 2 - (containerRect.left + containerRect.width / 2);
+                const ySlop = Math.max(16, containerRect.height * 0.18);
+                const xSlop = Math.max(24, containerRect.width * 0.22);
+
+                if (visible && Math.abs(dy) <= ySlop && Math.abs(dx) <= xSlop) {
+                    return;
+                }
+
+                el.scrollTop = Math.max(0, el.scrollTop + dy);
+                if (!isWrap) {
+                    el.scrollLeft = Math.max(0, el.scrollLeft + dx);
+                }
+            } else if (frame === 8 || frame === 18) {
+                // 估算偏差导致目标行未进窗口：让 virtualizer 按行索引把该行拉进 DOM（start，不要 center）
+                rowVirtualizer.scrollToIndex(match.lineIndex, { align: 'start', behavior: 'auto' });
+            } else if (frame < 8 || frame > 20) {
+                jumpByMath();
+            }
+
+            if (frame < MAX_FRAMES) {
+                requestAnimationFrame(() => step(frame + 1));
+            }
+        };
+
+        requestAnimationFrame(() => step(0));
+    }, [matches, cardId, rowVirtualizer, fontMetrics.lineHeight, isWrap, getMatchContentOffset]);
+
+    const ensureActiveMatchInViewRef = useRef(ensureActiveMatchInView);
+    ensureActiveMatchInViewRef.current = ensureActiveMatchInView;
+
+    // 仅在搜索词/大小写/正文变化时回到首个命中，避免回调身份变化把正在浏览的匹配重置为 0
     useEffect(() => {
         setCurrentMatchIndex(0);
         if (matches.length > 0) {
-            rowVirtualizer.scrollToIndex(matches[0].lineIndex, { align: 'center', behavior: 'auto' });
+            ensureActiveMatchInViewRef.current(0);
         }
-    }, [debouncedSearchTerm, caseSensitive]);
+    }, [debouncedSearchTerm, caseSensitive, matches.length, formattedContent]);
 
-    // 激活匹配项跳转平滑居中
-    const scrollToMatch = (targetIndex: number) => {
-        if (matches.length > 0 && matches[targetIndex]) {
-            rowVirtualizer.scrollToIndex(matches[targetIndex].lineIndex, {
-                align: 'center',
-                behavior: 'smooth',
-            });
-        }
-    };
+    const scrollToMatch = useCallback((targetIndex: number) => {
+        ensureActiveMatchInView(targetIndex);
+    }, [ensureActiveMatchInView]);
 
-    const handleNext = () => {
+    const handleNext = useCallback(() => {
         if (matchesCount > 0) {
             const nextIdx = (currentMatchIndex + 1) % matchesCount;
             setCurrentMatchIndex(nextIdx);
             scrollToMatch(nextIdx);
         }
-    };
+    }, [matchesCount, currentMatchIndex, scrollToMatch]);
 
-    const handlePrev = () => {
+    const handlePrev = useCallback(() => {
         if (matchesCount > 0) {
             const prevIdx = (currentMatchIndex - 1 + matchesCount) % matchesCount;
             setCurrentMatchIndex(prevIdx);
             scrollToMatch(prevIdx);
         }
-    };
+    }, [matchesCount, currentMatchIndex, scrollToMatch]);
 
     const copyPayload = prettyHeaders
         ? `/* headers */\n${prettyHeaders}\n\n/* body */\n${formattedContent}`
@@ -680,16 +814,35 @@ export const VirtualizedPayloadViewer: React.FC<VirtualizedPayloadViewerProps> =
                                     ({prettyHeaders.split('\n').length} 行)
                                 </span>
                             </div>
-                            <button
-                                type="button"
-                                className="text-[10px] text-blue-600 dark:text-blue-400 font-medium flex items-center gap-0.5"
-                            >
-                                <span>{isHeadersExpanded ? '收起' : '展开'}</span>
-                                <ChevronDown size={12} className={`transition-transform duration-200 ${isHeadersExpanded ? 'rotate-180' : ''}`} />
-                            </button>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    type="button"
+                                    onClick={handleCopyHeaders}
+                                    className="btn btn-ghost btn-xs h-5 min-h-0 px-1.5 gap-1 text-[10px] text-gray-500 hover:text-blue-500 dark:text-gray-400 dark:hover:text-blue-400 font-normal hover:bg-white/60 dark:hover:bg-base-200"
+                                    title={t('common.copy', '复制')}
+                                >
+                                    {isHeadersCopied ? <CheckCircle size={11} className="text-green-500" /> : <Copy size={11} />}
+                                    <span>{isHeadersCopied ? (t('common.copied') || '已复制') : (t('common.copy') || '复制')}</span>
+                                </button>
+                                <button
+                                    type="button"
+                                    className="text-[10px] text-blue-600 dark:text-blue-400 font-medium flex items-center gap-0.5"
+                                >
+                                    <span>{isHeadersExpanded ? '收起' : '展开'}</span>
+                                    <ChevronDown size={12} className={`transition-transform duration-200 ${isHeadersExpanded ? 'rotate-180' : ''}`} />
+                                </button>
+                            </div>
                         </div>
                         {isHeadersExpanded && (
-                            <div className="p-2.5 max-h-40 overflow-y-auto bg-white/60 dark:bg-base-100 font-mono text-[10px] leading-relaxed border-t border-gray-200 dark:border-base-200">
+                            <div className="relative group/head p-2.5 max-h-44 overflow-y-auto bg-white/60 dark:bg-base-100 font-mono text-[10px] leading-relaxed border-t border-gray-200 dark:border-base-200">
+                                <button
+                                    type="button"
+                                    onClick={handleCopyHeaders}
+                                    className="absolute top-2 right-2 p-1 rounded bg-white/80 dark:bg-base-200 border border-gray-200 dark:border-base-300 text-gray-500 hover:text-blue-500 opacity-0 group-hover/head:opacity-100 transition-opacity shadow-xs"
+                                    title={t('common.copy', '复制')}
+                                >
+                                    {isHeadersCopied ? <CheckCircle size={12} className="text-green-500" /> : <Copy size={12} />}
+                                </button>
                                 <pre className="whitespace-pre-wrap select-text m-0 text-gray-600 dark:text-gray-300 font-mono">
                                     {prettyHeaders}
                                 </pre>
@@ -757,6 +910,7 @@ export const VirtualizedPayloadViewer: React.FC<VirtualizedPayloadViewerProps> =
                                 width: isWrap ? '100%' : 'max-content',
                                 minWidth: '100%',
                                 position: 'relative',
+                                overflowAnchor: 'none',
                             }}
                         >
                             {rowVirtualizer.getVirtualItems().map((virtualRow) => {

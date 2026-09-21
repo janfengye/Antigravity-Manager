@@ -436,9 +436,12 @@ fn clean_json_schema_recursive(value: &mut Value, is_schema_node: bool, depth: u
 
             // [NEW] 启发式修复：如果明确是 Schema 节点，但没有标准关键字，却有其他 Key
             // 我们推测这是一个“简写”的对象定义，尝试将其内部 Key 移动到 properties 中。
-            // 补充：必须确保它不是工具调用或结果 (含有 functionCall/functionResponse)，防止结构被破坏。
-            let is_not_schema_payload =
-                map.contains_key("functionCall") || map.contains_key("functionResponse");
+            // 补充：必须确保它不是工具调用或结果 (含有 functionCall/functionResponse/args 等)，防止运行时参数结构被破坏。
+            let is_not_schema_payload = map.contains_key("functionCall")
+                || map.contains_key("functionResponse")
+                || map.contains_key("args")
+                || map.contains_key("tool_calls")
+                || map.contains_key("tool_call_id");
             if is_schema_node && !has_standard_keyword && !map.is_empty() && !is_not_schema_payload
             {
                 let mut properties = serde_json::Map::new();
@@ -459,8 +462,7 @@ fn clean_json_schema_recursive(value: &mut Value, is_schema_node: bool, depth: u
                 }
             }
 
-            let looks_like_schema =
-                (is_schema_node || has_standard_keyword) && !is_not_schema_payload;
+            let looks_like_schema = is_schema_node && !is_not_schema_payload;
 
             if looks_like_schema {
                 // 4. [ROBUST] 约束迁移：在被白名单过滤前，将校验项转为描述 Hint
@@ -1192,11 +1194,15 @@ mod tests {
     // [NEW TEST] 验证安全检查：不应处理非 Schema 对象（保护工具调用）
     #[test]
     fn test_clean_json_schema_on_non_schema_object() {
-        // 模拟 request.rs 中转换了一半的 functionCall 对象
+        // 模拟包含 description、command、type 等常规业务字段的运行时工具调用对象
         let mut tool_call = json!({
             "functionCall": {
-                "name": "local_shell_call",
-                "args": { "command": ["ls"] },
+                "name": "run_command",
+                "args": {
+                    "description": "Run: git status",
+                    "command": "git status",
+                    "shell": "default"
+                },
                 "id": "call_123"
             }
         });
@@ -1204,10 +1210,12 @@ mod tests {
         // 调用清洗逻辑
         clean_json_schema(&mut tool_call);
 
-        // 验证：这些非 Schema 字段不应被移除（因为不符合 looks_like_schema 判定）
+        // 验证：非 Schema 字段与运行时实参绝对不应被剥离，command 与 description 必须同时完好保留
         let fc = &tool_call["functionCall"];
-        assert_eq!(fc["name"], "local_shell_call");
-        assert_eq!(fc["args"]["command"][0], "ls");
+        assert_eq!(fc["name"], "run_command");
+        assert_eq!(fc["args"]["command"], "git status");
+        assert_eq!(fc["args"]["description"], "Run: git status");
+        assert_eq!(fc["args"]["shell"], "default");
         assert_eq!(fc["id"], "call_123");
     }
 

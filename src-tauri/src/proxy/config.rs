@@ -1046,6 +1046,27 @@ pub struct UpstreamProxyConfig {
     pub url: String,
 }
 
+pub fn default_custom_mapping() -> std::collections::HashMap<String, String> {
+    let mut m = std::collections::HashMap::new();
+    m.insert(
+        "gemini-3.6-flash".to_string(),
+        "gemini-3.6-flash-tiered".to_string(),
+    );
+    m.insert(
+        "gemini-3.7-flash".to_string(),
+        "gemini-3.7-flash-tiered".to_string(),
+    );
+    m.insert(
+        "gemini-3.8-flash".to_string(),
+        "gemini-3.8-flash-tiered".to_string(),
+    );
+    m.insert(
+        "gemini-3.x-flash".to_string(),
+        "3.x-flash-tiered".to_string(),
+    );
+    m
+}
+
 impl Default for ProxyConfig {
     fn default() -> Self {
         Self {
@@ -1056,7 +1077,7 @@ impl Default for ProxyConfig {
             api_key: format!("sk-{}", uuid::Uuid::new_v4().simple()),
             admin_password: None,
             auto_start: false,
-            custom_mapping: std::collections::HashMap::new(),
+            custom_mapping: default_custom_mapping(),
             request_timeout: default_request_timeout(),
             enable_logging: true, // 默认开启，支持 token 统计功能
             log_retention: LogRetentionConfig::default(),

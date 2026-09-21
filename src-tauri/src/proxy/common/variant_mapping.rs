@@ -225,6 +225,14 @@ pub fn resolve_with_tier(
     let is_gemini_3_family =
         is_v3 && (lower.contains("flash") || lower.contains("pro") || lower.contains("agent"));
     if is_gemini_3_family {
+        // [NEW] 如果是 >= 3.6 的无后缀 Flash 衍生模型，统一预设路由为 tiered 真实模型 ID，彻底杜绝上游 429
+        let resolved_id = if crate::proxy::model_specs::is_bare_gemini_v36_or_above_flash(canonical)
+        {
+            format!("{}-tiered", canonical)
+        } else {
+            canonical.to_string()
+        };
+
         let dynamic_tier = if let Some(nt) = name_tier {
             nt
         } else if let Some(et) = explicit_tier {
@@ -261,7 +269,7 @@ pub fn resolve_with_tier(
             }
         };
         let max_output_tokens = if lower.contains("pro") { 65535 } else { 65536 };
-        let id: &'static str = Box::leak(canonical.to_string().into_boxed_str());
+        let id: &'static str = Box::leak(resolved_id.into_boxed_str());
         return Some(RealModelSpec {
             id,
             thinking_budget: budget,
@@ -464,9 +472,9 @@ mod tests {
 
     #[test]
     fn test_resolve_37_flash_variants() {
-        // 未带档位后缀的 Flash 模型默认赋予 medium (4000)
+        // 无后缀的 >= 3.6 Flash 模型统一预设路由为 tiered 真实模型 ID
         let s = resolve("gemini-3.7-flash", None).unwrap();
-        assert_eq!(s.id, "gemini-3.7-flash");
+        assert_eq!(s.id, "gemini-3.7-flash-tiered");
         assert_eq!(s.thinking_budget, 4000);
         assert_eq!(s.max_output_tokens, 65536);
 
@@ -497,9 +505,9 @@ mod tests {
 
     #[test]
     fn test_resolve_38_flash_variants() {
-        // 未带档位后缀的 Flash 模型默认赋予 medium (4000)
+        // 无后缀的 >= 3.6 Flash 模型统一预设路由为 tiered 真实模型 ID
         let s = resolve("gemini-3.8-flash", None).unwrap();
-        assert_eq!(s.id, "gemini-3.8-flash");
+        assert_eq!(s.id, "gemini-3.8-flash-tiered");
         assert_eq!(s.thinking_budget, 4000);
         assert_eq!(s.max_output_tokens, 65536);
 
@@ -529,9 +537,9 @@ mod tests {
     #[test]
     fn test_dynamic_unregistered_gemini_3_family() {
         // Any unregistered Gemini >= 3 model resolves dynamically without hardcoded registry
-        // 未带档位后缀的 Flash 模型默认赋予 medium (4000)
+        // 无后缀的 Flash 模型统一预设路由为 tiered 真实模型 ID
         let s = resolve("gemini-3.9-flash", None).unwrap();
-        assert_eq!(s.id, "gemini-3.9-flash");
+        assert_eq!(s.id, "gemini-3.9-flash-tiered");
         assert_eq!(s.thinking_budget, 4000);
         assert_eq!(s.max_output_tokens, 65536);
 

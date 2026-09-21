@@ -285,6 +285,61 @@ pub fn is_tiered_flash_model(model: &str) -> bool {
         .is_some_and(|version| !version.is_empty())
 }
 
+/// 判断是否为 >= 3.6 的无后缀 Flash 衍生模型（如 gemini-3.6-flash, gemini-3.7-flash, gemini-3.8-flash, gemini-3.9-flash 等）
+pub fn is_bare_gemini_v36_or_above_flash(model: &str) -> bool {
+    let lower = model.to_lowercase();
+    if !lower.contains("gemini") || !lower.contains("flash") {
+        return false;
+    }
+    // 排除已有任何后缀或变体标记的模型
+    if lower.ends_with("-high")
+        || lower.ends_with("-medium")
+        || lower.ends_with("-low")
+        || lower.ends_with("-extra-low")
+        || lower.ends_with("-tiered")
+        || lower.ends_with("-preview")
+        || lower.ends_with("-agent")
+        || lower.ends_with("-thinking")
+        || lower.ends_with("-image")
+        || lower.contains("-high-")
+        || lower.contains("-medium-")
+        || lower.contains("-low-")
+        || lower.contains("-tiered-")
+    {
+        return false;
+    }
+    // 检查版本号是否 >= 3.6
+    if let Some(idx) = lower.find("gemini-") {
+        let rest = &lower[idx + "gemini-".len()..];
+        let version_part: String = rest
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '.')
+            .collect();
+        if let Ok(ver) = version_part.parse::<f32>() {
+            return ver >= 3.6;
+        }
+    }
+    false
+}
+
+/// 检查模型是否匹配 `gemini-3.x-flash` 通配符且 x > 8（例如 gemini-3.9-flash, gemini-3.10-flash 等）。
+/// 若匹配且 x > 8，统一转为 3.x-flash-tiered 模型（如 "gemini-3.9-flash-tiered"）。
+/// 严格要求：x 必须大于 8，对于 3.6 / 3.7 / 3.8 等模型由专用预设接管，3.5 及其以下严格排除。
+pub fn resolve_gemini_3x_flash_tiered(model: &str) -> Option<String> {
+    let lower = model.to_lowercase();
+    let prefix = "gemini-3.";
+    let suffix = "-flash";
+    if lower.starts_with(prefix) && lower.ends_with(suffix) {
+        let middle = &lower[prefix.len()..lower.len() - suffix.len()];
+        if let Ok(x) = middle.parse::<f32>() {
+            if x > 8.0 {
+                return Some(format!("gemini-3.{}-flash-tiered", middle));
+            }
+        }
+    }
+    None
+}
+
 /// 依据系统 Thinking Budget 配置以及当前模型与请求参数，在协议归一化后统一解析应当发送到上游的思考预算。
 /// 返回：
 /// 归一化客户端上送的思考等级字段（包括 max, xhigh, high, medium, low, min, extra-low 等）
@@ -439,25 +494,63 @@ pub fn resolve_custom_budget(
         }
     } else if is_flash {
         // 3.3 Gemini Flash 系列
-        if tb_config.flash_mode == ThinkingBudgetMode::Default {
-            return None;
-        }
         if is_tiered_flash_model(&std_id) || lower.contains("tiered") {
-            if tb_config.flash_tiered > 0 {
-                Some(tb_config.flash_tiered as i64)
+            // [TIERED-THINKING] Tiered 自适应模型：
+            // 支持客户端接收无后缀的思考参数（low / medium / high）来切换档位（忽略客户端数字 budget），
+            // 分别对应网关在思考板块中配置的 flash_low, flash_medium, flash_high。
+            // 思考参数在没选择客户端回传模式（Gateway模式）下，统一只给 tiered 模型操控！
+            let client_level = client_effort.and_then(normalize_client_thinking_level);
+            if let Some(level) = client_level {
+                match level {
+                    "LOW" => {
+                        if tb_config.flash_low > 0 {
+                            Some(tb_config.flash_low as i64)
+                        } else {
+                            None
+                        }
+                    }
+                    "HIGH" => {
+                        if tb_config.flash_high > 0 {
+                            Some(tb_config.flash_high as i64)
+                        } else {
+                            None
+                        }
+                    }
+                    _ => {
+                        // MEDIUM
+                        if tb_config.flash_medium > 0 {
+                            Some(tb_config.flash_medium as i64)
+                        } else {
+                            None
+                        }
+                    }
+                }
             } else {
-                None // 默认 -1 走自适应
+                // 客户端未传思考参数：
+                // 预算默认是按照他们在思考预算模块填的：
+                // 如果选的是默认模式或者自定义填了 -1，则按照填的（即 None 自适应，不填预算）；
+                // 否则如果自定义填写了 > 0 的具体数值，则按填的返回；其他一律按照 -1 即不填预算。
+                if tb_config.flash_mode == ThinkingBudgetMode::Default {
+                    None
+                } else if tb_config.flash_tiered > 0 {
+                    Some(tb_config.flash_tiered as i64)
+                } else {
+                    None
+                }
             }
         } else {
-            let eff = client_effort.map(|s| s.trim().to_lowercase());
+            // [NON-TIERED FLASH] 具名非 Tiered 模型（如 gemini-3.7-flash-high, gemini-3.5-flash-low 等）：
+            // 规则：“思考参数在没选择客户端回传的模式下 统一只给 tiered 模型操控”
+            // 非 tiered 模型在网关控制下由模型名称自带的后缀锁死档位，严禁受客户端 effort 篡改或降级！
+            if tb_config.flash_mode == ThinkingBudgetMode::Default {
+                return None;
+            }
             let is_high = lower.contains("-high")
                 || lower.ends_with("-high")
                 || lower.contains("-max")
-                || lower.contains("agent")
-                || matches!(eff.as_deref(), Some("high") | Some("max") | Some("xhigh"));
-            let is_low = lower.contains("-low")
-                || lower.ends_with("-low")
-                || matches!(eff.as_deref(), Some("low") | Some("extra-low"));
+                || lower.contains("agent");
+            let is_low =
+                lower.contains("-low") || lower.ends_with("-low") || lower.contains("-extra-low");
 
             if is_high {
                 if tb_config.flash_high > 0 {
@@ -670,5 +763,147 @@ mod tests {
             resolve_authoritative_thinking_budget("gemini-3.1-pro", None, Some(1000), None),
             10001
         );
+    }
+
+    #[test]
+    fn test_bare_gemini_v36_or_above_flash() {
+        assert!(is_bare_gemini_v36_or_above_flash("gemini-3.6-flash"));
+        assert!(is_bare_gemini_v36_or_above_flash("gemini-3.7-flash"));
+        assert!(is_bare_gemini_v36_or_above_flash("gemini-3.8-flash"));
+        assert!(is_bare_gemini_v36_or_above_flash("gemini-3.9-flash"));
+        assert!(is_bare_gemini_v36_or_above_flash("gemini-4.0-flash"));
+        assert!(is_bare_gemini_v36_or_above_flash("GEMINI-3.7-FLASH"));
+
+        // 3.5 及其以下不命中
+        assert!(!is_bare_gemini_v36_or_above_flash("gemini-3.5-flash"));
+        assert!(!is_bare_gemini_v36_or_above_flash("gemini-3-flash"));
+        assert!(!is_bare_gemini_v36_or_above_flash("gemini-2.5-flash"));
+
+        // 已有显式后缀或变体标记的不命中
+        assert!(!is_bare_gemini_v36_or_above_flash("gemini-3.7-flash-high"));
+        assert!(!is_bare_gemini_v36_or_above_flash(
+            "gemini-3.7-flash-medium"
+        ));
+        assert!(!is_bare_gemini_v36_or_above_flash("gemini-3.7-flash-low"));
+        assert!(!is_bare_gemini_v36_or_above_flash(
+            "gemini-3.7-flash-tiered"
+        ));
+        assert!(!is_bare_gemini_v36_or_above_flash(
+            "gemini-3.8-flash-tiered"
+        ));
+        assert!(!is_bare_gemini_v36_or_above_flash("gemini-3.7-pro"));
+    }
+
+    #[test]
+    fn test_tiered_flash_budget_and_client_effort() {
+        let mut tb = crate::proxy::config::ThinkingBudgetConfig::default();
+        tb.flash_mode = crate::proxy::config::ThinkingBudgetMode::Custom;
+        tb.flash_low = 1024;
+        tb.flash_medium = 4096;
+        tb.flash_high = 16384;
+        tb.flash_tiered = -1;
+
+        // 1. 无思考参数，且 flash_tiered 为 -1：返回 None（自适应不填预算）
+        assert_eq!(
+            resolve_custom_budget("gemini-3.7-flash-tiered", None, None, &tb, None),
+            None
+        );
+
+        // 2. 忽略客户端传入的数字 budget，无 effort 依然返回 None
+        assert_eq!(
+            resolve_custom_budget("gemini-3.7-flash-tiered", None, Some(9999), &tb, None),
+            None
+        );
+
+        // 3. 客户端传入思考参数 low / medium / high：分别映射到网关设置的 flash_low, flash_medium, flash_high
+        assert_eq!(
+            resolve_custom_budget(
+                "gemini-3.7-flash-tiered",
+                Some("low"),
+                Some(5000),
+                &tb,
+                None
+            ),
+            Some(1024)
+        );
+        assert_eq!(
+            resolve_custom_budget(
+                "gemini-3.7-flash-tiered",
+                Some("extra-low"),
+                None,
+                &tb,
+                None
+            ),
+            Some(1024)
+        );
+        assert_eq!(
+            resolve_custom_budget("gemini-3.7-flash-tiered", Some("medium"), None, &tb, None),
+            Some(4096)
+        );
+        assert_eq!(
+            resolve_custom_budget("gemini-3.7-flash-tiered", Some("high"), None, &tb, None),
+            Some(16384)
+        );
+        assert_eq!(
+            resolve_custom_budget(
+                "gemini-3.7-flash-tiered",
+                Some("max"),
+                Some(2048),
+                &tb,
+                None
+            ),
+            Some(16384)
+        );
+
+        // 4. 网关自定义 flash_tiered 为正数，且客户端无思考参数：返回自定义正数
+        tb.flash_tiered = 8192;
+        assert_eq!(
+            resolve_custom_budget("gemini-3.7-flash-tiered", None, None, &tb, None),
+            Some(8192)
+        );
+
+        // 5. 默认模式 (Default)，无思考参数：返回 None（自适应不填预算）
+        tb.flash_mode = crate::proxy::config::ThinkingBudgetMode::Default;
+        assert_eq!(
+            resolve_custom_budget("gemini-3.7-flash-tiered", None, None, &tb, None),
+            None
+        );
+
+        // 6. 具名非 tiered 模型 (gemini-3.7-flash-high)：在 Gateway 模式下锁死由模型后缀决定的档位，不受客户端 effort 篡改
+        tb.flash_mode = crate::proxy::config::ThinkingBudgetMode::Custom;
+        assert_eq!(
+            resolve_custom_budget("gemini-3.7-flash-high", Some("low"), None, &tb, None),
+            Some(16384) // 依然保持 high 档位设置 16384，绝不被客户端 low 降级！
+        );
+    }
+
+    #[test]
+    fn test_resolve_gemini_3x_flash_tiered_wildcard() {
+        // x > 8 命中转为 3.x-flash-tiered
+        assert_eq!(
+            resolve_gemini_3x_flash_tiered("gemini-3.9-flash"),
+            Some("gemini-3.9-flash-tiered".to_string())
+        );
+        assert_eq!(
+            resolve_gemini_3x_flash_tiered("gemini-3.10-flash"),
+            Some("gemini-3.10-flash-tiered".to_string())
+        );
+        assert_eq!(
+            resolve_gemini_3x_flash_tiered("gemini-3.9.1-flash"),
+            Some("gemini-3.9.1-flash-tiered".to_string())
+        );
+
+        // x <= 8 必须返回 None，严格由专用映射接管
+        assert_eq!(resolve_gemini_3x_flash_tiered("gemini-3.8-flash"), None);
+        assert_eq!(resolve_gemini_3x_flash_tiered("gemini-3.7-flash"), None);
+        assert_eq!(resolve_gemini_3x_flash_tiered("gemini-3.6-flash"), None);
+        assert_eq!(resolve_gemini_3x_flash_tiered("gemini-3.5-flash"), None);
+
+        // 已经带有后缀或非 flash 模型不命中
+        assert_eq!(
+            resolve_gemini_3x_flash_tiered("gemini-3.9-flash-high"),
+            None
+        );
+        assert_eq!(resolve_gemini_3x_flash_tiered("gemini-3.9-pro"), None);
     }
 }

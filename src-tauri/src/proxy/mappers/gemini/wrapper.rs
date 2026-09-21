@@ -666,25 +666,39 @@ pub fn wrap_request_v2(
             );
         }
 
-        // [AUTHORITATIVE RESOLUTION] 全协议统一解析思考预算：
-        // - 启发式模型强制锁死对应字典预算，彻底忽略客户端参数
-        // - 裸模型由客户端 thinkingLevel 接管（HIGH/MAX->10000/10001, LOW/EXTRA-LOW->1000/1001, MEDIUM/DEFAULT->4000/10001）
-        // - 试图关闭或未填：绝不关闭，兜底填充 -medium (4000/10001)
-        if let Some(thinking_config) = gen_config.get_mut("thinkingConfig") {
-            let client_level = thinking_config
-                .get("thinkingLevel")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            let client_budget = thinking_config
-                .get("thinkingBudget")
-                .and_then(|v| v.as_i64());
+        // [AUTHORITATIVE RESOLUTION] 全协议统一由进站流水线节点解析思考预算
+        let has_thinking_config = gen_config.contains_key("thinkingConfig");
+        let client_level = gen_config
+            .get("thinkingConfig")
+            .and_then(|t| t.get("thinkingLevel"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let client_budget = gen_config
+            .get("thinkingConfig")
+            .and_then(|t| t.get("thinkingBudget"))
+            .and_then(|v| v.as_i64());
 
-            let tb_config = crate::proxy::config::get_thinking_budget_config();
-            thinking_config["includeThoughts"] = json!(true);
+        let tb_config = crate::proxy::config::get_thinking_budget_config();
+        let budget_opt = if has_thinking_config || force_server_thinking {
+            let mut gc_val = serde_json::Value::Object(std::mem::take(gen_config));
+            let resolved =
+                crate::proxy::pipeline::InboundThinkingPipeline::configure_inbound_thinking(
+                    final_model_name,
+                    &mut gc_val,
+                    client_level.as_deref(),
+                    client_budget.filter(|b| *b > 0).map(|b| b as u64),
+                    token,
+                );
+            if let serde_json::Value::Object(map) = gc_val {
+                *gen_config = map;
+            }
+            resolved
+        } else {
+            None
+        };
 
-            if tb_config.control_source == crate::proxy::config::ThinkingControlSource::Client {
-                // 客户端直接控制模式：
-                // 1. 若客户端携带 thinkingLevel (如 HIGH, LOW, MAX, MEDIUM 等)，归一化后完整透传
+        if tb_config.control_source == crate::proxy::config::ThinkingControlSource::Client {
+            if let Some(thinking_config) = gen_config.get_mut("thinkingConfig") {
                 if let Some(ref lvl) = client_level {
                     if let Some(norm_lvl) =
                         crate::proxy::model_specs::normalize_client_thinking_level(lvl)
@@ -699,7 +713,6 @@ pub fn wrap_request_v2(
                         thinking_config["thinkingLevel"] = json!(final_lvl);
                     }
                 }
-                // 2. 若客户端携带 thinkingBudget，忠实透传
                 if let Some(b) = client_budget {
                     if b > 0 {
                         thinking_config["thinkingBudget"] = json!(b);
@@ -709,38 +722,18 @@ pub fn wrap_request_v2(
                         }
                     }
                 }
-            } else {
-                // 网关权威控制模式：
-                let budget_opt = crate::proxy::model_specs::resolve_custom_budget(
-                    final_model_name,
-                    client_level.as_deref(),
-                    client_budget.map(|b| b as u64),
-                    &tb_config,
-                    token,
-                );
-
-                if let Some(final_budget) = budget_opt {
-                    tracing::info!(
-                        "[Gemini-Wrap] Authoritative thinking budget {} for {} (client_level={:?})",
-                        final_budget,
-                        final_model_name,
-                        client_level
-                    );
-                    thinking_config["thinkingBudget"] = json!(final_budget);
-                } else {
-                    tracing::info!(
-                        "[Gemini-Wrap] Adaptive thinking (no thinkingBudget) for {} (client_level={:?})",
-                        final_model_name,
-                        client_level
-                    );
-                    if let Some(tc) = thinking_config.as_object_mut() {
-                        tc.remove("thinkingBudget");
-                    }
-                }
-                if let Some(tc) = thinking_config.as_object_mut() {
-                    tc.remove("thinkingLevel");
-                }
             }
+        } else if let Some(tc) = gen_config
+            .get_mut("thinkingConfig")
+            .and_then(|v| v.as_object_mut())
+        {
+            tracing::info!(
+                "[Gemini-Wrap] Pipeline thinking budget {:?} for {} (client_level={:?})",
+                budget_opt,
+                final_model_name,
+                client_level
+            );
+            tc.remove("thinkingLevel");
         }
 
         // [FIX #1747] Ensure max_tokens (maxOutputTokens) is greater than thinking_budget

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, startTransition } from 'react';
 import { Save, Github, User, MessageCircle, ExternalLink, RefreshCw, Heart, Coffee, LayoutDashboard, Users, Network, Activity, BarChart3, Settings as SettingsIcon, Lock, CheckCircle2, Globe, Send } from 'lucide-react';
 import { request as invoke } from '../utils/request';
 import { open } from '@tauri-apps/plugin-dialog';
@@ -41,7 +41,7 @@ function Settings() {
     const { config, loadConfig, saveConfig, updateLanguage, updateTheme } = useConfigStore();
     const { enable, disable, isEnabled } = useDebugConsole();
     const [activeTab, setActiveTab] = useState<'general' | 'account' | 'proxy' | 'advanced' | 'debug' | 'about'>('general');
-    const [appVersion, setAppVersion] = useState<string>('4.7.11');
+    const [appVersion, setAppVersion] = useState<string>('4.7.12');
     const [formData, setFormData] = useState<AppConfig>({
         language: 'zh',
         theme: 'system',
@@ -478,7 +478,7 @@ function Settings() {
                                 ? 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm'
                                 : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
                                 }`}
-                            onClick={() => setActiveTab('general')}
+                            onClick={() => startTransition(() => setActiveTab('general'))}
                         >
                             {t('settings.tabs.general')}
                         </button>
@@ -487,7 +487,7 @@ function Settings() {
                                 ? 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm'
                                 : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
                                 }`}
-                            onClick={() => setActiveTab('account')}
+                            onClick={() => startTransition(() => setActiveTab('account'))}
                         >
                             {t('settings.tabs.account')}
                         </button>
@@ -496,7 +496,7 @@ function Settings() {
                                 ? 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm'
                                 : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
                                 }`}
-                            onClick={() => setActiveTab('proxy')}
+                            onClick={() => startTransition(() => setActiveTab('proxy'))}
                         >
                             {t('settings.tabs.proxy')}
                         </button>
@@ -505,7 +505,7 @@ function Settings() {
                                 ? 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm'
                                 : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
                                 }`}
-                            onClick={() => setActiveTab('advanced')}
+                            onClick={() => startTransition(() => setActiveTab('advanced'))}
                         >
                             {t('settings.tabs.advanced')}
                         </button>
@@ -514,7 +514,7 @@ function Settings() {
                                 ? 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm'
                                 : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
                                 }`}
-                            onClick={() => setActiveTab('debug')}
+                            onClick={() => startTransition(() => setActiveTab('debug'))}
                         >
                             {t('settings.tabs.debug')}
                         </button>
@@ -523,7 +523,7 @@ function Settings() {
                                 ? 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm'
                                 : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
                                 }`}
-                            onClick={() => setActiveTab('about')}
+                            onClick={() => startTransition(() => setActiveTab('about'))}
                         >
                             {t('settings.tabs.about')}
                         </button>
@@ -554,7 +554,10 @@ function Settings() {
                                     onChange={(e) => {
                                         const newLang = e.target.value;
                                         setFormData({ ...formData, language: newLang });
-                                        i18n.changeLanguage(newLang);
+                                        document.documentElement.dir = newLang === 'ar' ? 'rtl' : 'ltr';
+                                        startTransition(() => {
+                                            i18n.changeLanguage(newLang);
+                                        });
                                         updateLanguage(newLang);
                                     }}
                                 >

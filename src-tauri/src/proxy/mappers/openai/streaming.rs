@@ -149,6 +149,8 @@ where
                                                                             let mut hasher = std::collections::hash_map::DefaultHasher::new();
                                                                             use std::hash::{Hash, Hasher};
                                                                             serde_json::to_string(func_call).unwrap_or_default().hash(&mut hasher);
+                                                                            tool_call_index.hash(&mut hasher);
+                                                                            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos().hash(&mut hasher);
                                                                             format!("call_{:x}", hasher.finish())
                                                                         });
 
@@ -768,6 +770,8 @@ where
                                                                         let mut hasher = std::collections::hash_map::DefaultHasher::new();
                                                                         use std::hash::{Hash, Hasher};
                                                                         call_key.hash(&mut hasher);
+                                                                        sequence_number.hash(&mut hasher);
+                                                                        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos().hash(&mut hasher);
                                                                         format!("call_{:x}", hasher.finish())
                                                                     });
 

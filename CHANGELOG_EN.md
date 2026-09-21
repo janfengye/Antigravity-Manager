@@ -3,6 +3,29 @@
 > Complete version history for Antigravity Tools. Return to project home at [README_EN.md](README_EN.md).
 
 *   **Version History**:
+    *   **v4.7.12 (2026-09-21)**:
+        -   **[Cross-Model Thinking Signature Fallback & Retroactive Cache Purification] Eliminate 400 Validation Interceptions & 503 Deadlocks on Model Switching (PR #3496, Fixes #3494)**:
+            -   **Inbound Pipeline Heterogeneous Signature Guard**: Enforces protocol-agnostic signature verification in `InboundThinkingPipeline`. When detecting incompatible foreign thinking signatures across model switches (e.g. Claude to Gemini), automatically down-ranks them to standard sentinels (`skip_thought_signature_validator`) and purges dirty signatures from `functionCall` parts, stopping HTTP 400 validation failures before egress.
+            -   **Targeted Cache & Database Purification**: During retries and model handoffs, `purge_foreign_signatures_for_session_with_model` cleanly strips corrupted signatures from memory and SQLite (`thinking_records`) while preserving pure thought text and healthy history turns.
+            -   **Clean Text Turn Decoupling**: Plain text turns strictly omit sentinels to guarantee clean context across multi-turn reasoning workflows.
+        -   **[UTF-8 Character Boundary Truncation Rust Panic Elimination] (PR #3496, Fixes #3493)**:
+            -   **Safe Multi-Byte Alignment Infrastructure**: Completely resolved Rust thread panics (`end byte index 57 is not a char boundary`) caused by raw byte slicing `[..57]` inside multi-byte characters in `normalize_and_sanitize_tool_args`. Introduced `safe_truncate_str` and `safe_truncate_chars` in `common_utils.rs` to automatically rewind to valid UTF-8 boundaries.
+            -   **Full Codebase Audit**: Hardened raw byte slices across `upstream/client.rs`, `tool_result_compressor.rs`, `payload_audit.rs`, and `claude/streaming.rs`, accompanied by dedicated multi-byte regression tests.
+        -   **[400/429/503 False Positive Throttling Elimination & Flash Adaptive Routing] (PR #3496, Fixes #3468)**:
+            -   **Flash 404 Lockout Remediation & Tiered Routing**: Overhauled routing for unadorned `-flash` models; Gemini 3.5+ flash models are adaptively directed to tiered variants, dynamically scaling between low, medium, and high thinking effort.
+            -   **Eliminate 404/500/503 Self-Lockout**: Removed faulty 404 account cooldown logic and passed through raw upstream diagnostics. Established `UpstreamClassification` in `pipeline/policy.rs` for unified pipeline arbitration.
+            -   **Tool Call Command Restoration**: Restored `command` parameter sanitization logic to prevent premature parameter stripping and ensure lossless tool invocation semantics.
+        -   **[Dashboard Account Quota Real-Time Updates & Health Matrix Refactor] (PR #3496, Fixes #3492, #3495)**:
+            -   **Real-Time Selected Account Quota**: Overhauled Dashboard health array and productivity metrics, defaulting to selected active account quotas with one-click toggling for all accounts.
+            -   **High-Contrast Pill Selector & Async Scheduling**: Added dual-state pill controllers across 12 languages and integrated React `startTransition` to eliminate UI switching latency.
+            -   **Account Management Crash Hardening (Fixes #3495)**: Added null-safe fallbacks (`group.buckets || []`), aligned TypeScript contracts, and added Rust `#[serde(default)]` to resolve `TypeError: Cannot read properties of null (reading 'filter')`.
+        -   **[Log Viewer Virtual Scroll Precision & Non-Streaming Thinking Capture] (PR #3496)**:
+            -   **Geometric Offset Jump**: Corrected text wrap search offsets in the virtualized log viewer using physical geometric differentials.
+            -   **Claude Non-Streaming Signatures**: Resolved missing thinking signatures in Claude non-streaming responses, and added Excel-style draggable column widths to the traffic monitor table.
+        -   **[One-Click Atomic Version Bumper & Release SOP] (PR #3496)**:
+            -   **11-File Atomic Synchronization**: Added `scripts/bump-version.mjs` to atomically synchronize 11 configuration files with SemVer monotonicity checks, CRLF/LF adaptation, and headless Cargo.lock syncing, registered via `npm run bump`.
+            -   **Release SOP & Architectural Guidelines**: Authored `docs/RELEASE_GUIDE.md` for standard three-step releases and committed `AGENTS.md` architectural standards and mandatory formatting gates.
+
     *   **v4.7.11 (2026-09-21)**:
         -   **[Account Management & Quota Null-Safety Hardening] Fix TypeError: Cannot read properties of null (reading 'filter') Crash on Accounts Page (Fixes #3491)**:
             -   **Defensive Quota Bucket Access**: Resolved crashes caused by direct `.filter()` / `.map()` / `.some()` invocations on `group.buckets` across `AccountCard`, `AccountTable`, `quotaDisplay`, `Dashboard`, and `AccountDetailsDialog` by adding optional chaining and fallback empty arrays (`group.buckets || []`), preventing unexpected application errors when inspecting legacy or incomplete quota snapshots.

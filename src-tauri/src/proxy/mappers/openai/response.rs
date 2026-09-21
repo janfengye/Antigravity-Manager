@@ -1,5 +1,6 @@
 // OpenAI 协议响应转换模块
 use super::models::*;
+use crate::proxy::mappers::common_utils::safe_truncate_chars;
 use serde_json::Value;
 
 pub fn is_shell_or_terminal_tool(tool_name: &str) -> bool {
@@ -445,9 +446,9 @@ pub fn normalize_and_sanitize_tool_args(tool_name: &str, args: &mut Value) {
                 .and_then(|v| v.as_str())
                 .unwrap_or("Execute shell command")
                 .trim();
-            // 取命令的前 60 字符作为简要描述
-            let auto_desc = if cmd_str.len() > 60 {
-                format!("Run: {}...", &cmd_str[..57])
+            // 取命令的前 60 字符作为简要描述 (Issue #3493: 保证 UTF-8 字符边界安全，杜绝多字节截断 Panic)
+            let auto_desc = if cmd_str.chars().nth(60).is_some() {
+                format!("Run: {}...", safe_truncate_chars(cmd_str, 57))
             } else if !cmd_str.is_empty() {
                 format!("Run: {}", cmd_str)
             } else {
@@ -1140,5 +1141,48 @@ mod tests {
         assert_eq!(args["script"], "// Auto workflow\nreturn 42;");
         assert_eq!(args["meta"]["name"], "dsh_workflow_task");
         assert_eq!(args["meta"]["description"], "Auto workflow");
+    }
+
+    #[test]
+    fn test_normalize_and_sanitize_tool_args_utf8_char_boundary_issue_3493() {
+        // [Issue #3493] 验证第 57 字节落在 3 字节中文字符内部时不会发生切片 Panic
+        // 构造：55 字节 ASCII + "区域划分测试" ('区' 占用字节 55..58，第 57 字节正好落在 '区' 中间)
+        let prefix = "a".repeat(55);
+        let command_with_chinese = format!("{}区域划分测试", prefix);
+        assert!(!command_with_chinese.is_char_boundary(57));
+
+        let mut args = json!({
+            "command": command_with_chinese
+        });
+
+        // 在 issue 修复前，此处会直接 panic:
+        // "end byte index 57 is not a char boundary; it is inside '区' (bytes 55..58 of string)"
+        normalize_and_sanitize_tool_args("shell", &mut args);
+
+        let desc = args["description"]
+            .as_str()
+            .expect("description should exist");
+        assert!(desc.starts_with("Run: "));
+        assert!(desc.ends_with("..."));
+
+        // 验证超长纯中文命令
+        let chinese_cmd = "这是一个包含很多中文字符的超长测试命令用于验证UTF8字符边界截断绝对安全不会发生任何恐慌";
+        let mut args_chinese = json!({
+            "command": chinese_cmd
+        });
+        normalize_and_sanitize_tool_args("shell", &mut args_chinese);
+        let desc_chinese = args_chinese["description"].as_str().unwrap();
+        assert!(desc_chinese.starts_with("Run: "));
+        assert!(desc_chinese.ends_with("..."));
+
+        // 验证 Emoji 命令 (4 字节字符)
+        let emoji_cmd = "echo 🦀🎉🚀🐱🐶🐼🦊🐰🐯🦁🐮🐷🐸🐵🐔🐧🐦🐤🐣🐺🐗🐴🦄🐝🐛🦋🐌🐞🐜🪲🪳🦟🦗🕷️";
+        let mut args_emoji = json!({
+            "command": emoji_cmd
+        });
+        normalize_and_sanitize_tool_args("shell", &mut args_emoji);
+        let desc_emoji = args_emoji["description"].as_str().unwrap();
+        assert!(desc_emoji.starts_with("Run: "));
+        assert!(desc_emoji.ends_with("..."));
     }
 }

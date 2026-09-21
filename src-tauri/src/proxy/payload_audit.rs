@@ -62,7 +62,10 @@ pub fn redact_header_value(name: &str, value: &str) -> String {
         return value.to_string();
     }
     let trimmed = value.trim();
-    if trimmed.len() >= 7 && trimmed[..7].eq_ignore_ascii_case("bearer ") {
+    if trimmed
+        .get(..7)
+        .map_or(false, |p| p.eq_ignore_ascii_case("bearer "))
+    {
         return "Bearer ***REDACTED***".to_string();
     }
     "***REDACTED***".to_string()

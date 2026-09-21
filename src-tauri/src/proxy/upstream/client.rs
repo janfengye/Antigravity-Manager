@@ -53,9 +53,12 @@ pub fn sanitize_error_for_log(error_text: &str) -> String {
     let re_bearer = regex::Regex::new(r#"(?i)(bearer\s+)[^"'\\\s,}\]]+"#).unwrap();
     let redacted = re_bearer.replace_all(&redacted, "$1<redacted>");
 
-    // 限制长度防止日志炸弹
+    // 限制长度防止日志炸弹 (UTF-8 字符边界安全保护)
     if redacted.len() > 1000 {
-        format!("{}... (truncated)", &redacted[..1000])
+        format!(
+            "{}... (truncated)",
+            crate::proxy::mappers::common_utils::safe_truncate_str(&redacted, 1000)
+        )
     } else {
         redacted.into_owned()
     }

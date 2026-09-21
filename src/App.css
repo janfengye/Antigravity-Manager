@@ -97,6 +97,7 @@ a {
 /* 日志报文虚拟滚动条 - 高性能高对比度响应式滚动条 */
 .payload-viewer-scroll {
   scroll-behavior: auto !important;
+  overflow-anchor: none;
   scrollbar-width: thin;
   scrollbar-color: rgba(156, 163, 175, 0.5) transparent;
 }

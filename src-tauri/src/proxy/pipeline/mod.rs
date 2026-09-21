@@ -15,5 +15,5 @@ pub mod usage;
 pub use events::CanonicalStreamEvent;
 pub use inbound::InboundThinkingPipeline;
 pub use outbound::{CanonicalEgressPayload, OutboundThinkingPipeline};
-pub use policy::ProxyProtocol;
+pub use policy::{ProxyProtocol, UpstreamClassification};
 pub use usage::CanonicalUsage;

@@ -3156,6 +3156,9 @@ impl TokenManager {
         backoff_steps: &[u64],
         parser_mode: TrackerParserMode,
     ) -> Option<crate::proxy::rate_limit::RateLimitInfo> {
+        if status != 429 && status != 529 {
+            return None;
+        }
         if model
             .and_then(crate::proxy::rate_limit::normalize_image_model_id)
             .is_some()
@@ -3317,6 +3320,23 @@ impl TokenManager {
         model: Option<&str>,
         parser_mode: TrackerParserMode,
     ) {
+        // 关键门禁 1：仅对真正的上游 429 (配额耗尽/速率限制) 和 529 (Overloaded) 记录限流；500/503/404 等绝对不打入冷却池！
+        if status != 429 && status != 529 {
+            return;
+        }
+
+        // 关键门禁 2：内部错误文字（All accounts limited / No accounts available / Token pool is empty 等）严禁递归自锁！
+        let lower_err = error_body.to_lowercase();
+        if lower_err.contains("all accounts limited")
+            || lower_err.contains("no accounts available")
+            || lower_err.contains("all accounts failed")
+            || lower_err.contains("token pool is empty")
+            || lower_err.contains("all accounts exhausted")
+            || lower_err.contains("all accounts unhealthy")
+        {
+            return;
+        }
+
         let normalized_model =
             model.and_then(crate::proxy::common::model_mapping::normalize_to_standard_id);
         let model_to_track = normalized_model.as_deref().or(model);
@@ -4046,14 +4066,9 @@ fn truncate_reason(reason: &str, max_len: usize) -> String {
     if reason.len() <= max_len {
         reason.to_string()
     } else {
-        // [FIX] 确保字符截断在有效边界，防止 panic
-        let end = reason
-            .char_indices()
-            .map(|(i, _)| i)
-            .filter(|&i| i <= max_len - 3)
-            .last()
-            .unwrap_or(0);
-        format!("{}...", &reason[..end])
+        let budget = max_len.saturating_sub(3);
+        let end = crate::proxy::mappers::common_utils::safe_truncate_str(reason, budget);
+        format!("{}...", end)
     }
 }
 

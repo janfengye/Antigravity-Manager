@@ -54,28 +54,174 @@ interface LogTableProps {
     t: any;
 }
 
+interface ColumnWidths {
+    status: number;
+    method: number;
+    model: number;
+    protocol: number;
+    account: number;
+    path: number;
+    usage: number;
+    duration: number;
+    time: number;
+}
+
+const DEFAULT_COL_WIDTHS: ColumnWidths = {
+    status: 65,
+    method: 65,
+    model: 240,
+    protocol: 80,
+    account: 150,
+    path: 180,
+    usage: 125,
+    duration: 85,
+    time: 85,
+};
+
 const LogTable: React.FC<LogTableProps> = ({
     logs,
     loading,
     onLogClick,
     t
 }) => {
+    const [colWidths, setColWidths] = useState<ColumnWidths>(() => {
+        try {
+            const saved = localStorage.getItem('proxy_log_col_widths');
+            if (saved) {
+                return { ...DEFAULT_COL_WIDTHS, ...JSON.parse(saved) };
+            }
+        } catch {}
+        return DEFAULT_COL_WIDTHS;
+    });
+
+    // 类似 Excel 的鼠标拖拽调整表头列宽机制
+    const handleResizeStart = (colKey: keyof ColumnWidths, e: React.MouseEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const startX = e.clientX;
+        const startWidth = colWidths[colKey];
+
+        const originalCursor = document.body.style.cursor;
+        const originalUserSelect = document.body.style.userSelect;
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+
+        const onMouseMove = (moveEvent: MouseEvent) => {
+            const diff = moveEvent.clientX - startX;
+            const newWidth = Math.max(45, startWidth + diff);
+            setColWidths((prev) => ({
+                ...prev,
+                [colKey]: newWidth,
+            }));
+        };
+
+        const onMouseUp = (upEvent: MouseEvent) => {
+            document.body.style.cursor = originalCursor;
+            document.body.style.userSelect = originalUserSelect;
+            window.removeEventListener('mousemove', onMouseMove);
+            window.removeEventListener('mouseup', onMouseUp);
+
+            const finalDiff = upEvent.clientX - startX;
+            const finalWidth = Math.max(45, startWidth + finalDiff);
+            setColWidths((prev) => {
+                const next = { ...prev, [colKey]: finalWidth };
+                try {
+                    localStorage.setItem('proxy_log_col_widths', JSON.stringify(next));
+                } catch {}
+                return next;
+            });
+        };
+
+        window.addEventListener('mousemove', onMouseMove);
+        window.addEventListener('mouseup', onMouseUp);
+    };
+
+    const totalTableWidth = useMemo(() => {
+        return Object.values(colWidths).reduce((a, b) => a + b, 0);
+    }, [colWidths]);
+
     return (
         <div
-            className="flex-1 overflow-y-auto overflow-x-auto bg-white dark:bg-base-100"
+            className="flex-1 overflow-y-auto overflow-x-auto bg-white dark:bg-base-100 relative scrollbar-thin"
         >
-            <table className="table table-sm w-full border-separate border-spacing-0">
+            <table
+                className="table table-sm border-separate border-spacing-0"
+                style={{ minWidth: `${totalTableWidth}px`, width: `${totalTableWidth}px`, tableLayout: 'fixed' }}
+            >
                 <thead className="bg-gray-100/90 dark:bg-base-200 text-gray-700 dark:text-gray-200 text-xs font-semibold sticky top-0 z-10 backdrop-blur-sm border-b border-gray-200 dark:border-base-300">
                     <tr>
-                        <th style={{ width: '65px' }} className="py-2.5 px-3">{t('monitor.table.status')}</th>
-                        <th style={{ width: '65px' }} className="py-2.5 px-3">{t('monitor.table.method')}</th>
-                        <th style={{ width: '220px' }} className="py-2.5 px-3">{t('monitor.table.model')}</th>
-                        <th style={{ width: '80px' }} className="py-2.5 px-3">{t('monitor.table.protocol')}</th>
-                        <th style={{ width: '150px' }} className="py-2.5 px-3">{t('monitor.table.account')}</th>
-                        <th style={{ width: '180px' }} className="py-2.5 px-3">{t('monitor.table.path')}</th>
-                        <th className="text-right py-2.5 px-3 whitespace-nowrap" style={{ width: '115px', minWidth: '115px' }}>{t('monitor.table.usage')}</th>
-                        <th className="text-right py-2.5 px-3" style={{ width: '85px' }}>{t('monitor.table.duration')}</th>
-                        <th className="text-right py-2.5 px-3" style={{ width: '85px' }}>{t('monitor.table.time')}</th>
+                        <th style={{ width: `${colWidths.status}px`, minWidth: `${colWidths.status}px`, maxWidth: `${colWidths.status}px` }} className="py-2.5 px-3 relative group select-none">
+                            <div className="truncate">{t('monitor.table.status')}</div>
+                            <div
+                                onMouseDown={(e) => handleResizeStart('status', e)}
+                                className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-blue-500 active:bg-blue-600 transition-colors z-20 group-hover:bg-gray-300 dark:group-hover:bg-gray-600"
+                                title="拖动调整列宽"
+                            />
+                        </th>
+                        <th style={{ width: `${colWidths.method}px`, minWidth: `${colWidths.method}px`, maxWidth: `${colWidths.method}px` }} className="py-2.5 px-3 relative group select-none">
+                            <div className="truncate">{t('monitor.table.method')}</div>
+                            <div
+                                onMouseDown={(e) => handleResizeStart('method', e)}
+                                className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-blue-500 active:bg-blue-600 transition-colors z-20 group-hover:bg-gray-300 dark:group-hover:bg-gray-600"
+                                title="拖动调整列宽"
+                            />
+                        </th>
+                        <th style={{ width: `${colWidths.model}px`, minWidth: `${colWidths.model}px`, maxWidth: `${colWidths.model}px` }} className="py-2.5 px-3 relative group select-none">
+                            <div className="truncate">{t('monitor.table.model')}</div>
+                            <div
+                                onMouseDown={(e) => handleResizeStart('model', e)}
+                                className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-blue-500 active:bg-blue-600 transition-colors z-20 group-hover:bg-gray-300 dark:group-hover:bg-gray-600"
+                                title="拖动调整列宽"
+                            />
+                        </th>
+                        <th style={{ width: `${colWidths.protocol}px`, minWidth: `${colWidths.protocol}px`, maxWidth: `${colWidths.protocol}px` }} className="py-2.5 px-3 relative group select-none">
+                            <div className="truncate">{t('monitor.table.protocol')}</div>
+                            <div
+                                onMouseDown={(e) => handleResizeStart('protocol', e)}
+                                className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-blue-500 active:bg-blue-600 transition-colors z-20 group-hover:bg-gray-300 dark:group-hover:bg-gray-600"
+                                title="拖动调整列宽"
+                            />
+                        </th>
+                        <th style={{ width: `${colWidths.account}px`, minWidth: `${colWidths.account}px`, maxWidth: `${colWidths.account}px` }} className="py-2.5 px-3 relative group select-none">
+                            <div className="truncate">{t('monitor.table.account')}</div>
+                            <div
+                                onMouseDown={(e) => handleResizeStart('account', e)}
+                                className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-blue-500 active:bg-blue-600 transition-colors z-20 group-hover:bg-gray-300 dark:group-hover:bg-gray-600"
+                                title="拖动调整列宽"
+                            />
+                        </th>
+                        <th style={{ width: `${colWidths.path}px`, minWidth: `${colWidths.path}px`, maxWidth: `${colWidths.path}px` }} className="py-2.5 px-3 relative group select-none">
+                            <div className="truncate">{t('monitor.table.path')}</div>
+                            <div
+                                onMouseDown={(e) => handleResizeStart('path', e)}
+                                className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-blue-500 active:bg-blue-600 transition-colors z-20 group-hover:bg-gray-300 dark:group-hover:bg-gray-600"
+                                title="拖动调整列宽"
+                            />
+                        </th>
+                        <th style={{ width: `${colWidths.usage}px`, minWidth: `${colWidths.usage}px`, maxWidth: `${colWidths.usage}px` }} className="text-right py-2.5 px-3 relative group select-none whitespace-nowrap">
+                            <div className="truncate">{t('monitor.table.usage')}</div>
+                            <div
+                                onMouseDown={(e) => handleResizeStart('usage', e)}
+                                className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-blue-500 active:bg-blue-600 transition-colors z-20 group-hover:bg-gray-300 dark:group-hover:bg-gray-600"
+                                title="拖动调整列宽"
+                            />
+                        </th>
+                        <th style={{ width: `${colWidths.duration}px`, minWidth: `${colWidths.duration}px`, maxWidth: `${colWidths.duration}px` }} className="text-right py-2.5 px-3 relative group select-none">
+                            <div className="truncate">{t('monitor.table.duration')}</div>
+                            <div
+                                onMouseDown={(e) => handleResizeStart('duration', e)}
+                                className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-blue-500 active:bg-blue-600 transition-colors z-20 group-hover:bg-gray-300 dark:group-hover:bg-gray-600"
+                                title="拖动调整列宽"
+                            />
+                        </th>
+                        <th style={{ width: `${colWidths.time}px`, minWidth: `${colWidths.time}px`, maxWidth: `${colWidths.time}px` }} className="text-right py-2.5 px-3 relative group select-none">
+                            <div className="truncate">{t('monitor.table.time')}</div>
+                            <div
+                                onMouseDown={(e) => handleResizeStart('time', e)}
+                                className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-blue-500 active:bg-blue-600 transition-colors z-20 group-hover:bg-gray-300 dark:group-hover:bg-gray-600"
+                                title="拖动调整列宽"
+                            />
+                        </th>
                     </tr>
                 </thead>
                 <tbody className="font-mono text-gray-800 dark:text-gray-100 text-xs divide-y divide-gray-100 dark:divide-base-200">
@@ -85,7 +231,7 @@ const LogTable: React.FC<LogTableProps> = ({
                             className="hover:bg-blue-50/80 dark:hover:bg-base-200/80 cursor-pointer transition-colors"
                             onClick={() => onLogClick(log)}
                         >
-                            <td style={{ width: '65px' }} className="py-2 px-3">
+                            <td style={{ width: `${colWidths.status}px`, maxWidth: `${colWidths.status}px` }} className="py-2 px-3 truncate">
                                 <span className={`badge badge-sm font-bold text-white border-none shadow-xs ${
                                     log.status >= 200 && log.status < 400
                                         ? 'bg-emerald-600 dark:bg-emerald-600'
@@ -94,13 +240,17 @@ const LogTable: React.FC<LogTableProps> = ({
                                     {log.status}
                                 </span>
                             </td>
-                            <td className="font-bold text-gray-900 dark:text-white py-2 px-3" style={{ width: '65px' }}>{log.method}</td>
-                            <td className="text-sky-600 dark:text-sky-400 font-semibold truncate py-2 px-3" style={{ width: '220px', maxWidth: '220px' }}>
+                            <td className="font-bold text-gray-900 dark:text-white py-2 px-3 truncate" style={{ width: `${colWidths.method}px`, maxWidth: `${colWidths.method}px` }}>{log.method}</td>
+                            <td 
+                                className="text-sky-600 dark:text-sky-400 font-semibold truncate py-2 px-3" 
+                                style={{ width: `${colWidths.model}px`, maxWidth: `${colWidths.model}px` }}
+                                title={log.mapped_model && log.model !== log.mapped_model ? `${log.model} => ${log.mapped_model}` : (log.model || '')}
+                            >
                                 {log.mapped_model && log.model !== log.mapped_model
                                     ? `${log.model} => ${log.mapped_model}`
                                     : (log.model || '-')}
                             </td>
-                            <td style={{ width: '80px' }} className="py-2 px-3">
+                            <td style={{ width: `${colWidths.protocol}px`, maxWidth: `${colWidths.protocol}px` }} className="py-2 px-3 truncate">
                                 {log.protocol && (
                                     <span className={`badge badge-xs px-2 py-0.5 font-bold text-white border-none shadow-xs ${
                                         log.protocol === 'openai' ? 'bg-emerald-600 dark:bg-emerald-600' :
@@ -114,11 +264,11 @@ const LogTable: React.FC<LogTableProps> = ({
                                     </span>
                                 )}
                             </td>
-                            <td className="text-gray-600 dark:text-gray-300 font-sans truncate text-xs py-2 px-3" style={{ width: '150px', maxWidth: '150px' }} title={log.account_email || ''}>
+                            <td className="text-gray-600 dark:text-gray-300 font-sans truncate text-xs py-2 px-3" style={{ width: `${colWidths.account}px`, maxWidth: `${colWidths.account}px` }} title={log.account_email || ''}>
                                 {log.account_email ? log.account_email.replace(/(.{3}).*(@.*)/, '$1***$2') : '-'}
                             </td>
-                            <td className="text-gray-700 dark:text-gray-300 truncate text-xs py-2 px-3" style={{ width: '180px', maxWidth: '180px' }}>{log.url}</td>
-                            <td className="text-right text-xs py-2 px-3 whitespace-nowrap" style={{ width: '115px', minWidth: '115px' }}>
+                            <td className="text-gray-700 dark:text-gray-300 truncate text-xs py-2 px-3" style={{ width: `${colWidths.path}px`, maxWidth: `${colWidths.path}px` }} title={log.url || ''}>{log.url}</td>
+                            <td className="text-right text-xs py-2 px-3 whitespace-nowrap truncate" style={{ width: `${colWidths.usage}px`, maxWidth: `${colWidths.usage}px` }}>
                                 {log.input_tokens != null && (() => {
                                     const totalIn = (log.cached_tokens && log.cached_tokens > log.input_tokens)
                                         ? log.input_tokens + log.cached_tokens
@@ -145,8 +295,8 @@ const LogTable: React.FC<LogTableProps> = ({
                                 })()}
                                 {log.output_tokens != null && <div className="text-gray-700 dark:text-gray-200">{t('monitor.output')}: <span className="font-semibold">{formatCompactNumber(log.output_tokens)}</span></div>}
                             </td>
-                            <td className="text-right text-gray-700 dark:text-gray-300 text-xs font-medium py-2 px-3" style={{ width: '85px' }}>{log.duration}ms</td>
-                            <td className="text-right text-gray-500 dark:text-gray-400 text-xs py-2 px-3" style={{ width: '85px' }}>
+                            <td className="text-right text-gray-700 dark:text-gray-300 text-xs font-medium py-2 px-3 truncate" style={{ width: `${colWidths.duration}px`, maxWidth: `${colWidths.duration}px` }}>{log.duration}ms</td>
+                            <td className="text-right text-gray-500 dark:text-gray-400 text-xs py-2 px-3 truncate" style={{ width: `${colWidths.time}px`, maxWidth: `${colWidths.time}px` }}>
                                 {new Date(log.timestamp).toLocaleTimeString()}
                             </td>
                         </tr>

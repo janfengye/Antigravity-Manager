@@ -707,15 +707,7 @@ pub async fn fetch_zai_models(
         .map_err(|e| format!("Failed to read response: {}", e))?;
 
     if !status.is_success() {
-        let preview = if text.len() > 4000 {
-            let mut end = 4000;
-            while end > 0 && !text.is_char_boundary(end) {
-                end -= 1;
-            }
-            &text[..end]
-        } else {
-            &text
-        };
+        let preview = crate::proxy::mappers::common_utils::safe_truncate_str(&text, 4000);
         return Err(format!("Upstream returned {}: {}", status, preview));
     }
 

@@ -181,15 +181,22 @@ fn compact_browser_snapshot(text: &str, max_chars: usize) -> Option<String> {
     let head_len = head_len.min(10_000).max(500);
     let tail_len = budget.saturating_sub(head_len).min(3_000);
 
-    let head = &text[..head_len.min(text.len())];
-    let tail = if tail_len > 0 && text.len() > head_len {
-        let start = text.len().saturating_sub(tail_len);
+    let head =
+        crate::proxy::mappers::common_utils::safe_truncate_str(text, head_len.min(text.len()));
+    let tail = if tail_len > 0 && text.len() > head.len() {
+        let mut start = text.len().saturating_sub(tail_len);
+        while start < text.len() && !text.is_char_boundary(start) {
+            start += 1;
+        }
         &text[start..]
     } else {
         ""
     };
 
-    let omitted = text.len().saturating_sub(head_len).saturating_sub(tail_len);
+    let omitted = text
+        .len()
+        .saturating_sub(head.len())
+        .saturating_sub(tail.len());
 
     let summarized = if tail.is_empty() {
         format!(
@@ -212,11 +219,12 @@ fn truncate_text_safe(text: &str, max_chars: usize) -> String {
         return text.to_string();
     }
 
-    // 尝试寻找一个安全的截断点 (不在 < 和 > 之间)
-    let mut split_pos = max_chars;
+    // 尝试寻找一个安全的截断点 (不在 < 和 > 之间，且严格保证 UTF-8 字符边界)
+    let safe_max = crate::proxy::mappers::common_utils::safe_truncate_str(text, max_chars).len();
+    let mut split_pos = safe_max;
 
     // 向前查找是否有未闭合的标签开始符
-    let sub = &text[..max_chars];
+    let sub = &text[..safe_max];
     if let Some(last_open) = sub.rfind('<') {
         if let Some(last_close) = sub.rfind('>') {
             if last_open > last_close {

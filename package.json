@@ -1,5 +1,5 @@
 {
-  "version": "4.7.11",
+  "version": "4.7.12",
   "name": "antigravity-manager",
   "description": "Antigravity Tools",
   "type": "module",
@@ -8,6 +8,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
+    "bump": "node scripts/bump-version.mjs",
     "tauri": "tauri",
     "tauri:debug": "RUST_LOG=debug npm run tauri dev"
   },

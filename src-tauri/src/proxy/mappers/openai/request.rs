@@ -812,9 +812,6 @@ pub fn transform_openai_request_with_session(
                         }
                     });
 
-                    // [New] 递归清理参数中可能存在的非法校验字段
-                    crate::proxy::common::json_schema::clean_json_schema(&mut func_call_part);
-
                     // 1. 优先查本工具专属签名 (Responses API 优先校验客户端签名，其他协议或缺失时查工具缓存/会话缓存/哨兵)
                     let tool_specific_sig = crate::proxy::SignatureCache::global().get_tool_signature(&tc.id);
                     let mut effective_tc_sig = None;
@@ -860,9 +857,46 @@ pub fn transform_openai_request_with_session(
             // Handle tool response
             if msg.role == "tool" || msg.role == "function" {
                 let name = msg.name.as_deref().unwrap_or("unknown");
-                let final_name = if name == "local_shell_call" { "shell" }
-                                else if let Some(id) = &msg.tool_call_id { tool_id_to_name.get(id).map(|s| s.as_str()).unwrap_or(name) }
-                                else { name };
+                // 优先从紧邻的前置 assistant 消息中查找匹配该 tool_call_id 的工具名称 (精准杜绝长会话 ID 碰撞时全局 Map 覆盖错误)
+                let matched_preceding_name = if let Some(ref target_id) = msg.tool_call_id {
+                    let mut found = None;
+                    for prev_idx in (0..msg_index).rev() {
+                        if let Some(prev_msg) = request.messages.get(prev_idx) {
+                            if prev_msg.role == "assistant" {
+                                if let Some(ref calls) = prev_msg.tool_calls {
+                                    for call in calls {
+                                        if call.id == *target_id {
+                                            found = if let Some(ref func) = call.function {
+                                                Some(if func.name == "local_shell_call" { "shell".to_string() } else { func.name.clone() })
+                                            } else if call.operation.is_some() || call.r#type == "apply_patch_call" {
+                                                Some("apply_patch".to_string())
+                                            } else {
+                                                None
+                                            };
+                                            break;
+                                        }
+                                    }
+                                }
+                                break;
+                            } else if prev_msg.role != "tool" && prev_msg.role != "function" {
+                                break;
+                            }
+                        }
+                    }
+                    found
+                } else {
+                    None
+                };
+
+                let final_name = if let Some(ref p_name) = matched_preceding_name {
+                    p_name.as_str()
+                } else if name == "local_shell_call" {
+                    "shell"
+                } else if let Some(id) = &msg.tool_call_id {
+                    tool_id_to_name.get(id).map(|s| s.as_str()).unwrap_or(name)
+                } else {
+                    name
+                };
 
                 let mut extra_parts = Vec::new();
 
@@ -1057,7 +1091,7 @@ pub fn transform_openai_request_with_session(
                 "includeThoughts": false
             });
         } else {
-            // [CONFIGURABLE] 思考预算：全协议统一权威解析（归一化流水线后处理）
+            // [CONFIGURABLE] 思考预算：全协议统一由 InboundThinkingPipeline 流水线节点权威解析与治理
             let client_effort = request
                 .reasoning_effort
                 .as_deref()
@@ -1069,24 +1103,20 @@ pub fn transform_openai_request_with_session(
                 .as_ref()
                 .and_then(|t| t.budget_tokens.map(|b| b as u64));
 
-            let tb_config = crate::proxy::config::get_thinking_budget_config();
-            let resolved_budget = model_specs::resolve_custom_budget(
-                mapped_model,
-                client_effort,
-                client_budget,
-                &tb_config,
-                token,
-            );
+            let resolved_budget =
+                crate::proxy::pipeline::InboundThinkingPipeline::configure_inbound_thinking(
+                    mapped_model,
+                    &mut gen_config,
+                    client_effort,
+                    client_budget,
+                    token,
+                );
 
+            let tb_config = crate::proxy::config::get_thinking_budget_config();
             let is_client_control =
                 tb_config.control_source == crate::proxy::config::ThinkingControlSource::Client;
-            let mut tc = json!({
-                "includeThoughts": true
-            });
 
             if let Some(final_budget) = resolved_budget {
-                tc["thinkingBudget"] = json!(final_budget);
-
                 // [CRITICAL] 思维模型的 maxOutputTokens 必须大于 thinkingBudget
                 // [FIX #1675] 针对图像模型使用更保守的 max_tokens 增量，避免触发 128k 限制
                 let overhead = if config.request_type == "image_gen" {
@@ -1132,12 +1162,10 @@ pub fn transform_openai_request_with_session(
                             } else {
                                 norm_level
                             };
-                        tc["thinkingLevel"] = json!(final_level);
+                        gen_config["thinkingConfig"]["thinkingLevel"] = json!(final_level);
                     }
                 }
             }
-
-            gen_config["thinkingConfig"] = tc;
             tracing::debug!(
                 "[OpenAI-Request] Configured thinkingConfig for model {}: {:?} (source={:?})",
                 mapped_model,
@@ -3120,5 +3148,149 @@ mod tests {
         let sig_2 = model_2_parts[0]["thoughtSignature"].as_str().unwrap();
         // 最新一条 model 应当正确采纳 prev_resp_id 的签名
         assert_eq!(sig_2, sig_round_2, "最新一条 model 应当正确继承上一轮签名");
+    }
+
+    #[test]
+    fn test_transform_openai_request_preserves_command_with_description() {
+        let req = OpenAIRequest {
+            model: "gemini-3.8-flash-high".to_string(),
+            messages: vec![
+                OpenAIMessage {
+                    role: "user".to_string(),
+                    content: Some(OpenAIContent::String("执行命令".to_string())),
+                    ..Default::default()
+                },
+                OpenAIMessage {
+                    role: "assistant".to_string(),
+                    tool_calls: Some(vec![ToolCall {
+                        id: "call_test_1".to_string(),
+                        r#type: "function".to_string(),
+                        function: Some(ToolFunction {
+                            name: "run_command".to_string(),
+                            arguments: serde_json::to_string(&json!({
+                                "description": "Run: git checkout main",
+                                "command": "git checkout main",
+                                "shell": "default"
+                            }))
+                            .unwrap(),
+                        }),
+                        signature: None,
+                        status: None,
+                        call_id: None,
+                        operation: None,
+                    }]),
+                    ..Default::default()
+                },
+                OpenAIMessage {
+                    role: "tool".to_string(),
+                    tool_call_id: Some("call_test_1".to_string()),
+                    content: Some(OpenAIContent::String("Switched to branch main".to_string())),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let (result, _, _, _) =
+            transform_openai_request(&req, "test-proj", "gemini-3.8-flash-high", None);
+        let contents = result["request"]["contents"].as_array().unwrap();
+
+        // 验证 assistant 的 functionCall.args 中的 command 绝对未被剔除
+        let model_parts = contents[1]["parts"].as_array().unwrap();
+        let fc = model_parts
+            .iter()
+            .find(|p| p.get("functionCall").is_some())
+            .unwrap();
+        let args = &fc["functionCall"]["args"];
+        assert_eq!(
+            args["command"], "git checkout main",
+            "command 参数必须完好保留！"
+        );
+        assert_eq!(
+            args["description"], "Run: git checkout main",
+            "description 参数必须完好保留！"
+        );
+        assert_eq!(args["shell"], "default", "shell 参数必须完好保留！");
+    }
+
+    #[test]
+    fn test_transform_openai_request_handles_colliding_tool_call_ids() {
+        let req = OpenAIRequest {
+            model: "gemini-3.8-flash-high".to_string(),
+            messages: vec![
+                OpenAIMessage {
+                    role: "user".to_string(),
+                    content: Some(OpenAIContent::String("修改文件".to_string())),
+                    ..Default::default()
+                },
+                OpenAIMessage {
+                    role: "assistant".to_string(),
+                    tool_calls: Some(vec![ToolCall {
+                        id: "call_duplicate_1025976".to_string(),
+                        r#type: "function".to_string(),
+                        function: Some(ToolFunction {
+                            name: "edit_file".to_string(),
+                            arguments: "{}".to_string(),
+                        }),
+                        signature: None,
+                        status: None,
+                        call_id: None,
+                        operation: None,
+                    }]),
+                    ..Default::default()
+                },
+                OpenAIMessage {
+                    role: "tool".to_string(),
+                    tool_call_id: Some("call_duplicate_1025976".to_string()),
+                    content: Some(OpenAIContent::String("ok".to_string())),
+                    ..Default::default()
+                },
+                OpenAIMessage {
+                    role: "assistant".to_string(),
+                    tool_calls: Some(vec![ToolCall {
+                        id: "call_duplicate_1025976".to_string(),
+                        r#type: "function".to_string(),
+                        function: Some(ToolFunction {
+                            name: "run_command".to_string(),
+                            arguments: "{\"command\":\"git status\"}".to_string(),
+                        }),
+                        signature: None,
+                        status: None,
+                        call_id: None,
+                        operation: None,
+                    }]),
+                    ..Default::default()
+                },
+                OpenAIMessage {
+                    role: "tool".to_string(),
+                    tool_call_id: Some("call_duplicate_1025976".to_string()),
+                    content: Some(OpenAIContent::String("clean".to_string())),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let (result, _, _, _) =
+            transform_openai_request(&req, "test-proj", "gemini-3.8-flash-high", None);
+        let contents = result["request"]["contents"].as_array().unwrap();
+
+        // 验证第 1 轮工具响应的名字为 edit_file，绝不能被后续同 ID 的 run_command 覆盖
+        let tool_resp_1 = contents[2]["parts"][0]["functionResponse"]["name"]
+            .as_str()
+            .unwrap();
+        assert_eq!(
+            tool_resp_1, "edit_file",
+            "第 1 轮工具响应必须匹配其调用时的 edit_file 工具名"
+        );
+
+        // 验证第 2 轮工具响应的名字为 run_command
+        let tool_resp_2 = contents[4]["parts"][0]["functionResponse"]["name"]
+            .as_str()
+            .unwrap();
+        assert_eq!(
+            tool_resp_2, "run_command",
+            "第 2 轮工具响应必须匹配其调用时的 run_command 工具名"
+        );
     }
 }

@@ -550,15 +550,8 @@ fn take_pending(call_id: &str) -> bool {
 
 /// 截断到 [`MAX_FIELD_BYTES`](按 char 边界,不切坏 UTF-8),返回(文本, 丢弃字节数)。
 fn cap_field(s: &str) -> (String, usize) {
-    if s.len() <= MAX_FIELD_BYTES {
-        return (s.to_owned(), 0);
-    }
-    // 找 <= cap 的 char 边界,避免切在多字节中间。
-    let mut end = MAX_FIELD_BYTES;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    (s[..end].to_owned(), s.len() - end)
+    let truncated = crate::proxy::mappers::common_utils::safe_truncate_str(s, MAX_FIELD_BYTES);
+    (truncated.to_owned(), s.len() - truncated.len())
 }
 
 /// 粗分类「V4A 是怎么从原始 args 里抽出来的」(给 viewer 摘要 / 过滤)。轻量 re-derive,

@@ -166,6 +166,7 @@ pub async fn handle_generate(
     let mut image_permit = None;
     let mut failure_statuses = FailureStatusTracker::default();
     let mut used_attempts = 0;
+    let mut retried_without_thinking = false;
 
     let initial_mapped_model = crate::proxy::common::model_mapping::resolve_model_route(
         &model_name,
@@ -904,25 +905,82 @@ pub async fn handle_generate(
             status_code,
             &error_text,
             retry_after.as_deref(),
-            false,
+            retried_without_thinking,
             attempt,
             pool_size,
         );
-        let needs_quota_refresh =
-            if status_code == 429 || status_code == 529 || status_code == 503 || status_code == 500
-            {
-                token_manager
-                    .mark_rate_limited_fast(
-                        &email,
-                        status_code,
-                        retry_after.as_deref(),
-                        &error_text,
-                        Some(&mapped_model),
-                    )
-                    .await
+        // 统一流水线决策判定：协议无关的限流与错误判定
+        let classification = crate::proxy::pipeline::UpstreamClassification::classify(
+            status_code,
+            &error_text,
+            retry_after.as_deref(),
+        );
+
+        if classification.is_model_not_found() {
+            tracing::warn!(
+                "[Gemini] Target model [{}] not found on upstream (HTTP {}). Terminating retry loop without account lockout.",
+                mapped_model, status_code
+            );
+            return Ok((
+                StatusCode::from_u16(status_code).unwrap_or(StatusCode::NOT_FOUND),
+                [
+                    ("X-Account-Email", email.as_str()),
+                    ("X-Mapped-Model", mapped_model.as_str()),
+                ],
+                error_text,
+            )
+                .into_response());
+        }
+
+        if classification.is_thought_signature_error() {
+            if !retried_without_thinking {
+                retried_without_thinking = true;
+                tracing::warn!(
+                    "[Gemini] Pipeline: Thinking signature error detected on upstream (HTTP {}). Surgically purging corrupted signatures and retrying on same account.",
+                    status_code
+                );
+                // 1. 精准定向净化 ThinkingStore 中的异构污染签名
+                crate::proxy::thinking_store::ThinkingStore::global()
+                    .purge_corrupted_signatures(&session_id, &mapped_model);
+                // 2. 清理当前 session 的 SignatureCache
+                crate::proxy::SignatureCache::global().delete_session_signature(&client_session_id);
+                // 3. 追加修复提示词到请求体的最后一条内容
+                if let Some(contents) = body.get_mut("contents").and_then(|v| v.as_array_mut()) {
+                    if let Some(last_content) = contents.last_mut() {
+                        if let Some(parts) =
+                            last_content.get_mut("parts").and_then(|v| v.as_array_mut())
+                        {
+                            parts.push(json!({
+                                "text": "\n\n[System Recovery] Your previous output contained an invalid signature. Please regenerate the response without the corrupted signature block."
+                            }));
+                            tracing::debug!("[Gemini] Appended repair prompt to last content");
+                        }
+                    }
+                }
+                // 4. 保持同一账号原地重试
+                force_rotate = false;
+                continue;
             } else {
-                false
-            };
+                tracing::warn!(
+                    "[Gemini] Pipeline: Thinking signature error persisted after retry without thinking. Terminating retry loop."
+                );
+            }
+        }
+
+        let should_mark_limited = classification.should_lock_account();
+        let needs_quota_refresh = if should_mark_limited {
+            token_manager
+                .mark_rate_limited_fast(
+                    &email,
+                    status_code,
+                    retry_after.as_deref(),
+                    &error_text,
+                    Some(&mapped_model),
+                )
+                .await
+        } else {
+            false
+        };
         if !matches!(&strategy, RetryStrategy::GraceRetry(_)) {
             drop(image_permit.take());
         }
@@ -975,35 +1033,6 @@ pub async fn handle_generate(
             }
 
             continue;
-        }
-
-        // [NEW] 处理 400 错误 (Thinking 签名失效)
-        if status_code == 400
-            && (error_text.contains("Invalid `signature`")
-                || error_text.contains("thinking.signature")
-                || error_text.contains("Invalid signature")
-                || error_text.contains("Corrupted thought signature"))
-        {
-            tracing::warn!(
-                "[Gemini] Signature error detected on account {}, retrying without thinking",
-                email
-            );
-
-            // 追加修复提示词到请求体的最后一条内容
-            if let Some(contents) = body.get_mut("contents").and_then(|v| v.as_array_mut()) {
-                if let Some(last_content) = contents.last_mut() {
-                    if let Some(parts) =
-                        last_content.get_mut("parts").and_then(|v| v.as_array_mut())
-                    {
-                        parts.push(json!({
-                            "text": "\n\n[System Recovery] Your previous output contained an invalid signature. Please regenerate the response without the corrupted signature block."
-                        }));
-                        tracing::debug!("[Gemini] Appended repair prompt to last content");
-                    }
-                }
-            }
-
-            continue; // 重试
         }
 
         // 404 等由于模型配置或路径错误的 HTTP 异常，直接报错，不进行无效轮换

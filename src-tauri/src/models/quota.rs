@@ -352,7 +352,8 @@ mod tests {
     #[test]
     fn test_quota_group_deserialization_with_missing_buckets() {
         let json = r#"{"display_name":"Gemini Models"}"#;
-        let group: QuotaGroup = serde_json::from_str(json).expect("Should deserialize with missing buckets");
+        let group: QuotaGroup =
+            serde_json::from_str(json).expect("Should deserialize with missing buckets");
         assert_eq!(group.display_name, "Gemini Models");
         assert!(group.buckets.is_empty());
     }

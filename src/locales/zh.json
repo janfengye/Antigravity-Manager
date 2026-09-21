@@ -134,7 +134,32 @@
       "export_no_accounts": "没有可导出的账号",
       "export_success": "导出成功! 文件已保存至: {{path}}",
       "export_error": "导出失败"
-    }
+    },
+    "accounts_health": "账号生态健康",
+    "total_accounts_desc": "已录入配置的全部账号",
+    "available_accounts": "可用账号数",
+    "available_accounts_desc": "✓ 开启且状态正常 · 反代服务中",
+    "disabled_accounts": "禁用账号数",
+    "disabled_accounts_desc": "手动停用 / 反代已禁用",
+    "abnormal_accounts": "异常账号数",
+    "abnormal_accounts_has_risk": "⚠ 需处理风控验证 / 封禁",
+    "abnormal_accounts_no_risk": "✓ 零风控异常账号",
+    "quota_matrix_active": "可用账号配额生产力矩阵",
+    "quota_matrix_all_normal": "全量正常账号配额矩阵 (包含已禁用)",
+    "base_pool_count": "底座: {{count}} 个账号",
+    "btn_only_available": "仅看可用账号 ({{count}})",
+    "btn_include_disabled": "包含禁用账号 ({{count}})",
+    "btn_title_only_available": "当前：仅看开启且正常的可用账号 (点击包含已禁用账号)",
+    "btn_title_include_disabled": "当前：查看全部正常状态账号包含禁用 (点击仅看可用账号)",
+    "gemini_available_quota": "Gemini 可用配额",
+    "gemini_image_quota": "Gemini 绘图配额",
+    "claude_available_quota": "Claude 可用配额",
+    "weighted_available": "综合加权可用",
+    "quota_sufficient_short": "充足",
+    "quota_tight_short": "偏紧",
+    "rolling_5h": "5小时滚动:",
+    "weekly_7d": "7天周配额:",
+    "zero_weekly_warning": "{{count}} 个可用账号因周配额已耗尽触发熔断 (判定 0%)"
   },
   "accounts": {
     "account": "账号",
@@ -1240,7 +1265,9 @@
       "gemini3_only_warning": "⚠️ 仅支持 Gemini 3 系列",
       "default_suffix": "（默认）",
       "select_target_model": "选择目标模型",
-      "original_placeholder": "原始名 (如 gpt-4 或 gpt-4*)"
+      "original_placeholder": "原始名 (如 gemini-3.x-flash，x必须大于8)",
+      "wildcard_rule_notice": "通配符规则（x 必须大于 8，如 3.9、3.10 自动转为 3.x-flash-tiered）",
+      "wildcard_only_gemini_3x": "仅允许内置通配符 gemini-3.x-flash（x 必须大于 8），其他请填写具体模型 ID"
     },
     "examples": {
       "title": "使用示例"

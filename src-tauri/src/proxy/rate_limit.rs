@@ -451,8 +451,20 @@ impl RateLimitTracker {
         backoff_steps: &[u64],
         parser_mode: RetryParserMode,
     ) -> Option<RateLimitInfo> {
-        // 支持 429 (限流) 以及 500/503/529 (后端故障软避让)
-        if status != 429 && status != 500 && status != 503 && status != 529 && status != 404 {
+        // 关键防御：网关内部自产生的排队/无可用账号错误，绝对禁止解析为上游限流，杜绝自噬死循环
+        let lower_body = body.to_lowercase();
+        if lower_body.contains("all accounts limited")
+            || lower_body.contains("no accounts available")
+            || lower_body.contains("all accounts failed")
+            || lower_body.contains("token pool is empty")
+            || lower_body.contains("all accounts exhausted")
+            || lower_body.contains("all accounts unhealthy")
+        {
+            return None;
+        }
+
+        // 仅对真正的上游限流 429 和过载 529 进行账号冷却跟踪；500/503 属于服务瞬时不可用，绝不打入冷却池！
+        if status != 429 && status != 529 {
             return None;
         }
 
@@ -460,11 +472,6 @@ impl RateLimitTracker {
         let reason = if status == 429 {
             tracing::warn!("Google 429 Error Body: {}", body);
             self.parse_rate_limit_reason(body)
-        } else if status == 404 {
-            tracing::warn!(
-                "Google 404: model unavailable on this account, short lockout before rotation"
-            );
-            RateLimitReason::ServerError
         } else {
             RateLimitReason::ServerError
         };
@@ -578,7 +585,7 @@ impl RateLimitTracker {
                         lockout
                     }
                     RateLimitReason::ServerError => {
-                        let lockout = if status == 404 { 5 } else { 8 };
+                        let lockout = 8;
                         tracing::warn!("检测到 {} 错误, 执行 {}s 软避让...", status, lockout);
                         lockout
                     }
@@ -616,15 +623,11 @@ impl RateLimitTracker {
             model: model.clone(),
         };
 
-        // [FIX] 使用复合 Key 存储 (如果是 Quota 且有 Model)
-        // 只有 QuotaExhausted 适合做模型隔离，其他如 RateLimitExceeded 通常是全账号的 TPM
-        let use_model_key = matches!(reason, RateLimitReason::QuotaExhausted) && model.is_some();
-        let key = if use_model_key {
-            self.get_limit_key(account_id, model.as_deref())
+        // [FIX] 细粒度模型隔离：只要调用方传入了具体的 model，限流必须针对该 model 进行隔离！
+        // 杜绝因某单个模型（或不存在的模型/特定模型限流）而将全账号的所有模型连坐封锁，导致正常账号宕机。
+        let key = if let Some(m) = model.as_deref().filter(|s| !s.is_empty()) {
+            self.get_limit_key(account_id, Some(m))
         } else {
-            // 其他情况（如 RateLimitExceeded, ServerError）通常影响整个账号
-            // 或者我们也可以根据配置决定是否隔离。
-            // 简单起见，只有 QuotaExhausted 做细粒度隔离。
             account_id.to_string()
         };
 

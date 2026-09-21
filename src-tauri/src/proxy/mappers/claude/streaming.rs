@@ -615,7 +615,10 @@ impl StreamingState {
         #[cfg(debug_assertions)]
         {
             let preview = if raw_data.len() > 100 {
-                format!("{}...", &raw_data[..100])
+                format!(
+                    "{}...",
+                    crate::proxy::mappers::common_utils::safe_truncate_str(raw_data, 100)
+                )
             } else {
                 raw_data.to_string()
             };

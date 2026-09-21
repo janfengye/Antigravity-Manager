@@ -136,7 +136,32 @@
       "export_no_accounts": "No accounts to export",
       "export_success": "Export successful! File saved to: {{path}}",
       "export_error": "Export failed"
-    }
+    },
+    "accounts_health": "Account Ecosystem Health",
+    "total_accounts_desc": "All configured accounts",
+    "available_accounts": "Available Accounts",
+    "available_accounts_desc": "✓ Active & healthy · In proxy service",
+    "disabled_accounts": "Disabled Accounts",
+    "disabled_accounts_desc": "Manually stopped / Proxy disabled",
+    "abnormal_accounts": "Abnormal Accounts",
+    "abnormal_accounts_has_risk": "⚠ Verification / Blocked risk",
+    "abnormal_accounts_no_risk": "✓ No risk or blocked accounts",
+    "quota_matrix_active": "Active Accounts Quota Productivity Matrix",
+    "quota_matrix_all_normal": "All Normal Accounts Quota Matrix (incl. disabled)",
+    "base_pool_count": "Base: {{count}} accounts",
+    "btn_only_available": "Active Only ({{count}})",
+    "btn_include_disabled": "Include Disabled ({{count}})",
+    "btn_title_only_available": "Current: Active accounts only (click to include disabled)",
+    "btn_title_include_disabled": "Current: All normal accounts including disabled (click for active only)",
+    "gemini_available_quota": "Gemini Available Quota",
+    "gemini_image_quota": "Gemini Image Quota",
+    "claude_available_quota": "Claude Available Quota",
+    "weighted_available": "Weighted Available",
+    "quota_sufficient_short": "Sufficient",
+    "quota_tight_short": "Tight",
+    "rolling_5h": "5h Rolling:",
+    "weekly_7d": "7d Weekly:",
+    "zero_weekly_warning": "{{count}} active account(s) circuit-broken due to zero weekly quota (rated 0%)"
   },
   "accounts": {
     "account": "Account",
@@ -1252,7 +1277,9 @@
       "original_id": "Original ID",
       "route_to": "Route To",
       "select_target_model": "Select Target Model",
-      "original_placeholder": "Original (e.g. gpt-4 or gpt-4*)"
+      "original_placeholder": "Original model (e.g. gemini-3.x-flash, x must be > 8)",
+      "wildcard_rule_notice": "Wildcard rule (x must be > 8, e.g. 3.9, 3.10 routed to 3.x-flash-tiered)",
+      "wildcard_only_gemini_3x": "Only wildcard gemini-3.x-flash (x > 8) is supported, please specify exact model ID for others"
     },
     "multi_protocol": {
       "title": "Multi-Protocol Support",

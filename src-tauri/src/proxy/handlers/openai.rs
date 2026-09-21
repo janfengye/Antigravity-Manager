@@ -2067,6 +2067,7 @@ pub async fn handle_chat_completions(
     let mut image_permit = None;
     let mut failure_statuses = FailureStatusTracker::default();
     let mut used_attempts = 0;
+    let mut retried_without_thinking = false;
 
     // 2. 模型路由解析 (移到循环外以支持在所有路径返回 X-Mapped-Model)
     let mapped_model = crate::proxy::common::model_mapping::resolve_model_route(
@@ -2151,11 +2152,13 @@ pub async fn handle_chat_completions(
                             None,
                             &e,
                         );
-                        return Ok((
-                            StatusCode::SERVICE_UNAVAILABLE,
-                            headers,
-                            format!("Token error: {}", e),
-                        )
+                        let dual_err = crate::proxy::handlers::common::build_dual_track_error(
+                            "openai",
+                            StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                            mapped_model.as_str(),
+                            &e,
+                        );
+                        return Ok((StatusCode::SERVICE_UNAVAILABLE, headers, Json(dual_err))
                             .into_response());
                     }
                 }
@@ -2744,12 +2747,84 @@ pub async fn handle_chat_completions(
             status_code,
             &error_text,
             retry_after.as_deref(),
-            false,
+            retried_without_thinking,
             attempt,
             pool_size,
         );
-        let should_mark_limited =
-            status_code == 429 || status_code == 529 || status_code == 503 || status_code == 500;
+        // 统一流水线决策判定：协议无关的限流与错误判定
+        let classification = crate::proxy::pipeline::UpstreamClassification::classify(
+            status_code,
+            &error_text,
+            retry_after.as_deref(),
+        );
+
+        if classification.is_model_not_found() {
+            tracing::warn!(
+                "[{}] Pipeline: Target model [{}] not found on upstream (HTTP {}). Terminating retry loop without account lockout.",
+                trace_id, mapped_model, status_code
+            );
+            let dual_err = crate::proxy::handlers::common::build_dual_track_error(
+                "openai",
+                status_code,
+                &mapped_model,
+                &error_text,
+            );
+            return Ok((
+                StatusCode::from_u16(status_code).unwrap_or(StatusCode::NOT_FOUND),
+                [
+                    ("X-Account-Email", email.as_str()),
+                    ("X-Mapped-Model", mapped_model.as_str()),
+                ],
+                Json(dual_err),
+            )
+                .into_response());
+        }
+
+        if classification.is_thought_signature_error() {
+            if !retried_without_thinking {
+                retried_without_thinking = true;
+                tracing::warn!(
+                    "[{}] Pipeline: Thinking signature error detected on upstream (HTTP {}). Surgically purging corrupted signatures and retrying on same account.",
+                    trace_id, status_code
+                );
+                // 1. 精准定向净化 ThinkingStore 中的异构污染签名（保留思考文本与健康签名）
+                crate::proxy::thinking_store::ThinkingStore::global()
+                    .purge_corrupted_signatures(&session_id, &mapped_model);
+                // 2. 清理当前 session 的 SignatureCache
+                crate::proxy::SignatureCache::global().delete_session_signature(&client_session_id);
+                // 3. 追加修复提示词到最后一条用户消息
+                if let Some(last_msg) = openai_req.messages.last_mut() {
+                    if last_msg.role == "user" {
+                        let repair_prompt = "\n\n[System Recovery] Your previous output contained an invalid signature. Please regenerate the response without the corrupted signature block.";
+                        if let Some(content) = &mut last_msg.content {
+                            use crate::proxy::mappers::openai::{
+                                OpenAIContent, OpenAIContentBlock,
+                            };
+                            match content {
+                                OpenAIContent::String(s) => {
+                                    s.push_str(repair_prompt);
+                                }
+                                OpenAIContent::Array(arr) => {
+                                    arr.push(OpenAIContentBlock::Text {
+                                        text: repair_prompt.to_string(),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+                // 4. 保持同一账号原地重试
+                force_rotate = false;
+                continue;
+            } else {
+                tracing::warn!(
+                    "[{}] Pipeline: Thinking signature error persisted after retry without thinking. Terminating retry loop.",
+                    trace_id
+                );
+            }
+        }
+
+        let should_mark_limited = classification.should_lock_account();
         let needs_quota_refresh = if config.request_type == "image_gen" && should_mark_limited {
             token_manager
                 .mark_rate_limited_fast(
@@ -2873,49 +2948,6 @@ pub async fn handle_chat_completions(
             continue;
         }
 
-        // [NEW] 处理 400 错误 (Thinking 签名失效)
-        if status_code == 400
-            && (error_text.contains("Invalid `signature`")
-                || error_text.contains("thinking.signature")
-                || error_text.contains("Invalid signature")
-                || error_text.contains("Corrupted thought signature"))
-        {
-            tracing::warn!(
-                "[OpenAI] Signature error detected on account {}, retrying without thinking",
-                email
-            );
-
-            // [FIX #3391] 彻底清除 thinking 配置并去除 -thinking 模型后缀，确保下一轮重试时完全关闭思考
-            openai_req.thinking = None;
-            if openai_req.model.ends_with("-thinking") {
-                openai_req.model = openai_req.model.trim_end_matches("-thinking").to_string();
-            }
-
-            // 追加修复提示词到最后一条用户消息
-            if let Some(last_msg) = openai_req.messages.last_mut() {
-                if last_msg.role == "user" {
-                    let repair_prompt = "\n\n[System Recovery] Your previous output contained an invalid signature. Please regenerate the response without the corrupted signature block.";
-
-                    if let Some(content) = &mut last_msg.content {
-                        use crate::proxy::mappers::openai::{OpenAIContent, OpenAIContentBlock};
-                        match content {
-                            OpenAIContent::String(s) => {
-                                s.push_str(repair_prompt);
-                            }
-                            OpenAIContent::Array(arr) => {
-                                arr.push(OpenAIContentBlock::Text {
-                                    text: repair_prompt.to_string(),
-                                });
-                            }
-                        }
-                        tracing::debug!("[OpenAI] Appended repair prompt to last user message");
-                    }
-                }
-            }
-
-            continue; // 重试
-        }
-
         // [FIX session-1M] 上游按 sessionId 在服务端累计会话输入,长工具循环会把累计推过 1M,
         // 之后该 sessionId 的所有请求都 400 "input token count exceeds ... 1048576"。
         // 给 (账号, 对话) 的 sessionId 升代并立即重试:新 sessionId = 上游全新会话,对话无感恢复。
@@ -2929,10 +2961,16 @@ pub async fn handle_chat_completions(
             continue; // 重试:下一轮 transform 时读取新代数,派生全新 sessionId
         }
 
-        // 404 等由于模型配置或路径错误的 HTTP 异常，直接报错，不进行无效轮换
+        // 404 等由于模型配置或路径错误的 HTTP 异常，直接报错返回双轨制友好报文，不进行无效轮换
         error!(
             "OpenAI Upstream non-retryable error {} on account {}: {}",
             status_code, email, error_text
+        );
+        let dual_err = crate::proxy::handlers::common::build_dual_track_error(
+            "openai",
+            status_code,
+            &mapped_model,
+            &error_text,
         );
         return Ok((
             status,
@@ -2940,14 +2978,7 @@ pub async fn handle_chat_completions(
                 ("X-Account-Email", email.as_str()),
                 ("X-Mapped-Model", mapped_model.as_str()),
             ],
-            // [FIX] Return JSON error for better client compatibility
-            Json(json!({
-                "error": {
-                    "message": error_text,
-                    "type": "upstream_error",
-                    "code": status_code
-                }
-            })),
+            Json(dual_err),
         )
             .into_response());
     }
@@ -2960,12 +2991,14 @@ pub async fn handle_chat_completions(
         &last_error,
     );
 
-    Ok((
-        final_status,
-        headers,
-        format!("All accounts exhausted. Last error: {}", last_error),
-    )
-        .into_response())
+    let dual_err = crate::proxy::handlers::common::build_dual_track_error(
+        "openai",
+        final_status.as_u16(),
+        &mapped_model,
+        &last_error,
+    );
+
+    Ok((final_status, headers, Json(dual_err)).into_response())
 }
 
 // --- Codex GUIDANCE PROMPTS ---
@@ -4842,8 +4875,36 @@ pub async fn handle_completions(
             error_text
         );
 
-        // 3. 标记限流状态(用于 UI 显示)
-        if status_code == 429 || status_code == 529 || status_code == 503 || status_code == 500 {
+        // 3. 统一流水线判定与标记限流状态(用于 UI 显示)
+        let classification = crate::proxy::pipeline::UpstreamClassification::classify(
+            status_code,
+            &error_text,
+            retry_after.as_deref(),
+        );
+
+        if classification.is_model_not_found() {
+            tracing::warn!(
+                "[{}] Pipeline: Target model [{}] not found on upstream (HTTP {}). Terminating completions retry loop without account lockout.",
+                trace_id, mapped_model, status_code
+            );
+            let dual_err = crate::proxy::handlers::common::build_dual_track_error(
+                "openai",
+                status_code,
+                &mapped_model,
+                &error_text,
+            );
+            return Response::builder()
+                .status(StatusCode::from_u16(status_code).unwrap_or(StatusCode::NOT_FOUND))
+                .header("X-Account-Email", email.as_str())
+                .header("X-Mapped-Model", mapped_model.as_str())
+                .body(Body::from(
+                    serde_json::to_string(&dual_err).unwrap_or_default(),
+                ))
+                .unwrap()
+                .into_response();
+        }
+
+        if classification.should_lock_account() {
             token_manager
                 .mark_rate_limited_async(
                     &email,
@@ -5339,9 +5400,13 @@ pub async fn handle_images_generations_internal(
                                     false,
                                 )
                             });
-                            // 429/500/503: mark limited before retry/rotation
-                            let should_mark_limited =
-                                status_code == 429 || status_code == 503 || status_code == 500;
+                            // 统一流水线限流裁决：500/503等服务异常绝不打入限流
+                            let classification = crate::proxy::pipeline::UpstreamClassification::classify(
+                                status_code,
+                                &err_text,
+                                retry_after.as_deref(),
+                            );
+                            let should_mark_limited = classification.should_lock_account();
                             let needs_quota_refresh = if should_mark_limited {
                                 tracing::warn!(
                                     "[Images] Account {} rate limited/error ({}), rotating...",
@@ -5825,9 +5890,14 @@ pub async fn handle_images_edits(
                                     false,
                                 )
                             });
-                            // 429/500/503 等错误进行标记和重试
-                            let should_mark_limited =
-                                status_code == 429 || status_code == 503 || status_code == 500;
+                            // 统一流水线限流裁决：500/503等服务异常绝不打入限流
+                            let classification =
+                                crate::proxy::pipeline::UpstreamClassification::classify(
+                                    status_code,
+                                    &err_text,
+                                    retry_after.as_deref(),
+                                );
+                            let should_mark_limited = classification.should_lock_account();
                             let needs_quota_refresh = if should_mark_limited {
                                 tracing::warn!(
                                     "[Images] Account {} rate limited/error ({}), rotating...",

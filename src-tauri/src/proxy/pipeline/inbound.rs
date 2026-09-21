@@ -73,7 +73,17 @@ impl InboundThinkingPipeline {
                                             ) || (is_claude
                                                 && family.to_lowercase().contains("claude"))
                                         }
-                                        None => true,
+                                        None => {
+                                            if target_model.to_lowercase().contains("gemini") {
+                                                crate::proxy::thinking_store::is_likely_gemini_signature(sig)
+                                            } else if is_claude {
+                                                crate::proxy::thinking_store::is_claude_signature(
+                                                    sig,
+                                                )
+                                            } else {
+                                                true
+                                            }
+                                        }
                                     };
                                     if compatible {
                                         let final_sig = if is_claude {
@@ -82,6 +92,18 @@ impl InboundThinkingPipeline {
                                             sig.to_string()
                                         };
                                         effective_sig = Some(final_sig);
+                                    } else if target_model.to_lowercase().contains("gemini") {
+                                        tracing::warn!(
+                                            "[InboundPipeline] Stripping foreign signature (len: {}) from thought block for Gemini model {}",
+                                            sig.len(), target_model
+                                        );
+                                        effective_sig = None;
+                                    } else if is_claude {
+                                        tracing::warn!(
+                                            "[InboundPipeline] Stripping foreign signature (len: {}) from thought block for Claude model {}",
+                                            sig.len(), target_model
+                                        );
+                                        effective_sig = None;
                                     }
                                 }
                             }
@@ -113,6 +135,27 @@ impl InboundThinkingPipeline {
                                 }
                             }
                         } else {
+                            if target_model.to_lowercase().contains("gemini") {
+                                if let Some(fc_sig) =
+                                    part.get("thoughtSignature").and_then(|s| s.as_str())
+                                {
+                                    if !crate::proxy::thinking_store::is_likely_gemini_signature(
+                                        fc_sig,
+                                    ) {
+                                        tracing::warn!(
+                                            "[InboundPipeline] Replacing foreign functionCall thoughtSignature (len: {}) with sentinel for Gemini",
+                                            fc_sig.len()
+                                        );
+                                        part["thoughtSignature"] =
+                                            json!(crate::proxy::thinking_store::SENTINEL_SIGNATURE);
+                                    }
+                                }
+                            } else if is_claude {
+                                if let Some(obj) = part.as_object_mut() {
+                                    obj.remove("thoughtSignature");
+                                    obj.remove("thought_signature");
+                                }
+                            }
                             // 非思考部件：可能是普通正文/过程进度说明（commentary），也可能是 functionCall 等
                             let is_plain_text = part.get("text").is_some()
                                 && part.get("functionCall").is_none()
@@ -187,6 +230,84 @@ impl InboundThinkingPipeline {
             is_thinking_enabled,
             Some(target_model),
         );
+    }
+
+    /// 统一进站思考配置与参数治理（流水线节点）：
+    /// 保证四大协议（OpenAI, Claude, Gemini, Codex）的协议无关性。
+    /// 1. 自动识别目标模型（包括 Tiered 自适应模型与具名模型）
+    /// 2. 忽略客户端数字 budget 防污染，精准捕获客户端无后缀思考参数 (low/medium/high)
+    /// 3. 在网关控制模式下，思考参数仅对 Tiered 模型开放操控权，分别映射至网关思考板块的 flash_low, flash_medium, flash_high
+    /// 4. 组装并规范化 generationConfig 中的 thinkingConfig 与 maxOutputTokens
+    pub fn configure_inbound_thinking(
+        target_model: &str,
+        generation_config: &mut Value,
+        client_effort: Option<&str>,
+        client_budget: Option<u64>,
+        token: Option<&crate::proxy::token_manager::ProxyToken>,
+    ) -> Option<i64> {
+        let is_under_v3 = crate::proxy::model_specs::is_gemini_under_v3(target_model);
+        if is_under_v3 {
+            // Gemini < 3 非思考模型严禁注入 thinkingConfig
+            if let Some(obj) = generation_config.as_object_mut() {
+                obj.remove("thinkingConfig");
+                obj.remove("thinking_config");
+            }
+            return None;
+        }
+
+        let tb_config = crate::proxy::config::get_thinking_budget_config();
+        let resolved_budget = crate::proxy::model_specs::resolve_custom_budget(
+            target_model,
+            client_effort,
+            client_budget,
+            &tb_config,
+            token,
+        );
+
+        let is_tiered = crate::proxy::model_specs::is_tiered_flash_model(target_model)
+            || target_model.to_lowercase().contains("tiered");
+
+        let mut tc = json!({
+            "includeThoughts": true
+        });
+
+        if let Some(budget) = resolved_budget {
+            tc["thinkingBudget"] = json!(budget);
+
+            // 确保 maxOutputTokens 大于 thinkingBudget 避免 400
+            let min_overhead = 8192;
+            let current_max = generation_config
+                .get("maxOutputTokens")
+                .and_then(Value::as_i64)
+                .unwrap_or(65536);
+            if current_max <= budget {
+                generation_config["maxOutputTokens"] = json!(budget + min_overhead);
+            }
+        } else if is_tiered {
+            // Tiered 模型未指定具体数字 budget 时，纯自适应模式：不注入 thinkingBudget
+            tc = json!({
+                "includeThoughts": true
+            });
+        }
+
+        generation_config["thinkingConfig"] = tc;
+
+        // 终审上限保护
+        let target_lower = target_model.to_lowercase();
+        let safe_limit = if target_lower.contains("claude") {
+            64000
+        } else if target_lower.contains("pro") {
+            65535
+        } else {
+            65536
+        };
+        if let Some(val) = generation_config["maxOutputTokens"].as_i64() {
+            if val > safe_limit {
+                generation_config["maxOutputTokens"] = json!(safe_limit);
+            }
+        }
+
+        resolved_budget
     }
 
     /// 剥离遗留思考块的前缀标记 (**Thinking**)
@@ -408,5 +529,108 @@ mod tests {
         // Gemini 原生签名绝不被二次编码，必须原样保留
         assert_eq!(parts[0]["thoughtSignature"], gemini_sig);
         assert_eq!(parts[1]["text"], "Gemini answer");
+    }
+
+    #[test]
+    fn test_inbound_pipeline_intercepts_foreign_claude_signature_for_gemini() {
+        let foreign_claude_sig = "3mgp11XmVXq9InniGA4VAKd7c97NqFw+dWZt79Uz/w9znho88gSM76jv2bZmir7wI86Ixpha7eWdGuznAot4PNbe3+V9bgMTIEyUarn4MLAiiFVb830ZlM+H5ukQwXdD2Zv8nUSmmZTYinpLPGha8TORZAfpU1FJEvwyECel5+W7kc9kpTWrd8DqRNBTOz5EDtvoatiZgKv5SqInhGXK74SJ+PRIC6fNXvYG082HR6TsVxvVYaerz8A40rloIVTxRNK43h3Ecs1boxY4PZqBT8Yhl2qn/iZ+4Xt7FNkI0DAuS9iK0HYKMC4yw0OqKx/LeU+WFZlyc6hGm1BkzLY6yG97MH7kmJ0OPlBWgWFaTeL/uXuGJX6QkKObXN+phoq+kkF2vdFt/mdJMbdgfmSCVQ9037hGBhOHm0zN50KLkp1SxuAY1oWc+lDcI4ufWoyn";
+
+        let mut contents = vec![json!({
+            "role": "model",
+            "parts": [
+                {
+                    "text": "Cross-model thinking from Claude",
+                    "thought": true,
+                    "thoughtSignature": foreign_claude_sig
+                },
+                {
+                    "thoughtSignature": foreign_claude_sig,
+                    "functionCall": {
+                        "name": "bash",
+                        "args": { "command": "ls" }
+                    }
+                }
+            ]
+        })];
+
+        InboundThinkingPipeline::process_contents(
+            &mut contents,
+            ProxyProtocol::AnthropicClaude,
+            "gemini-3.7-flash-high",
+            true,
+            None,
+            false,
+        );
+
+        let parts = contents[0]["parts"].as_array().expect("parts array");
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0]["thought"], true);
+        assert!(
+            parts[0].get("thoughtSignature").is_none(),
+            "Thinking block for Gemini should NOT carry foreign signature or sentinel in pure text"
+        );
+        assert_eq!(
+            parts[1]["thoughtSignature"],
+            crate::proxy::thinking_store::SENTINEL_SIGNATURE,
+            "FunctionCall must fall back to sentinel signature in InboundThinkingPipeline"
+        );
+    }
+
+    #[test]
+    fn test_inbound_pipeline_intercepts_foreign_gemini_signature_for_claude() {
+        // 模拟 Gemini 原生签名
+        let foreign_gemini_sig =
+            "Ep4KCpsKAWkUfRMa5ZYMDdlPjxrQTLzVZ6MZeopI88888888888888888888888888888888";
+
+        let mut contents = vec![
+            json!({
+                "role": "user",
+                "parts": [{ "text": "hello" }]
+            }),
+            json!({
+                "role": "model",
+                "parts": [
+                    {
+                        "text": "The input is a Chinese greeting...",
+                        "thought": true,
+                        "thoughtSignature": foreign_gemini_sig
+                    },
+                    {
+                        "text": "Hello! How can I help you today?"
+                    }
+                ]
+            }),
+            json!({
+                "role": "user",
+                "parts": [{ "text": "continue" }]
+            }),
+        ];
+
+        InboundThinkingPipeline::process_contents(
+            &mut contents,
+            ProxyProtocol::OpenAIChat,
+            "claude-opus-4-6-thinking",
+            true,
+            None,
+            false,
+        );
+
+        let model_parts = contents[1]["parts"].as_array().expect("parts array");
+        // 关键验证：发往 Claude 时，由于历史异构签名不是合法 Claude 签名，
+        // 思考块绝不能带着 Gemini 签名发给 Claude，而是安全降级为普通正文文本！
+        let has_thought_block = model_parts
+            .iter()
+            .any(|p| p.get("thought").and_then(|v| v.as_bool()) == Some(true));
+        assert!(
+            !has_thought_block,
+            "Claude turn must NOT contain unvalidated thinking block with foreign Gemini signature"
+        );
+        let has_gemini_sig = model_parts
+            .iter()
+            .any(|p| p.get("thoughtSignature").is_some() || p.get("thought_signature").is_some());
+        assert!(
+            !has_gemini_sig,
+            "Foreign Gemini signature must be completely eliminated from Claude turn"
+        );
     }
 }
