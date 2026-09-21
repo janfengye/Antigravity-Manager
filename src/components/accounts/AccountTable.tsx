@@ -354,10 +354,10 @@ function AccountRowContent({
     const weeklyItems = useMemo(() => {
         if (quotaWindow !== 'weekly') return [];
         return (account.quota?.quota_groups || []).flatMap(group => {
-            return group.buckets
+            return (group.buckets || [])
                 .filter(b => b.window.toLowerCase().includes('week') || b.bucket_id.toLowerCase().includes('week'))
                 .map(b => {
-                    const shortGroupName = group.display_name
+                    const shortGroupName = (group.display_name || '')
                         .replace(/ models?$/i, '')
                         .replace(/Claude and GPT/i, 'Claude/GPT');
                     return {

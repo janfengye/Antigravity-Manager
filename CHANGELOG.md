@@ -3,6 +3,18 @@
 > 完整版本历史记录。返回项目主页请查看 [README.md](README.md) | [English Changelog](CHANGELOG_EN.md)。
 
 *   **版本演进**:
+    *   **v4.7.11 (2026-09-21)**:
+        -   **[账号管理与配额安全健壮性修复] 彻底解决打开账号管理 TypeError: Cannot read properties of null (reading 'filter') 崩溃 (Fixes #3491)**:
+            -   **空桶安全兜底与解构保护**: 全面排查并修复 `AccountCard`、`AccountTable`、`quotaDisplay`、`Dashboard` 以及 `AccountDetailsDialog` 中对 `group.buckets` 与 `group.display_name` 的直接访问，增加安全可选链与空数组保底降级（`group.buckets || []`），杜绝因历史旧数据或不完整配额响应导致的前端白屏崩溃。
+            -   **前端类型定义契约对齐**: 将 `QuotaGroup` 中的 `buckets` 明确标注为可选字段（`buckets?: QuotaBucket[]`），强化编译期静态空安全检查。
+            -   **后端 Rust 反序列化平滑兼容**: 为 Rust `QuotaGroup.buckets` 添加 `#[serde(default)]`，历史数据或旧配置中缺失 `buckets` 字段时自动初始化为空集合，提供双向平滑兼容。
+    *   **v4.7.10 (2026-09-21)**:
+        -   **[OpenCode 支持多 APIKEY.FUN 独立 Profile 管理与并发原子落盘] (PR #3490, Thanks to @Avlaak)**:
+            -   **独立 Profile 隔离**: 支持为每个 APIKEY.FUN Key 创建、更新与停用专属的 OpenCode provider profile，彻底解决多 Key 激活时相互覆盖问题，同时平滑兼容历史单 profile。
+            -   **稳定 ID 派生与抗碰撞**: 基于 SHA-256 派生短 ID，检测到碰撞时自适应回退至完整摘要，并严格拒绝越权覆写其他 Key 的后缀 profile。
+            -   **模型缓存与竞态安全**: 按 Key 与 Endpoint 粒度缓存模型列表，有效过滤切换或清空 Key 时的过期竞态响应。
+            -   **REST 与 Tauri 路由双通**: 在 Tauri Command 与 Web API 认证路由上同步提供 provider 查询与安全移除接口，防止非法或保留 provider 被误删。
+            -   **并发序列化与原子写入**: 串行化 OpenCode 配置更新操作，保证文件 I/O 隔离在异步任务外，通过私有临时文件与故障回滚机制实现原子落盘。
     *   **v4.7.9 (2026-09-21)**:
         -   **[Gemini 报文极简瘦身与单真签名锚点法则] 彻底根除 10MB 签名打爆 1,048,576 Token 与 400 校验拦截 (PR #3482)**:
             -   **痛点根治**: 生产排查发现多轮复杂代码推理中，单次签名长达 300KB 至 509KB，旧网关单轮 3 至 5 重无脑复制累积出 9.93MB 签名（占报文 95.2%）击穿 1,048,576 上限抛出 400 崩溃。

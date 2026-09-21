@@ -80,7 +80,7 @@ export interface QuotaBucket {
 export interface QuotaGroup {
     display_name: string;
     description?: string;
-    buckets: QuotaBucket[];
+    buckets?: QuotaBucket[];
 }
 
 export interface DeviceProfile {

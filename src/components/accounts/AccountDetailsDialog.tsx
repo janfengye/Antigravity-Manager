@@ -193,7 +193,7 @@ export default function AccountDetailsDialog({ account, onClose }: AccountDetail
                                         {group.description && <span className="text-[10px] font-normal opacity-70">{group.description}</span>}
                                     </div>
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                        {group.buckets.map((bucket, bIdx) => {
+                                        {(group.buckets || []).map((bucket, bIdx) => {
                                             const percentage = Math.round(bucket.remaining_fraction * 100);
                                             return (
                                                 <div key={bIdx} className="bg-white dark:bg-base-200 p-3 rounded-lg border border-gray-100 dark:border-white/5 shadow-sm">

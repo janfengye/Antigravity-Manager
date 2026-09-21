@@ -64,6 +64,7 @@ pub struct QuotaGroup {
     pub display_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(default)]
     pub buckets: Vec<QuotaBucket>,
 }
 
@@ -346,5 +347,13 @@ mod tests {
         quota.subscription_tier = None;
         quota.ensure_subscription_tier();
         assert_eq!(quota.subscription_tier, None);
+    }
+
+    #[test]
+    fn test_quota_group_deserialization_with_missing_buckets() {
+        let json = r#"{"display_name":"Gemini Models"}"#;
+        let group: QuotaGroup = serde_json::from_str(json).expect("Should deserialize with missing buckets");
+        assert_eq!(group.display_name, "Gemini Models");
+        assert!(group.buckets.is_empty());
     }
 }

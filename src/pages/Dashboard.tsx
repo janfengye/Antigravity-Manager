@@ -49,7 +49,7 @@ function Dashboard() {
                         ? gname.includes('claude') || gname.includes('gpt') || gname.includes('3p')
                         : gname.includes('gemini') || (!gname.includes('claude') && !gname.includes('gpt') && !gname.includes('3p'));
                     if (matches) {
-                        const weekly = group.buckets.find(b =>
+                        const weekly = group.buckets?.find(b =>
                             b.window?.toLowerCase().includes('week') || b.bucket_id?.toLowerCase().includes('week') || b.window?.toLowerCase().includes('7d')
                         );
                         if (weekly && (weekly.remaining_fraction ?? 1) <= 0.001) {

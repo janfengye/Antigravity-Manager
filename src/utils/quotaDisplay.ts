@@ -4,12 +4,12 @@ import type { ModelQuota, QuotaGroup } from '../types/account';
 export function getModelQuotaDisplay(modelId: string, model: ModelQuota | undefined, groups: QuotaGroup[] = []) {
     const name = modelId.toLowerCase();
     const thirdParty = name.startsWith('claude') || name.startsWith('gpt');
-    const buckets = groups.filter(group => {
-        const groupName = group.display_name.toLowerCase();
+    const buckets = (groups || []).filter(group => {
+        const groupName = (group?.display_name || '').toLowerCase();
         const isThirdParty = /claude|gpt|3p/.test(groupName)
-            || group.buckets.some(bucket => bucket.bucket_id.toLowerCase().includes('3p'));
+            || (group?.buckets || []).some(bucket => bucket?.bucket_id?.toLowerCase().includes('3p'));
         return thirdParty ? isThirdParty : name.startsWith('gemini') && !isThirdParty;
-    }).flatMap(group => group.buckets);
+    }).flatMap(group => group?.buckets || []);
     const fiveHour = buckets.filter(bucket => /5h|hour/i.test(`${bucket.window} ${bucket.bucket_id}`))
         .reduce<(typeof buckets)[number] | undefined>((chosen, bucket) =>
             !chosen || bucket.remaining_fraction < chosen.remaining_fraction ? bucket : chosen, undefined);

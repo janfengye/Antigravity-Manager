@@ -98,8 +98,8 @@ type ModelInput = { name: string; display_name?: string } | null | undefined;
 
 const displayNameCases: Array<[ModelInput, string | undefined, string]> = [
     [{ name: 'gemini-3-pro-high', display_name: 'Gemini 3.1 Pro High' }, undefined, 'Gemini 3.1 Pro High'],
-    [{ name: 'gemini-3-flash' }, undefined, 'gemini-3-flash'],
-    [{ name: 'gemini-3.1-flash-image', display_name: undefined }, undefined, 'gemini-3.1-flash-image'],
+    [{ name: 'gemini-3-flash' }, undefined, 'Gemini 3 Flash'],
+    [{ name: 'gemini-3.1-flash-image', display_name: undefined }, undefined, 'Gemini 3.1 Flash Image'],
     [undefined, 'Claude 系列', 'Claude 系列'],
     [null, undefined, ''],
     [{ name: 'claude-opus-4-6-thinking', display_name: 'Claude Opus 4.6 TK' }, undefined, 'Claude Opus 4.6 TK'],
@@ -289,6 +289,21 @@ test('quota display: weekly exhaustion overrides raw 5h without changing protect
     assertEqual(getModelQuotaDisplay(model.name, model, groups).isWeeklyConstrained, false);
     assertEqual(getModelQuotaDisplay('claude-sonnet-4-6', undefined, groups).isWeeklyConstrained, false);
     assertEqual(getModelQuotaDisplay(model.name, model).percentage, 1);
+});
+
+test('quota display: handles undefined/null buckets and groups safely without throwing', () => {
+    const model = { name: 'gemini-3.1-pro-high', percentage: 75, reset_time: '2030-01-01T00:00:00Z' };
+    const malformedGroups = [
+        { display_name: 'Gemini Models' } as any,
+        { display_name: 'Claude and GPT models', buckets: null } as any,
+        { display_name: 'Other Models', buckets: undefined } as any,
+    ];
+    const display1 = getModelQuotaDisplay(model.name, model, malformedGroups);
+    assertEqual(display1.percentage, 75);
+    assertEqual(display1.isWeeklyConstrained, false);
+
+    const display2 = getModelQuotaDisplay(model.name, model, undefined as any);
+    assertEqual(display2.percentage, 75);
 });
 
 if (failed > 0) {
