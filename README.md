@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> 专业级 AI 账号管理与协议代理系统 (v4.7.12)
+> 专业级 AI 账号管理与协议代理系统 (v4.7.13)
 
 <div align="center">
   <img src="public/icon.png" width="100" height="100" alt="Antigravity Tools Logo">
@@ -11,7 +11,7 @@
       <img src="https://img.shields.io/github/v/release/lbjlaq/Antigravity-Manager?color=blue&style=flat-square" alt="GitHub release">
     </a>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.7.12-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.7.13-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Frontend-React-61DAFB?style=flat-square" alt="React">
     <img src="https://img.shields.io/badge/License-CC--BY--NC--SA--4.0-lightgrey?style=flat-square" alt="License">
@@ -458,7 +458,7 @@ response = client.chat.completions.create(
 
 ## 📝 更新日志
 
-> 最新版本 **v4.7.5**（2026-09-18）：完美修复 Agent 客户端 404/429/503 报错，清洗 billing 头杜绝 Google WAF 误判；解除 1000 毒药预算导致思维链归零缺陷并开放至 24576/32768 大预算；重构日志大报文虚拟滚动渲染与内存解耦搜索，建立 30% 滑动窗口容量平滑淘汰；根治 Balance 负载均衡模式 429 故障转移与粘性会话死锁；支持 Windows 原生快捷方式自愈与覆盖安装冲突修复；自动补齐历史 PRO 账号标识。
+> 最新版本 **v4.7.13**（2026-09-22）：新增「轻量模式」，关闭窗口或最小化到托盘时主动释放 WebView 渲染进程，后台常驻内存从约 160~250MB 骤降至约 30~35MB，反代网关 / 智能预热 / 额度监控 / 熔断器等核心服务 100% 常驻，托盘点击或二次启动应用即无感重建窗口；彻底解决账号切换后 IDE 自动重启偶发弹窗报错或无法拉起（严格过滤 `language_server` 引擎进程、跨平台启动参数安全清洗、macOS `open --args` 规范化传参）；修复 Gemini 系列账号无预热、流量日志缺失与倒计时不走动，解除未激活周配额冷启动死锁并联动自定义预热模型范围；默认过滤 `GET /health` 等高频探活请求，彻底杜绝探针刷屏淹没真实业务调用与 SQLite 存储膨胀，异常探活（5xx）仍完整保留用于故障诊断。
 
 👉 **[查看完整更新日志 CHANGELOG.md →](CHANGELOG.md)**
 

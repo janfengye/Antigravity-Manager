@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> Professional Account Management & Protocol Proxy System for AI Services (v4.7.12)
+> Professional Account Management & Protocol Proxy System for AI Services (v4.7.13)
 
 <div align="center">
   <img src="public/icon.png" width="100" height="100" alt="Antigravity Tools Logo">
@@ -11,7 +11,7 @@
       <img src="https://img.shields.io/github/v/release/lbjlaq/Antigravity-Manager?color=blue&style=flat-square" alt="GitHub release">
     </a>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.7.12-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.7.13-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -448,7 +448,7 @@ In clients that support OpenAI protocol (e.g., Cherry Studio), you can configure
 
 ## 📝 Changelog
 
-> Latest version **v4.7.5** (2026-09-18): Resolved Agent client 404/429/503 errors and purged billing headers to eliminate upstream Google WAF false positives; eliminated the 1,000 thinking budget defect causing zero-token thought collapse and unlocked up to 24,576/32,768 deep reasoning budgets; rebuilt traffic log virtualization and in-memory search with 30% sliding window physical disk eviction; resolved Balance mode 429 failover delays and session sticky deadlocks; enabled native Windows COM shortcut healing and fixed installer conflicts; automatically healed legacy PRO tier statuses.
+> Latest version **v4.7.13** (2026-09-22): Introduced "Lightweight Mode" — actively releasing the WebView renderer on window close or minimize-to-tray cuts background RAM from ~160-250MB down to ~30-35MB while the reverse proxy gateway, smart warmup, quota monitor, and circuit breaker stay 100% resident, with seamless window reconstruction on tray click or duplicate app launch; eliminated intermittent IDE relaunch errors and failures after account switching (strict `language_server` engine exclusion, cross-platform startup argument sanitization, and normalized macOS `open --args` passing); fixed missing Gemini warmup, absent traffic logs, and stalled countdown timers by unlocking uninitialized weekly-quota cold starts and honoring user-configured warmup models; high-frequency `GET /health` probes are now filtered by default, preventing probe flooding from drowning real API traffic and bloating SQLite, while anomalous probes (5xx) are fully retained for diagnostics.
 
 👉 **[View Full Changelog → CHANGELOG_EN.md](CHANGELOG_EN.md)**
 

@@ -14,6 +14,7 @@ export interface ProxyConfig {
     custom_mapping?: Record<string, string>;
     request_timeout: number;
     enable_logging: boolean;
+    capture_health_logs?: boolean;
     log_retention?: LogRetentionConfig;
     debug_logging?: DebugLoggingConfig;
     upstream_proxy: UpstreamProxyConfig;
@@ -191,6 +192,7 @@ export interface AppConfig {
     circuit_breaker: CircuitBreakerConfig; // [NEW] 熔断器配置
     proxy: ProxyConfig;
     cloudflared: CloudflaredConfig; // [NEW] Cloudflared 配置
+    lightweight_mode?: boolean; // [NEW] 轻量模式：关闭到托盘时释放 WebView
 }
 
 // ============================================================================
