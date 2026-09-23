@@ -241,6 +241,20 @@ fn simplify_message(msg: &Value) -> Value {
     Value::Object(out)
 }
 
+/// OpenAI Responses 的 `input` 项结构与 chat message 不同（`type` / `call_id` / `arguments` /
+/// `output` 等），单独裁剪：沿用 `simplify_message` 的体积控制，再补回调试必需的字段。
+fn simplify_responses_input_item(item: &Value) -> Value {
+    let mut out = simplify_message(item);
+    if let Some(obj) = out.as_object_mut() {
+        for key in ["type", "role", "call_id", "arguments", "output"] {
+            if let Some(v) = item.get(key) {
+                obj.insert(key.to_string(), v.clone());
+            }
+        }
+    }
+    out
+}
+
 fn simplify_content(content: &Value) -> Value {
     match content {
         Value::String(s) => Value::String(s.clone()),
@@ -342,6 +356,65 @@ fn simplify_tools(tools: &Value) -> Value {
     tools.clone()
 }
 
+/// 精简报文字段的**展示顺序**：按用户 / 开发者关注度从高到低排列。
+/// 未列入的字段按其原有相对顺序追加在后面（依赖 `serde_json` 的 `preserve_order`）。
+/// 目标：模型 → 思考块 → 上下文 → 用量/缓存 → 工具调用 → 其余，四协议行为一致。
+const CORE_FIELD_ORDER: [&str; 22] = [
+    // 1. 模型标识
+    "model",
+    // 2. 思考块：开关 / 强度 / 内容 / 签名
+    "thinking",
+    "reasoning_effort",
+    "reasoning",
+    "reasoning_content",
+    "generationConfig",
+    "generation_config",
+    "thinking_signature",
+    "thought_signature",
+    "signature",
+    "thoughtSignature",
+    "_session_thinking_id",
+    // 3. 上下文：系统提示词与对话
+    "system",
+    "systemInstruction",
+    "instructions",
+    "messages",
+    "contents",
+    "input",
+    // 4. 用量与缓存
+    "usage",
+    "usageMetadata",
+    // 5. 工具调用（关注度次之）
+    "tool_calls",
+    "tools",
+];
+
+/// 按关注度重排顶层字段 —— **只调整顺序，不删减任何字段**。
+/// 四协议与调试日志共用，保证展示顺序一致；`request` 包装层递归重排并保持在前。
+pub fn reorder_payload_fields(value: &Value) -> Value {
+    let Value::Object(map) = value else {
+        return value.clone();
+    };
+    let mut ordered = Map::new();
+    let mut rest: Map<String, Value> = Map::new();
+    for (k, v) in map {
+        if k == "request" {
+            ordered.insert(k.clone(), reorder_payload_fields(v));
+        } else {
+            rest.insert(k.clone(), v.clone());
+        }
+    }
+    for key in CORE_FIELD_ORDER {
+        if let Some(v) = rest.remove(key) {
+            ordered.insert(key.to_string(), v);
+        }
+    }
+    for (k, v) in rest {
+        ordered.insert(k, v);
+    }
+    Value::Object(ordered)
+}
+
 pub fn simplify_payload_json(value: &Value) -> Value {
     let inner = value.get("request").unwrap_or(value);
     let mut concise = Map::new();
@@ -428,6 +501,28 @@ pub fn simplify_payload_json(value: &Value) -> Value {
         .or_else(|| value.get("systemInstruction"))
     {
         concise.insert("systemInstruction".into(), sys.clone());
+    }
+
+    // 5.5 OpenAI Responses 协议：instructions（系统指令）与 input（对话上下文）
+    //     这两个是 Responses / Codex 的核心载荷，且不是 messages 的别名 —— 不保留会让
+    //     日志里"系统提示词块与上下文块整段消失"（客户端原文看不到，而中转报文是 Gemini
+    //     格式故看起来完整）。
+    if let Some(instructions) = inner
+        .get("instructions")
+        .or_else(|| value.get("instructions"))
+    {
+        concise.insert("instructions".into(), instructions.clone());
+    }
+    if let Some(input) = inner.get("input").or_else(|| value.get("input")) {
+        concise.insert(
+            "input".into(),
+            match input {
+                Value::Array(arr) => {
+                    Value::Array(arr.iter().map(simplify_responses_input_item).collect())
+                }
+                other => other.clone(),
+            },
+        );
     }
 
     // 6. Configs (generationConfig, thinkingConfig, toolConfig, tool_config, safetySettings)
@@ -560,7 +655,9 @@ pub fn simplify_payload_json(value: &Value) -> Value {
     if concise.is_empty() {
         return simplify_unknown(value);
     }
-    Value::Object(concise)
+
+    // 按关注度重排字段：核心信息前置；未列入 CORE_FIELD_ORDER 的字段保持原相对顺序追加
+    reorder_payload_fields(&Value::Object(concise))
 }
 
 fn simplify_unknown(value: &Value) -> Value {
@@ -664,6 +761,38 @@ mod tests {
             "Tools schema should be completely preserved!"
         );
         assert_eq!(simplified["model"], "gemini-2.5-pro");
+    }
+
+    #[test]
+    fn test_simplify_responses_payload_keeps_instructions_and_input() {
+        // 回归：Responses / Codex 协议的系统提示词在 `instructions`、上下文在 `input`。
+        // 这两个键一度不在白名单里 → simple 模式下整段消失（客户端原文看不到系统提示词与
+        // 上下文，而中转报文是 Gemini 格式故看起来完整）。
+        let req = json!({
+            "model": "gemini-2.5-pro",
+            "instructions": "You are Codex, a coding agent.",
+            "input": [
+                { "type": "message", "role": "user", "content": [{ "type": "input_text", "text": "hi" }] },
+                { "type": "function_call_output", "call_id": "call_1", "output": "ok" }
+            ],
+            "max_output_tokens": 1024
+        });
+
+        let simplified = simplify_payload_json(&req);
+
+        assert_eq!(
+            simplified["instructions"], "You are Codex, a coding agent.",
+            "instructions 必须保留: {simplified}"
+        );
+        assert!(
+            simplified["input"].is_array(),
+            "input 必须保留为数组: {simplified}"
+        );
+        assert_eq!(simplified["input"][0]["role"], "user");
+        assert_eq!(simplified["input"][1]["type"], "function_call_output");
+        assert_eq!(simplified["input"][1]["call_id"], "call_1");
+        assert_eq!(simplified["input"][1]["output"], "ok");
+        assert_eq!(simplified["max_output_tokens"], 1024);
     }
 
     #[test]

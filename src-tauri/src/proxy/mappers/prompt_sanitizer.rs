@@ -129,6 +129,23 @@ const IDENTITY_FAST_MARKERS: [&str; 13] = [
     "based on",
 ];
 
+/// Claude Agent SDK 注入的独立身份块（整串等值匹配）
+const CLAUDE_AGENT_SDK_IDENTITY: &str =
+    "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
+/// 归一化目标：Claude Code CLI 身份。刻意保留「映射成已知客户端身份」而非抹成中性句 ——
+/// 上游对该身份更稳定（原适配层语义，收敛时必须原样保留）。
+const CLAUDE_CODE_CLI_IDENTITY: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
+
+/// Claude Desktop 注入的单行计费元数据前缀（issue #3452：与大量工具组合会触发上游 429）。
+/// 判定**不区分 model** —— 任何客户端注入的风险元数据都必须清洗。
+const BILLING_METADATA_PREFIX: &str = "x-anthropic-billing-header:";
+
+/// 管道自身的系统提示词分界标记（混入时剥掉，避免污染上游报文）
+const SYSTEM_PROMPT_END_MARKERS: [&str; 2] = ["--- [SYSTEM_PROMPT_END] ---", "[SYSTEM_PROMPT_END]"];
+
+/// 管道自身的官方身份文本（全局提示词混入时整段剥掉，避免重复声明身份）
+const SELF_IDENTITY_BLOCK: &str = "You are Antigravity, a powerful agentic AI coding assistant designed by the Google Deepmind team working on Advanced Agentic Coding.\nYou are pair programming with a USER to solve their coding task. The task may require creating a new codebase, modifying or debugging an existing codebase, or simply answering a question.\n**Absolute paths only**\n**Proactiveness**";
+
 pub struct PromptSanitizer;
 
 impl PromptSanitizer {
@@ -257,8 +274,61 @@ impl PromptSanitizer {
     /// 2. 物理剔除清洗后产生的纯空文本 Part（避免上游 400/429 报错）；
     /// 3. 清洗后若存在思考块，强制保序确保思考块严格位于首位 (Index 0)；
     /// 4. `system_scope` 决定是否叠加 System 轨（身份归一化）—— 仅系统提示词为 true。
+    /// 客户端身份归一化：已知客户端身份的**整串等值**映射为目标身份。
+    /// 与 `normalize_system_identity`（抹除归属声明）语义不同 —— 这里刻意保留"映射成已知客户端身份"。
+    pub fn normalize_client_identity(text: &str) -> &str {
+        if text == CLAUDE_AGENT_SDK_IDENTITY {
+            CLAUDE_CODE_CLI_IDENTITY
+        } else {
+            text
+        }
+    }
+
+    /// 是否为客户端注入的单行计费元数据（issue #3452：与大量工具组合会触发上游 429）。
+    /// **不区分 model** —— 风险元数据来自客户端注入，任何模型 / 协议下命中即视为风险。
+    pub fn is_billing_metadata(text: &str) -> bool {
+        let t = text.trim();
+        t.starts_with(BILLING_METADATA_PREFIX) && !t.contains('\n') && !t.contains('\r')
+    }
+
+    /// 剥离管道自身的提示词分界标记与官方身份文本（原适配层 `clean_system_prompt_text`）。
+    /// 注意：不含 `clean_text` —— Header 轨已在 `sanitize_parts_core` 中统一执行，避免重复。
+    pub fn strip_pipeline_markers(text: &str) -> String {
+        let mut s = text.to_string();
+        for marker in SYSTEM_PROMPT_END_MARKERS {
+            if s.contains(marker) {
+                s = s.replace(marker, "");
+            }
+        }
+        if s.contains(SELF_IDENTITY_BLOCK) {
+            s = s.replace(SELF_IDENTITY_BLOCK, "");
+        }
+        s.trim().to_string()
+    }
+
     fn sanitize_parts_core(parts: &mut Vec<Value>, system_scope: bool) -> usize {
         let mut cleaned_count = 0;
+
+        // 0. 物理剔除客户端注入的计费元数据 Part（issue #3452）
+        //    不分 model / 协议：命中即整块移除 —— 风险来自客户端注入，与模型无关。
+        let before = parts.len();
+        parts.retain(|part| {
+            let is_thought = part
+                .get("thought")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+                || part.get("thoughtSignature").is_some()
+                || part.get("thought_signature").is_some();
+            if is_thought {
+                return true;
+            }
+            match part.get("text").and_then(Value::as_str) {
+                Some(t) => !Self::is_billing_metadata(t),
+                None => true,
+            }
+        });
+        cleaned_count += before - parts.len();
+
         for part in parts.iter_mut() {
             if let Some(obj) = part.as_object_mut() {
                 // 思考块受数字签名 (thoughtSignature) 严格保护，其文本必须保持字节级绝对不可变，严禁执行清洗
@@ -269,11 +339,17 @@ impl PromptSanitizer {
                 }
 
                 if let Some(text_val) = obj.get("text").and_then(Value::as_str) {
+                    // 客户端身份映射（整串等值）—— 仅系统提示词，用户轮次文本原样保留
+                    let mapped = if system_scope {
+                        Self::normalize_client_identity(text_val)
+                    } else {
+                        text_val
+                    };
                     // Header 轨（全文本生效）：风控伪 Header 与高危客户端指纹声明
-                    let cleaned = Self::clean_text(text_val);
-                    // System 轨（仅系统提示词）：身份归属声明归一化
+                    let cleaned = Self::clean_text(mapped);
+                    // System 轨（仅系统提示词）：剥离管道分界标记 / 官方身份 + 身份归属声明归一化
                     let cleaned = if system_scope {
-                        Self::normalize_system_identity(&cleaned)
+                        Self::normalize_system_identity(&Self::strip_pipeline_markers(&cleaned))
                     } else {
                         cleaned
                     };
@@ -347,6 +423,10 @@ impl PromptSanitizer {
     pub fn sanitize_gemini_payload(body: &mut Value) -> usize {
         let mut total_cleaned = 0;
 
+        // 0. 深度清理 "[undefined]" 占位串（Cherry Studio 等客户端常见注入）
+        //    统一在此执行，不分协议 —— 任何客户端注入的脏数据都必须清洗。
+        crate::proxy::mappers::common_utils::deep_clean_undefined(body, 0);
+
         // 兼容处理：若存在包装层 "request"，清洗包装内部
         if let Some(inner) = body.get_mut("request").and_then(Value::as_object_mut) {
             let mut inner_val = Value::Object(inner.clone());
@@ -412,6 +492,67 @@ impl PromptSanitizer {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn test_client_identity_mapping_is_preserved_not_neutralized() {
+        // 整串等值映射：必须变成 Claude Code CLI 身份，不能抹成中性句
+        assert_eq!(
+            PromptSanitizer::normalize_client_identity(CLAUDE_AGENT_SDK_IDENTITY),
+            CLAUDE_CODE_CLI_IDENTITY
+        );
+        assert_eq!(
+            PromptSanitizer::normalize_client_identity("You are an expert coder."),
+            "You are an expert coder."
+        );
+    }
+
+    #[test]
+    fn test_strip_pipeline_markers_and_self_identity() {
+        assert_eq!(
+            PromptSanitizer::strip_pipeline_markers("Rule A\n--- [SYSTEM_PROMPT_END] ---\nRule B"),
+            "Rule A\n\nRule B"
+        );
+        assert_eq!(
+            PromptSanitizer::strip_pipeline_markers(&format!(
+                "Intro\n{SELF_IDENTITY_BLOCK}\nOutro"
+            )),
+            "Intro\n\nOutro"
+        );
+    }
+
+    #[test]
+    fn test_billing_metadata_detection_is_model_agnostic() {
+        assert!(PromptSanitizer::is_billing_metadata(
+            "x-anthropic-billing-header: cc_version=2.1.270.ffc;"
+        ));
+        // 多行（真实提示词）不得判定为风险
+        assert!(!PromptSanitizer::is_billing_metadata(
+            "x-anthropic-billing-header: a;\nSecond line prompt instruction"
+        ));
+        assert!(!PromptSanitizer::is_billing_metadata(
+            "You are an expert coder."
+        ));
+    }
+
+    #[test]
+    fn test_billing_metadata_part_is_dropped_and_undefined_cleaned() {
+        let mut payload = json!({
+            "systemInstruction": { "parts": [
+                { "text": "x-anthropic-billing-header: cc_version=2.1.270.ffc;" },
+                { "text": "You are an expert coder." }
+            ]},
+            "generationConfig": { "foo": "[undefined]" }
+        });
+        PromptSanitizer::sanitize_gemini_payload(&mut payload);
+
+        let parts = payload["systemInstruction"]["parts"].as_array().unwrap();
+        assert_eq!(parts.len(), 1, "计费元数据 part 必须被剔除: {payload}");
+        assert_eq!(parts[0]["text"], "You are an expert coder.");
+        assert!(
+            payload["generationConfig"].get("foo").is_none(),
+            "[undefined] 占位串必须被清理: {payload}"
+        );
+    }
 
     #[test]
     fn test_clean_text_multiline_system_prompt_with_billing() {

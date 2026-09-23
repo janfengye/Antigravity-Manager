@@ -7,8 +7,10 @@ use crate::proxy::session_manager::SessionManager;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 
+#[cfg(test)]
 const CLAUDE_AGENT_SDK_IDENTITY: &str =
     "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
+#[cfg(test)]
 const CLAUDE_CODE_CLI_IDENTITY: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
 
 /// Normalize the standalone identity block injected by Claude Agent SDK clients.
@@ -18,11 +20,7 @@ const CLAUDE_CODE_CLI_IDENTITY: &str = "You are Claude Code, Anthropic's officia
 /// RESOURCE_EXHAUSTED. Keep the match exact so user-authored text that merely
 /// mentions the SDK identity is not rewritten.
 fn normalize_claude_client_identity(text: &str) -> &str {
-    if text == CLAUDE_AGENT_SDK_IDENTITY {
-        CLAUDE_CODE_CLI_IDENTITY
-    } else {
-        text
-    }
+    crate::proxy::mappers::prompt_sanitizer::PromptSanitizer::normalize_client_identity(text)
 }
 
 // ===== Safety Settings Configuration =====
@@ -678,10 +676,7 @@ pub fn transform_claude_request_in_timed(
         });
     }
 
-    // 深度清理 [undefined] 字符串 (Cherry Studio 等客户端常见注入)
-    crate::proxy::mappers::common_utils::deep_clean_undefined(&mut inner_request, 0);
-
-    // [PIPELINE] 统一清洗提示词与风控伪 Header
+    // [PIPELINE] 统一清洗提示词与风控伪 Header（含 [undefined] 深度清理，见 PromptSanitizer）
     crate::proxy::mappers::prompt_sanitizer::PromptSanitizer::sanitize_gemini_payload(
         &mut inner_request,
     );
@@ -939,28 +934,11 @@ fn has_valid_signature_for_function_calls(
 }
 
 fn clean_system_prompt_text(text: &str) -> String {
-    let mut s = crate::proxy::mappers::prompt_sanitizer::PromptSanitizer::clean_text(text);
-    if s.contains("--- [SYSTEM_PROMPT_END] ---") {
-        s = s.replace("--- [SYSTEM_PROMPT_END] ---", "");
-    }
-    if s.contains("[SYSTEM_PROMPT_END]") {
-        s = s.replace("[SYSTEM_PROMPT_END]", "");
-    }
-    if s.contains("You are Antigravity, a powerful agentic AI coding assistant") {
-        s = s.replace(
-            "You are Antigravity, a powerful agentic AI coding assistant designed by the Google Deepmind team working on Advanced Agentic Coding.\nYou are pair programming with a USER to solve their coding task. The task may require creating a new codebase, modifying or debugging an existing codebase, or simply answering a question.\n**Absolute paths only**\n**Proactiveness**",
-            "",
-        );
-    }
-    s.trim().to_string()
+    crate::proxy::mappers::prompt_sanitizer::PromptSanitizer::strip_pipeline_markers(text)
 }
 
-fn is_gemini_client_billing_metadata(model: &str, text: &str) -> bool {
-    let text = text.trim();
-    model.starts_with("gemini-")
-        && text.starts_with("x-anthropic-billing-header:")
-        && !text.contains('\n')
-        && !text.contains('\r')
+fn is_gemini_client_billing_metadata(_model: &str, text: &str) -> bool {
+    crate::proxy::mappers::prompt_sanitizer::PromptSanitizer::is_billing_metadata(text)
 }
 
 /// 构建 System Instruction (支持动态身份映射与 Prompt 隔离)
@@ -3748,8 +3726,9 @@ mod tests {
             "  x-anthropic-billing-header: cc_entrypoint=desktop; \n"
         ));
 
-        // Non-Gemini model (e.g. claude-sonnet-4-6) should NOT filter
-        assert!(!is_gemini_client_billing_metadata(
+        // 风险清洗不分 model：非 Gemini 模型同样必须过滤
+        // （任何客户端注入的计费元数据都是风险，与当前模型无关）
+        assert!(is_gemini_client_billing_metadata(
             "claude-sonnet-4-6",
             "x-anthropic-billing-header: cc_version=2.1.270.ffc;"
         ));

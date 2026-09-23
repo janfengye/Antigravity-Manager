@@ -192,6 +192,20 @@ if (validation.note) {
     log(`检测到版本模式: ${colors.cyan}${validation.note}${colors.reset}`);
 }
 
+// 自动识别当前 Git 本地分支并进行通道提示
+let currentGitBranch = '';
+try {
+    currentGitBranch = execSync('git rev-parse --abbrev-ref HEAD', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+} catch {}
+
+if (currentGitBranch) {
+    if (isPrerelease && currentGitBranch !== 'beta') {
+        warn(`当前处于分支 [${currentGitBranch}]。根据项目规程，预发布版本 (${newVersion}) 推荐在 'beta' 分支打版并发布，避免污染 'main' 分支。`);
+    } else if (!isPrerelease && currentGitBranch !== 'main') {
+        warn(`当前处于分支 [${currentGitBranch}]。根据项目规程，正式版本 (${newVersion}) 须在合并进入 'main' 分支后发布。`);
+    }
+}
+
 log(`启动版本号同步: ${colors.yellow}${currentVersion}${colors.reset} -> ${colors.green}${colors.bold}${newVersion}${colors.reset}${isDryRun ? ' [DRY-RUN 演练模式]' : ''}`);
 
 // 5. 采用本地日期避免时区偏差导致的发版日期倒退
@@ -206,6 +220,22 @@ const TARGET_FILES = [
             `"version": "${currentVersion}"`,
             `"version": "${newVersion}"`
         ),
+    },
+    {
+        // npm 以 package.json 为唯一事实来源，但 lock 的镜像字段必须同步跟随，
+        // 否则会出现 package.json=4.7.14-beta / package-lock.json=4.7.13 的版本漂移。
+        // lock 内有两处根版本字段：顶层 "version" 与 packages."" 下的同名 "version"。
+        // 两处均按字段位置锚定（不依赖当前版本串），因此即便存量文件已有漂移也能一次修正。
+        name: 'package-lock.json (根版本镜像，两处)',
+        relPath: 'package-lock.json',
+        replace: (content) => content
+            // 顶层字段：恰为 2 空格缩进（依赖条目的 "version" 为 6 空格，不会误伤）
+            .replace(/^(\s{2}"version":\s*)"[^"]+"/m, `$1"${newVersion}"`)
+            // packages 根条目：以 "": { 紧跟 "name" 的块结构锚定
+            .replace(
+                /("packages":\s*\{\s*\r?\n\s*"":\s*\{\s*\r?\n\s*"name":\s*"[^"]*",\s*\r?\n\s*"version":\s*)"[^"]*"/,
+                `$1"${newVersion}"`
+            ),
     },
     {
         name: 'src-tauri/Cargo.toml',
@@ -240,20 +270,23 @@ const TARGET_FILES = [
         ),
     },
     {
+        // 按结构锚定而非精确当前版本串：预发布轮次会跳过 README(stableOnly)，
+        // 此时 currentVersion 已前进到如 4.7.14-beta，而 README 仍停在上一个正式版
+        // (v4.7.13)，精确匹配会静默失配 —— 导致下一轮正式发版 README 不更新。
         name: 'README.md (标题与徽章)',
         relPath: 'README.md',
         stableOnly: true,
         replace: (content) => content
-            .replace(`(v${currentVersion})`, `(v${newVersion})`)
-            .replace(`Version-${currentVersion}-blue`, `Version-${newVersion}-blue`),
+            .replace(/\(v[0-9][^)]*\)/, `(v${newVersion})`)
+            .replace(/Version-[0-9][^"]*-blue/, `Version-${newVersion}-blue`),
     },
     {
         name: 'README_EN.md (标题与徽章)',
         relPath: 'README_EN.md',
         stableOnly: true,
         replace: (content) => content
-            .replace(`(v${currentVersion})`, `(v${newVersion})`)
-            .replace(`Version-${currentVersion}-blue`, `Version-${newVersion}-blue`),
+            .replace(/\(v[0-9][^)]*\)/, `(v${newVersion})`)
+            .replace(/Version-[0-9][^"]*-blue/, `Version-${newVersion}-blue`),
     },
     {
         name: 'src/components/layout/MiniView.tsx',
@@ -275,8 +308,10 @@ const TARGET_FILES = [
         name: 'CHANGELOG.md (自动插入新版本骨架)',
         relPath: 'CHANGELOG.md',
         replace: (content) => {
-            if (content.includes(`v${newVersion}`)) {
-                return content; // 已有则不重复插入
+            const escaped = newVersion.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const headingRegex = new RegExp(`\\*\\*v${escaped}\\s*\\(`);
+            if (headingRegex.test(content)) {
+                return content; // 已有该版本的标题行则不重复插入
             }
             const anchor = '*   **版本演进**:';
             if (!content.includes(anchor)) {
@@ -291,8 +326,10 @@ const TARGET_FILES = [
         name: 'CHANGELOG_EN.md (自动插入英文版本骨架)',
         relPath: 'CHANGELOG_EN.md',
         replace: (content) => {
-            if (content.includes(`v${newVersion}`)) {
-                return content; // 已有则不重复插入
+            const escaped = newVersion.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const headingRegex = new RegExp(`\\*\\*v${escaped}\\s*\\(`);
+            if (headingRegex.test(content)) {
+                return content; // 已有该版本的标题行则不重复插入
             }
             const anchor = '*   **Version History**:';
             if (!content.includes(anchor)) {
@@ -365,10 +402,24 @@ if (!isDryRun && autoCommit) {
     }
 }
 
-console.log(`
-${colors.bold}${colors.green}🎉 版本号已全部成功升级到 v${newVersion}！${colors.reset}
-后续发版三步走提示:
+if (isPrerelease) {
+    console.log(`
+${colors.bold}${colors.green}🎉 预发布版本号已成功升级到 v${newVersion}！${colors.reset}
+${colors.cyan}【Beta 专属隔离通道】后续发版三步走:${colors.reset}
+  1. 在 ${colors.cyan}CHANGELOG.md${colors.reset} 补充本次预发版的核心更新内容（外部贡献者以行内 (Thanks to @username) 标注）
+  2. 提交发版准备: ${colors.cyan}git commit -am "chore(release): bump version to ${newVersion} and update changelog"${colors.reset}
+  3. 推送预发与标签: ${colors.cyan}git push origin beta && git tag v${newVersion} && git push origin v${newVersion}${colors.reset}
+
+${colors.yellow}🛡️ 隔离说明: Beta 流水线构建将自动标记为 Pre-release，绝不打 Latest 标签，主用户完全不受影响。${colors.reset}
+`);
+} else {
+    console.log(`
+${colors.bold}${colors.green}🎉 正式版本号已成功升级到 v${newVersion}！${colors.reset}
+${colors.cyan}【Main 正式发布通道】后续发版三步走:${colors.reset}
   1. 在 ${colors.cyan}CHANGELOG.md${colors.reset} 补充本次发版的核心更新内容（外部贡献者以行内 (Thanks to @username) 标注）
   2. 提交发版准备: ${colors.cyan}git commit -am "chore(release): bump version to ${newVersion} and update changelog"${colors.reset}
   3. 推送主干与标签: ${colors.cyan}git push origin main && git tag v${newVersion} && git push origin v${newVersion}${colors.reset}
+
+${colors.green}🚀 正式说明: Main 流水线构建将标记为 Latest Release 并推送各平台正式更新。${colors.reset}
 `);
+}

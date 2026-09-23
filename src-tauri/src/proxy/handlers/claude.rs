@@ -532,7 +532,7 @@ pub async fn handle_messages(
             "protocol": "anthropic",
             "trace_id": trace_id,
             "original_model": request.model,
-            "request": original_body,  // 使用原始请求体，不是结构体序列化
+            "request": crate::proxy::payload_audit::reorder_payload_fields(&original_body),  // 原始请求体（字段按关注度重排），不是结构体序列化
         });
         debug_logger::write_debug_payload(
             &debug_cfg,

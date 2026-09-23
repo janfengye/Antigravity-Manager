@@ -507,10 +507,13 @@ mod tests {
                 {
                     "text": "Gemini thinking",
                     "thought": true,
-                    "thoughtSignature": gemini_sig
                 },
                 {
-                    "text": "Gemini answer"
+                    "thoughtSignature": gemini_sig,
+                    "functionCall": {
+                        "name": "bash",
+                        "args": { "command": "ls" }
+                    }
                 }
             ]
         })];
@@ -526,9 +529,8 @@ mod tests {
 
         let parts = contents[0]["parts"].as_array().expect("parts array");
         assert_eq!(parts.len(), 2);
-        // Gemini 原生签名绝不被二次编码，必须原样保留
-        assert_eq!(parts[0]["thoughtSignature"], gemini_sig);
-        assert_eq!(parts[1]["text"], "Gemini answer");
+        // Gemini 原生签名在工具调用轮次绝不被二次编码，必须原样保留在 functionCall 部件上
+        assert_eq!(parts[1]["thoughtSignature"], gemini_sig);
     }
 
     #[test]

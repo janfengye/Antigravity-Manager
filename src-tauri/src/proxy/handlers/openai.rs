@@ -1804,8 +1804,9 @@ pub async fn handle_chat_completions(
     }
 
     let debug_cfg = state.debug_logging.read().await.clone();
-    let original_body =
-        debug_logger::is_enabled(&debug_cfg).then(|| debug_value_without_inline_data(&body));
+    let original_body = debug_logger::is_enabled(&debug_cfg).then(|| {
+        crate::proxy::payload_audit::reorder_payload_fields(&debug_value_without_inline_data(&body))
+    });
 
     // [NEW] 自动检测并转换 Responses 格式
     // 如果请求包含 instructions 或 input 但没有 messages，则认为是 Responses 格式
@@ -2996,8 +2997,9 @@ pub async fn handle_completions(
         serialized_json_len(&body)
     );
     let debug_cfg = state.debug_logging.read().await.clone();
-    let original_body =
-        debug_logger::is_enabled(&debug_cfg).then(|| debug_value_without_inline_data(&body));
+    let original_body = debug_logger::is_enabled(&debug_cfg).then(|| {
+        crate::proxy::payload_audit::reorder_payload_fields(&debug_value_without_inline_data(&body))
+    });
     let is_responses_api = uri.path() == "/v1/responses";
     let is_codex_style = body.get("input").is_some() || body.get("instructions").is_some();
     let store_response = responses_store_enabled(&body);

@@ -3,6 +3,24 @@
 > Complete version history for Antigravity Tools. Return to project home at [README_EN.md](README_EN.md).
 
 *   **Version History**:
+    *   **v4.8.0 (2026-09-23)**:
+        -   **[Full-Protocol Tool & Argument 100% Pure Passthrough] Eliminate Agent-Client Tool Call Failures Caused by Legacy Truncation and Opaque Rewriting (PR #3504)**:
+            -   **Lossless Tool & Argument Egress**: Removed tool-name mapping, argument alias rewriting, and error command injection across OpenAI, Anthropic Claude, and Google Gemini adapters, allowing tool names and arguments to reach upstream with the client's original semantics intact — resolving tool call errors in OpenClaw and other agent clients.
+            -   **Zero-Intrusion Descriptions & Verbatim Outputs**: Removed write-based injection into `description` during schema validation and eliminated the tool output compressor; descriptions and execution results now pass through 100% unmodified.
+            -   **System Instruction Freeze & Dead Code Excised**: Replaced aggressive System Prompt freezing with `<system-reminder>` user turns; excised `ToolAdapter`, `PencilAdapter`, and 700+ lines of legacy `apply_patch` diagnostics, netting 3,300+ lines of cleaned code.
+        -   **[Vendor Attribution Statement Normalization] Prevent False 429 Upstream Cool-down Deadlocks (Fixes #3508, Thanks to @oliverhe202018-ctrl)**:
+            -   **Dynamic Prompt Normalization**: Sanitizes foreign vendor statements in client prompts to prevent upstream security policies from misclassifying requests as abusive, completely eliminating entire pool cooldowns triggered by false rate-limiting.
+        -   **[Seamless IDE Hot-Switching] Restart language_server Worker Process Only Without Terminating Main Window**:
+            -   **Targeted Hot-Restart**: Automatically restarts only the internal language server engine on account rotation instead of killing the main IDE application window, preserving active developer context.
+        -   **[Proxy Pipeline Clarification & Audit Telemetry Optimization]**:
+            -   **Inbound vs Outbound Boundary**: Excised inactive outbound pipeline stages, establishing unified inbound convergence and divergent outbound handling; converged risky prompt sanitization into `PromptSanitizer`.
+            -   **Audit Field Priority Reordering**: Reordered telemetry fields by developer priority (Model → Thought → Context → Usage → Tools), and extended the simple audit whitelist for OpenAI Responses instructions and inputs.
+            -   **GET Request Log Suppression**: Suppresses successful GET request persistence when traffic capture is disabled, drastically reducing database bloat.
+        -   **[Dual-Track Release Pipelines & Strict Channel Gates]**:
+            -   **Strict Channel Isolation**: Established `main` for stable releases and `beta` for isolated preview builds; introduced `verify-release-target` CI/CD gate to intercept cross-branch misplacements.
+            -   **Zero Production Intrusion**: Pre-releases are marked as non-latest and completely isolated from the automatic update channel and Docker `latest` tags.
+            -   **Branch-Aware Bump Tooling**: Upgraded `bump-version.mjs` with branch auto-detection, directional guidance, and misplacement safeguards.
+
     *   **v4.7.14-beta (2026-09-22)**:
         -   **[Full-Protocol Tool & Argument 100% Pure Passthrough] Eliminate Agent-Client Tool Call Failures Caused by Legacy Truncation and Opaque Rewriting (PR #3504)**:
             -   **Lossless Tool & Argument Egress**: Removed tool-name mapping, argument alias rewriting, and erroneous command injection across the OpenAI, Anthropic Claude, and Google Gemini adapters, so tool names and arguments reach the upstream with the client's original semantics intact — resolving the erratic tool call errors reported by OpenClaw and other agent clients due to legacy truncation and rewriting.

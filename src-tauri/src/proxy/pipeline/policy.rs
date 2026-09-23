@@ -21,18 +21,6 @@ impl ProxyProtocol {
             | ProxyProtocol::GeminiNative => true,
         }
     }
-
-    /// 出站时是否向客户端回显/透传思考签名
-    /// - OpenAIChat: false (OpenAI Chat API 仅接受 reasoning_content，绝不输出签名)
-    /// - OpenAIResponses / AnthropicClaude / GeminiNative: true (输出原生签名或加密字段)
-    pub fn emits_signature_to_client(&self) -> bool {
-        match self {
-            ProxyProtocol::OpenAIChat => false,
-            ProxyProtocol::OpenAIResponses
-            | ProxyProtocol::AnthropicClaude
-            | ProxyProtocol::GeminiNative => true,
-        }
-    }
 }
 
 /// 上游响应与错误在统一流水线中的唯一判定分类
