@@ -35,9 +35,10 @@
   - Inspect in-flight PRs (`gh pr list --base main`) before rewriting published tips, avoiding force-pushes across shared branches.
   - Retain local rollback refs (`backup/*`) before history rewrites, confirming zero content drift via `git diff --stat <backup> HEAD`.
 - **PR Scope & Grouping**:
-  - Commit freely during local debugging, but converge iterative edits into clean, feature-focused units before publishing.
-  - Dedicate each PR to a single problem class, keeping governance, release tooling, and documentation in isolated PRs.
-  - Keep PR commits individually revertable, route them through peer review, and complete `.github/PULL_REQUEST_TEMPLATE.md`.
+  - **Single Problem Scope**: A PR represents a cohesive collection of fixes or features dedicated to a single problem class. Keep unrelated concerns (such as governance, release tooling, or documentation) in isolated PRs.
+  - **Self-Contained & Individually Revertable**: A PR may contain multiple commits, but each commit must represent an independent, self-contained functional unit that is individually revertable, avoiding messy or tangled changesets.
+  - **Local Convergence & Final-State Commits**: Commit freely during local debugging on development branches; however, before opening or merging a PR, audit and consolidate scattered iterative attempts into clean, high-quality units. Each consolidated commit must describe only its successful final state and rationale, eliminating intermediate trial-and-error noise.
+  - **Review & Template Alignment**: Route every PR through peer review and complete `.github/PULL_REQUEST_TEMPLATE.md` (problem classification, behavior alterations, unverified paths, and rollback strategy).
 - **Contributor Respect & Attribution**:
   - Preserve authorship by preferring the contributor's own PR for squash commits, or attaching explicit `Co-authored-by:` trailers on merge commits and proxy PRs.
   - Disclose costs before merging: highlight affected existing behaviors and unverified paths alongside improvements.
