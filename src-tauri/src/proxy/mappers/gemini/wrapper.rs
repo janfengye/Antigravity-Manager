@@ -231,6 +231,41 @@ pub fn wrap_request_v2(
     }
 
     let lower_model = final_model_name.to_lowercase();
+    let tb_config = crate::proxy::config::get_thinking_budget_config();
+    let is_client_control =
+        tb_config.control_source == crate::proxy::config::ThinkingControlSource::Client;
+
+    let client_budget = inner_request
+        .get("generationConfig")
+        .and_then(|gc| gc.get("thinkingConfig"))
+        .and_then(|tc| {
+            tc.get("thinkingBudget")
+                .or_else(|| tc.get("thinking_budget"))
+                .or_else(|| tc.get("budget_tokens"))
+                .or_else(|| tc.get("budgetTokens"))
+                .or_else(|| tc.get("max_tokens"))
+                .or_else(|| tc.get("maxTokens"))
+        })
+        .and_then(|b| b.as_i64());
+    let client_level = inner_request
+        .get("generationConfig")
+        .and_then(|gc| gc.get("thinkingConfig"))
+        .and_then(|tc| {
+            tc.get("thinkingLevel")
+                .or_else(|| tc.get("thinking_level"))
+                .or_else(|| tc.get("reasoning_effort"))
+                .or_else(|| tc.get("reasoningEffort"))
+                .or_else(|| tc.get("effort"))
+        })
+        .and_then(|v| v.as_str());
+
+    let client_switch = crate::proxy::pipeline::extract_client_thinking_switch(
+        None,
+        client_budget.map(|b| if b <= 0 { 0 } else { b as u64 }),
+        client_level,
+    );
+    let is_client_disabled = is_client_control && client_switch.is_disabled();
+
     let is_under_v3 = crate::proxy::model_specs::is_gemini_under_v3(final_model_name)
         || crate::proxy::model_specs::is_gemini_under_v3(original_model);
     let force_server_thinking = !is_under_v3
@@ -239,7 +274,8 @@ pub fn wrap_request_v2(
             original_model,
         ]);
     let is_preview = lower_model.contains("preview");
-    let should_inject = !is_under_v3
+    let should_inject = !is_client_disabled
+        && !is_under_v3
         && (force_server_thinking
             || lower_model.contains("thinking")
             || (crate::proxy::model_specs::is_gemini_v3_or_above(final_model_name) && !is_preview));
@@ -464,62 +500,9 @@ pub fn wrap_request_v2(
                                     .and_then(|s| s.as_str())
                                     .map(str::to_string);
 
-                                let mut effective_fc_sig = None;
+                                // 纯净线缆透传：客户端若自带签名则保持；缺失签名全权委托进站流水线统一对齐与回填
                                 if let Some(ref sig) = incoming_fc_sig {
-                                    if !sig.is_empty() {
-                                        let cached_family = crate::proxy::SignatureCache::global()
-                                            .get_signature_family(sig);
-                                        match cached_family {
-                                            Some(family) => {
-                                                if crate::proxy::mappers::common_utils::is_model_compatible(&family, final_model_name) {
-                                                    effective_fc_sig = Some(sig.clone());
-                                                }
-                                            }
-                                            None => {
-                                                effective_fc_sig = Some(sig.clone());
-                                            }
-                                        }
-                                    }
-                                }
-
-                                if effective_fc_sig.is_none() {
-                                    if let Some(ref id) = call_id {
-                                        effective_fc_sig = crate::proxy::SignatureCache::global()
-                                            .get_tool_signature(id);
-                                    }
-                                }
-                                if effective_fc_sig.is_none() {
-                                    effective_fc_sig = turn_signature.clone();
-                                }
-                                if effective_fc_sig.is_none()
-                                    && (crate::proxy::thinking_store::model_forces_server_thinking(
-                                        &final_model_name,
-                                    ) || should_inject)
-                                {
-                                    effective_fc_sig = Some(
-                                        crate::proxy::thinking_store::SENTINEL_SIGNATURE
-                                            .to_string(),
-                                    );
-                                }
-
-                                // 单轮单真签名原则：
-                                // 首个工具调用挂载真实签名 (若有)，后续并行工具调用统一打上 32 字节哨兵占位 (满足 Google AST 校验且绝不复制 500KB)
-                                let has_preceding_fc =
-                                    new_parts.iter().any(|p| p.get("functionCall").is_some());
-                                if !has_preceding_fc {
-                                    if let Some(sig) = effective_fc_sig {
-                                        obj.insert("thoughtSignature".to_string(), json!(sig));
-                                    } else {
-                                        obj.insert(
-                                            "thoughtSignature".to_string(),
-                                            json!(crate::proxy::thinking_store::SENTINEL_SIGNATURE),
-                                        );
-                                    }
-                                } else {
-                                    obj.insert(
-                                        "thoughtSignature".to_string(),
-                                        json!(crate::proxy::thinking_store::SENTINEL_SIGNATURE),
-                                    );
+                                    obj.insert("thoughtSignature".to_string(), json!(sig));
                                 }
                                 obj.remove("thought_signature");
                             }
@@ -574,8 +557,13 @@ pub fn wrap_request_v2(
         || lower_model.contains("agent")
         || lower_model.contains("gemini")
     {
-        // [NEW] Extract OpenAI-style max_tokens before mutably borrowing gen_config
-        let req_max_tokens = inner_request.get("max_tokens").and_then(|v| v.as_u64());
+        // [NEW] Extract OpenAI/Claude-style max_tokens before mutably borrowing gen_config
+        let req_max_tokens = inner_request
+            .get("max_tokens")
+            .or_else(|| inner_request.get("max_completion_tokens"))
+            .or_else(|| inner_request.get("maxCompletionTokens"))
+            .or_else(|| inner_request.get("maxTokens"))
+            .and_then(|v| v.as_u64());
 
         // Determine model family and capability beforehand to avoid borrow checker conflicts
         let is_claude = lower_model.contains("claude");
@@ -591,6 +579,10 @@ pub fn wrap_request_v2(
                     .map_or(false, |gc| gc.get("thinkingConfig").is_some())
             };
 
+            let tb_config = crate::proxy::config::get_thinking_budget_config();
+            let is_client_control =
+                tb_config.control_source == crate::proxy::config::ThinkingControlSource::Client;
+
             let default_budget =
                 crate::proxy::model_specs::get_thinking_budget(final_model_name, token);
 
@@ -598,7 +590,8 @@ pub fn wrap_request_v2(
                 crate::proxy::model_specs::is_explicit_heuristic_tier_model(final_model_name);
 
             // [ANTI-POLLUTION] 对齐 Anthropic 与 OpenAI：对于未设置思考配置或显式档位模型，设定权威 default_budget；对于裸模型保留客户端配置供后续 resolve_authoritative_thinking_budget 仲裁
-            let should_override_budget = !has_thinking || is_explicit_tier;
+            // 客户端直接控制模式下，严禁篡改覆盖客户端的思考意图
+            let should_override_budget = !is_client_control && (!has_thinking || is_explicit_tier);
 
             if should_override_budget {
                 tracing::debug!(
@@ -670,23 +663,50 @@ pub fn wrap_request_v2(
         let has_thinking_config = gen_config.contains_key("thinkingConfig");
         let client_level = gen_config
             .get("thinkingConfig")
-            .and_then(|t| t.get("thinkingLevel"))
+            .and_then(|t| {
+                t.get("thinkingLevel")
+                    .or_else(|| t.get("thinking_level"))
+                    .or_else(|| t.get("reasoning_effort"))
+                    .or_else(|| t.get("reasoningEffort"))
+                    .or_else(|| t.get("effort"))
+            })
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
         let client_budget = gen_config
             .get("thinkingConfig")
-            .and_then(|t| t.get("thinkingBudget"))
+            .and_then(|t| {
+                t.get("thinkingBudget")
+                    .or_else(|| t.get("thinking_budget"))
+                    .or_else(|| t.get("budget_tokens"))
+                    .or_else(|| t.get("budgetTokens"))
+                    .or_else(|| t.get("max_tokens"))
+                    .or_else(|| t.get("maxTokens"))
+            })
             .and_then(|v| v.as_i64());
 
+        let client_switch = crate::proxy::pipeline::extract_client_thinking_switch(
+            None,
+            client_budget.map(|b| if b <= 0 { 0 } else { b as u64 }),
+            client_level.as_deref(),
+        );
+
         let tb_config = crate::proxy::config::get_thinking_budget_config();
+        let is_client_control =
+            tb_config.control_source == crate::proxy::config::ThinkingControlSource::Client;
         let budget_opt = if has_thinking_config || force_server_thinking {
             let mut gc_val = serde_json::Value::Object(std::mem::take(gen_config));
+            let client_budget_for_pipeline = if is_client_control {
+                client_budget.filter(|b| *b >= 0).map(|b| b as u64)
+            } else {
+                client_budget.filter(|b| *b > 0).map(|b| b as u64)
+            };
             let resolved =
                 crate::proxy::pipeline::InboundThinkingPipeline::configure_inbound_thinking(
                     final_model_name,
                     &mut gc_val,
+                    client_switch,
                     client_level.as_deref(),
-                    client_budget.filter(|b| *b > 0).map(|b| b as u64),
+                    client_budget_for_pipeline,
                     token,
                 );
             if let serde_json::Value::Object(map) = gc_val {
@@ -697,43 +717,19 @@ pub fn wrap_request_v2(
             None
         };
 
-        if tb_config.control_source == crate::proxy::config::ThinkingControlSource::Client {
-            if let Some(thinking_config) = gen_config.get_mut("thinkingConfig") {
-                if let Some(ref lvl) = client_level {
-                    if let Some(norm_lvl) =
-                        crate::proxy::model_specs::normalize_client_thinking_level(lvl)
-                    {
-                        let final_lvl = if final_model_name.to_lowercase().contains("pro")
-                            && norm_lvl == "MEDIUM"
-                        {
-                            "HIGH"
-                        } else {
-                            norm_lvl
-                        };
-                        thinking_config["thinkingLevel"] = json!(final_lvl);
-                    }
-                }
-                if let Some(b) = client_budget {
-                    if b > 0 {
-                        thinking_config["thinkingBudget"] = json!(b);
-                    } else if b == -1 {
-                        if let Some(tc) = thinking_config.as_object_mut() {
-                            tc.remove("thinkingBudget");
-                        }
-                    }
-                }
+        if !is_client_control {
+            if let Some(tc) = gen_config
+                .get_mut("thinkingConfig")
+                .and_then(|v| v.as_object_mut())
+            {
+                tracing::info!(
+                    "[Gemini-Wrap] Pipeline thinking budget {:?} for {} (client_level={:?})",
+                    budget_opt,
+                    final_model_name,
+                    client_level
+                );
+                tc.remove("thinkingLevel");
             }
-        } else if let Some(tc) = gen_config
-            .get_mut("thinkingConfig")
-            .and_then(|v| v.as_object_mut())
-        {
-            tracing::info!(
-                "[Gemini-Wrap] Pipeline thinking budget {:?} for {} (client_level={:?})",
-                budget_opt,
-                final_model_name,
-                client_level
-            );
-            tc.remove("thinkingLevel");
         }
 
         // [FIX #1747] Ensure max_tokens (maxOutputTokens) is greater than thinking_budget
@@ -840,7 +836,7 @@ pub fn wrap_request_v2(
                 if let Some(decls) = tool.get_mut("functionDeclarations") {
                     if let Some(decls_arr) = decls.as_array_mut() {
                         // 清洗 Schema: 如果存在 parametersJsonSchema，将其标准化为 parameters
-                        for decl in decls_arr {
+                        for decl in decls_arr.iter_mut() {
                             // 检测并转换字段名
                             if let Some(decl_obj) = decl.as_object_mut() {
                                 // 如果存在 parametersJsonSchema，将其重命名为 parameters
@@ -851,13 +847,25 @@ pub fn wrap_request_v2(
                                     crate::proxy::common::json_schema::clean_json_schema(
                                         &mut params,
                                     );
+                                    crate::proxy::mappers::openai::request::enforce_uppercase_types(
+                                        &mut params,
+                                    );
                                     decl_obj.insert("parameters".to_string(), params);
                                 } else if let Some(params) = decl_obj.get_mut("parameters") {
                                     // 标准 parameters 字段
                                     crate::proxy::common::json_schema::clean_json_schema(params);
+                                    crate::proxy::mappers::openai::request::enforce_uppercase_types(
+                                        params,
+                                    );
                                 }
                             }
                         }
+                        // [CACHE] 按 function name 稳定字典序排序，确保全协议 tool schema 字节完全一致
+                        decls_arr.sort_by(|a, b| {
+                            let name_a = a.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                            let name_b = b.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                            name_a.cmp(name_b)
+                        });
                     }
                 }
             }
@@ -1106,49 +1114,11 @@ pub fn wrap_request_v2(
     let is_agent_request =
         config.request_type != "image_gen" && (has_tools || has_tool_interactions);
 
-    // [CACHE] 重建 inner_request 字段顺序——稳定前缀在前，动态内容在后
-    // 遵循 Google 官方建议："将较大且常见的内容放置在提示的开头"
-    // systemInstruction (~稳定的系统提示词) → tools → toolConfig → generationConfig → contents (动态)
-    let mut reordered_inner = json!({});
-    // 1. systemInstruction (稳定)
-    if let Some(si) = inner_request.get("systemInstruction") {
-        reordered_inner["systemInstruction"] = si.clone();
-    }
-    // 2. tools (稳定)
-    if let Some(tools) = inner_request.get("tools") {
-        reordered_inner["tools"] = tools.clone();
-    }
-    // 3. toolConfig & tool_config (稳定，与 tools 共生)
-    if let Some(tc) = inner_request.get("toolConfig") {
-        reordered_inner["toolConfig"] = tc.clone();
-    }
-    if let Some(tc_snake) = inner_request.get("tool_config") {
-        reordered_inner["tool_config"] = tc_snake.clone();
-    }
-    // 4. generationConfig (稳定)
-    if let Some(gc) = inner_request.get("generationConfig") {
-        reordered_inner["generationConfig"] = gc.clone();
-    }
-    // 5. safetySettings (恒定)
-    if let Some(ss) = inner_request.get("safetySettings") {
-        reordered_inner["safetySettings"] = ss.clone();
-    }
-    // 6. sessionId (稳定，基于 account hash)
-    if let Some(sid) = inner_request.get("sessionId") {
-        reordered_inner["sessionId"] = sid.clone();
-    }
-    // 7. contents (动态 — 对话历史，每次追加，放在最后！)
-    reordered_inner["contents"] = inner_request.get("contents").cloned().unwrap_or(json!([]));
-    // 8. 其他字段 (metadata, cachedContent 等 — 保持原样但覆盖已有)
-    for (k, v) in inner_request.as_object().iter().flat_map(|o| o.iter()) {
-        if !reordered_inner
-            .as_object()
-            .map(|o| o.contains_key(k))
-            .unwrap_or(false)
-        {
-            reordered_inner[k] = v.clone();
-        }
-    }
+    // [CACHE] 统一委托进站流水线进行前缀拓扑规范化与对齐（Pipeline First 核心归一）
+    crate::proxy::pipeline::InboundThinkingPipeline::align_google_request_prefix_topology(
+        &mut inner_request,
+    );
+    let reordered_inner = inner_request;
 
     let mut final_request_obj = json!({
         "project": project_id,

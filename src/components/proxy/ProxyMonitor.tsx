@@ -592,6 +592,36 @@ function extractConcisePayload(
         return res;
     };
 
+    /**
+     * 递归深度反转义并反序列化嵌套在 JSON 字符串属性中的 JSON 内容
+     * 例如将 "response": "{\"error\":{\"code\":400...}}" 自动展开为真实的嵌套对象
+     */
+    const deepUnescapeJsonValue = (val: any): any => {
+        if (typeof val === 'string') {
+            const trimmed = val.trim();
+            if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+                try {
+                    const parsed = JSON.parse(trimmed);
+                    return deepUnescapeJsonValue(parsed);
+                } catch {
+                    return val;
+                }
+            }
+            return val;
+        }
+        if (Array.isArray(val)) {
+            return val.map(deepUnescapeJsonValue);
+        }
+        if (val && typeof val === 'object') {
+            const res: Record<string, any> = {};
+            for (const [k, v] of Object.entries(val)) {
+                res[k] = deepUnescapeJsonValue(v);
+            }
+            return res;
+        }
+        return val;
+    };
+
     const concise: any = {};
 
     // 保留用于标识思考块/会话的单行标识 (支持 requestId, sessionId, trace_id 等)
@@ -835,6 +865,20 @@ function extractConcisePayload(
         concise.tool_calls = simplifyToolCalls(obj.tool_calls);
     }
 
+    // 错误响应提纯：不阉割双层报错，完整呈现网关诊断与上游原始错误
+    if (obj.type !== undefined && !obj.messages && !obj.choices) concise.type = obj.type;
+    if (obj.code !== undefined && !obj.messages && !obj.choices) concise.code = obj.code;
+    if (obj.status !== undefined && !obj.messages && !obj.choices) concise.status = obj.status;
+    if (obj.error !== undefined) {
+        concise.error = deepUnescapeJsonValue(obj.error);
+    }
+    if (obj.gateway_error !== undefined) {
+        concise.gateway_error = deepUnescapeJsonValue(obj.gateway_error);
+    }
+    if (obj.upstream_error !== undefined) {
+        concise.upstream_error = deepUnescapeJsonValue(obj.upstream_error);
+    }
+
     // 用量与缓存
     const usage = simplifyUsage(obj.usage || obj.usageMetadata);
     if (usage) {
@@ -856,7 +900,17 @@ function extractConcisePayload(
 
     const substantiveKeys = Object.keys(concise).filter(k => k !== '_session_thinking_id');
     if (substantiveKeys.length === 0) {
-        return rawStr;
+        try {
+            let parsed = JSON.parse(rawStr);
+            if (typeof parsed === 'string') {
+                try {
+                    parsed = JSON.parse(parsed);
+                } catch {}
+            }
+            return JSON.stringify(deepUnescapeJsonValue(parsed), null, 2);
+        } catch {
+            return rawStr;
+        }
     }
 
     return JSON.stringify(concise, null, 2);

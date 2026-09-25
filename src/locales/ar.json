@@ -1294,8 +1294,8 @@
       "action": "إجراء"
     },
     "cli_sync": {
-      "title": "مزامنة CLI بنقرة واحدة",
-      "subtitle": "مزامنة سريعة لنقاط نهاية API الحالية والمفاتيح لأدوات AI CLI المحلية الخاصة بك.",
+      "title": "الإعداد السريع لأدوات Agent",
+      "subtitle": "مزامنة سريعة لنقاط نهاية API الحالية والمفاتيح لأدوات AI Agent المحلية الخاصة بك.",
       "card_title": "تكوين {{name}}",
       "status": {
         "not_installed": "لم يتم اكتشافه",
@@ -1682,5 +1682,12 @@
       "fetchFailed": "Fetch failed: {{err}}",
       "queryFailed": "Failed to get valid quota or models. Please check if the API Key and Base URL are correct."
     }
+  },
+  "suggestion_delete_thinking": {
+    "title": "توصية التحديث",
+    "message": "تم تحديث إصدار جديد. يوصي المطور بحذف ذاكرة التخزين المؤقت لكتل التفكير لضمان التوافق. سيتم إعادة بنائها تلقائيًا في المرة القادمة. هل تريد الحذف الآن؟",
+    "confirm": "حذف الآن",
+    "cancel": "إلغاء",
+    "success": "تم حذف ذاكرة التخزين المؤقت لكتل التفكير بنجاح وسيتم إعادة بنائها تلقائيًا."
   }
 }

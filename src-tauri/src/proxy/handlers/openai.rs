@@ -1748,6 +1748,10 @@ fn responses_routing_session_id(
 }
 
 fn strip_codex_step_markers(content: &str) -> String {
+    if !content.contains("[codex-turn:") {
+        return content.to_string();
+    }
+    let had_trailing_newline = content.ends_with('\n');
     let mut cleaned = Vec::new();
     for line in content.lines() {
         let trimmed = line.trim();
@@ -1760,7 +1764,11 @@ fn strip_codex_step_markers(content: &str) -> String {
         }
         cleaned.push(line);
     }
-    cleaned.join("\n").trim().to_string()
+    let mut res = cleaned.join("\n");
+    if had_trailing_newline && !res.ends_with('\n') {
+        res.push('\n');
+    }
+    res
 }
 
 fn prefix_with_step_marker(_marker: Option<String>, content: String) -> String {
@@ -1947,21 +1955,71 @@ pub async fn handle_chat_completions(
     // Replace the client's model/thinking/max_tokens with verified real values so the
     // forwarded request matches the expected upstream format. OpenCode encodes the variant as
     // thinking.budget_tokens; we infer the tier from its magnitude.
+    let tb_config = crate::proxy::config::get_thinking_budget_config();
+    let is_client_control =
+        tb_config.control_source == crate::proxy::config::ThinkingControlSource::Client;
+
     let model_lower = openai_req.model.to_lowercase();
     let is_v3_or_above = crate::proxy::model_specs::is_gemini_v3_or_above(&openai_req.model);
     let is_explicit_tier_model = model_lower.ends_with("-high")
         || model_lower.ends_with("-medium")
         || model_lower.ends_with("-low")
         || model_lower.ends_with("-extra-low");
-    let client_budget = if is_v3_or_above || is_explicit_tier_model {
+
+    let client_switch = crate::proxy::pipeline::extract_client_thinking_switch(
+        openai_req
+            .thinking
+            .as_ref()
+            .and_then(|t| t.thinking_type.as_deref()),
+        openai_req
+            .thinking
+            .as_ref()
+            .and_then(|t| t.budget_tokens.map(|b| b as u64))
+            .or_else(|| {
+                openai_req
+                    .reasoning
+                    .as_ref()
+                    .and_then(|r| r.max_tokens.map(|b| b as u64))
+            }),
+        openai_req
+            .reasoning_effort
+            .as_deref()
+            .or_else(|| {
+                openai_req
+                    .reasoning
+                    .as_ref()
+                    .and_then(|r| r.effort.as_deref())
+            })
+            .or_else(|| {
+                openai_req
+                    .thinking
+                    .as_ref()
+                    .and_then(|t| t.effort.as_deref())
+            }),
+    );
+    let client_explicit_disabled = client_switch.is_disabled();
+
+    let raw_client_budget = openai_req
+        .thinking
+        .as_ref()
+        .and_then(|t| t.budget_tokens)
+        .or_else(|| openai_req.reasoning.as_ref().and_then(|r| r.max_tokens));
+
+    let client_budget = if is_client_control {
+        raw_client_budget
+    } else if is_v3_or_above || is_explicit_tier_model {
         if let Some(ref mut t) = openai_req.thinking {
             t.budget_tokens = None; // 清理客户端 budget_tokens，防止污染
         }
+        if let Some(ref mut r) = openai_req.reasoning {
+            r.max_tokens = None;
+        }
         None
     } else {
-        openai_req.thinking.as_ref().and_then(|t| t.budget_tokens)
+        raw_client_budget
     };
-    let effective_budget_hint = if is_explicit_tier_model || is_v3_or_above {
+    let effective_budget_hint = if !is_client_control && (is_explicit_tier_model || is_v3_or_above)
+    {
         None
     } else {
         client_budget
@@ -2006,7 +2064,28 @@ pub async fn handle_chat_completions(
             spec.max_output_tokens
         );
         openai_req.model = spec.id.to_string();
-        if spec.thinking_budget == 0 {
+        if is_client_control && client_explicit_disabled {
+            openai_req.thinking = Some(crate::proxy::mappers::openai::models::ThinkingConfig {
+                thinking_type: Some("disabled".to_string()),
+                budget_tokens: Some(0),
+                effort: None,
+            });
+        } else if is_client_control && raw_client_budget.is_some() {
+            openai_req.thinking = Some(crate::proxy::mappers::openai::models::ThinkingConfig {
+                thinking_type: Some("enabled".to_string()),
+                budget_tokens: raw_client_budget,
+                effort: effort_hint.map(|s| s.to_string()),
+            });
+        } else if is_client_control {
+            // [CRITICAL FIX] 客户端控制模式下，客户端未传数字预算（全缺省或仅传等级）
+            // 严禁伪造并塞入 spec.thinking_budget (4000)！保持真实客户端状态
+            if let Some(ref mut t) = openai_req.thinking {
+                t.budget_tokens = None;
+            }
+            if let Some(ref mut r) = openai_req.reasoning {
+                r.max_tokens = None;
+            }
+        } else if spec.thinking_budget == 0 {
             // Non-thinking checkpoint model (e.g. gemini-3.1-flash-lite): disable thinking
             // AND strip tools/tool_choice — per upstream spec §3 checkpoint requests carry
             // no tools.
@@ -2014,6 +2093,7 @@ pub async fn handle_chat_completions(
             openai_req.tools = None;
             openai_req.tool_choice = None;
         } else {
+            // 网关控制模式继续保留 4000 (Medium) 权威回填
             openai_req.thinking = Some(crate::proxy::mappers::openai::models::ThinkingConfig {
                 thinking_type: Some("enabled".to_string()),
                 budget_tokens: Some(spec.thinking_budget),
@@ -2049,7 +2129,17 @@ pub async fn handle_chat_completions(
         &openai_req.model,
         &*state.custom_mapping.read().await,
     );
-    let fallback_sid = SessionManager::extract_openai_session_id(&openai_req);
+    let explicit_sid = headers
+        .get("x-session-id")
+        .or_else(|| headers.get("x-jeikcode-session-id"))
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty());
+    let fallback_sid = if let Some(sid) = explicit_sid {
+        sid.to_string()
+    } else {
+        SessionManager::extract_openai_session_id(&openai_req)
+    };
     let session_scope = crate::proxy::thinking_store::SessionScope::from_headers_and_body(
         &headers,
         original_body.as_ref(),
@@ -2241,12 +2331,22 @@ pub async fn handle_chat_completions(
             );
         }
 
+        let preceding_turn_anchor = gemini_body
+            .get("request")
+            .and_then(|r| r.get("contents"))
+            .or_else(|| gemini_body.get("contents"))
+            .and_then(|c| c.as_array())
+            .and_then(|a| a.last())
+            .cloned();
+        let causal_anchor =
+            crate::proxy::thinking_store::compute_causal_anchor(preceding_turn_anchor.as_ref());
+
         let upstream_req_start = std::time::Instant::now();
         let call_result = match upstream
             .call_v1_internal_with_headers(
                 method,
                 &access_token,
-                gemini_body,
+                gemini_body.clone(),
                 query_string,
                 extra_headers.clone(),
                 Some(account_id.as_str()),
@@ -2331,19 +2431,20 @@ pub async fn handle_chat_completions(
 
                 // [P1 FIX] Enhanced Peek logic to handle heartbeats and slow start
                 // Pre-read until we find meaningful content, skip heartbeats
-                use crate::proxy::mappers::openai::streaming::create_openai_sse_stream;
+                use crate::proxy::mappers::openai::streaming::create_openai_sse_stream_with_anchor;
                 let include_usage = openai_req
                     .stream_options
                     .as_ref()
                     .map(|o| o.include_usage)
                     .unwrap_or(false);
-                let mut openai_stream = create_openai_sse_stream(
+                let mut openai_stream = create_openai_sse_stream_with_anchor(
                     gemini_stream,
                     openai_req.model.clone(),
                     session_id,
                     message_count,
                     Some(client_tool_names.clone()),
                     include_usage,
+                    Some(causal_anchor),
                 );
 
                 let mut first_data_chunk = None;
@@ -2767,28 +2868,7 @@ pub async fn handle_chat_completions(
                     .purge_corrupted_signatures(&session_id, &mapped_model);
                 // 2. 清理当前 session 的 SignatureCache
                 crate::proxy::SignatureCache::global().delete_session_signature(&client_session_id);
-                // 3. 追加修复提示词到最后一条用户消息
-                if let Some(last_msg) = openai_req.messages.last_mut() {
-                    if last_msg.role == "user" {
-                        let repair_prompt = "\n\n[System Recovery] Your previous output contained an invalid signature. Please regenerate the response without the corrupted signature block.";
-                        if let Some(content) = &mut last_msg.content {
-                            use crate::proxy::mappers::openai::{
-                                OpenAIContent, OpenAIContentBlock,
-                            };
-                            match content {
-                                OpenAIContent::String(s) => {
-                                    s.push_str(repair_prompt);
-                                }
-                                OpenAIContent::Array(arr) => {
-                                    arr.push(OpenAIContentBlock::Text {
-                                        text: repair_prompt.to_string(),
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
-                // 4. 保持同一账号原地重试
+                // 3. 保持同一账号原地重试
                 force_rotate = false;
                 continue;
             } else {
@@ -3694,7 +3774,15 @@ pub async fn handle_completions(
     }
 
     // [NEW v4.2.0] Context Management & Reasoning Replay
-    let fallback_sid = if is_responses_api {
+    let explicit_sid = headers
+        .get("x-session-id")
+        .or_else(|| headers.get("x-jeikcode-session-id"))
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty());
+    let fallback_sid = if let Some(sid) = explicit_sid {
+        sid.to_string()
+    } else if is_responses_api {
         if explicit_session_id.is_some() || previous_response_id.is_some() {
             routing_session_id.clone()
         } else {
@@ -4136,12 +4224,22 @@ pub async fn handle_completions(
         let mut extra_headers = std::collections::HashMap::new();
         extra_headers.insert("x-session-id".to_string(), client_session_id.clone());
 
+        let preceding_turn_anchor = gemini_body
+            .get("request")
+            .and_then(|r| r.get("contents"))
+            .or_else(|| gemini_body.get("contents"))
+            .and_then(|c| c.as_array())
+            .and_then(|a| a.last())
+            .cloned();
+        let causal_anchor =
+            crate::proxy::thinking_store::compute_causal_anchor(preceding_turn_anchor.as_ref());
+
         let upstream_req_start = std::time::Instant::now();
         let call_result = match upstream
             .call_v1_internal_with_headers(
                 method,
                 &access_token,
-                gemini_body,
+                gemini_body.clone(),
                 query_string,
                 extra_headers,
                 Some(account_id.as_str()),
@@ -4353,10 +4451,10 @@ pub async fn handle_completions(
                 } else {
                     // Forced Stream Internal -> Convert to Legacy JSON
                     // Use CHAT SSE Stream (so Collector can parse it)
-                    use crate::proxy::mappers::openai::streaming::create_openai_sse_stream;
+                    use crate::proxy::mappers::openai::streaming::create_openai_sse_stream_with_anchor;
                     // Note: We use create_openai_sse_stream regardless of is_codex_style here,
                     // because we just want the content aggregation which chat stream does well.
-                    let mut openai_stream = create_openai_sse_stream(
+                    let mut openai_stream = create_openai_sse_stream_with_anchor(
                         gemini_stream,
                         openai_req.model.clone(),
                         if is_responses_api {
@@ -4367,6 +4465,7 @@ pub async fn handle_completions(
                         message_count,
                         Some(client_tool_names.clone()),
                         true,
+                        Some(causal_anchor),
                     );
 
                     // Peek Logic (Repeated for safety/correctness on this stream type)
@@ -4751,8 +4850,13 @@ pub async fn handle_completions(
                 "[{}] Pipeline: Target model [{}] not found on upstream (HTTP {}). Terminating completions retry loop without account lockout.",
                 trace_id, mapped_model, status_code
             );
+            let protocol = if is_responses_api {
+                "responses"
+            } else {
+                "openai"
+            };
             let dual_err = crate::proxy::handlers::common::build_dual_track_error(
-                "openai",
+                protocol,
                 status_code,
                 &mapped_model,
                 &error_text,
@@ -4828,13 +4932,24 @@ pub async fn handle_completions(
             continue;
         } else {
             // 不可重试
+            let protocol = if is_responses_api {
+                "responses"
+            } else {
+                "openai"
+            };
+            let dual_err = crate::proxy::handlers::common::build_dual_track_error(
+                protocol,
+                status_code,
+                &mapped_model,
+                &error_text,
+            );
             return (
                 status,
                 [
                     ("X-Account-Email", email.as_str()),
                     ("X-Mapped-Model", mapped_model.as_str()),
                 ],
-                error_text,
+                axum::Json(dual_err),
             )
                 .into_response();
         }
@@ -4847,12 +4962,18 @@ pub async fn handle_completions(
         last_email.as_deref(),
         &last_error,
     );
-    (
-        final_status,
-        headers,
-        format!("All accounts exhausted. Last error: {}", last_error),
-    )
-        .into_response()
+    let protocol = if is_responses_api {
+        "responses"
+    } else {
+        "openai"
+    };
+    let dual_err = crate::proxy::handlers::common::build_dual_track_error(
+        protocol,
+        final_status.as_u16(),
+        &mapped_model,
+        &last_error,
+    );
+    (final_status, headers, axum::Json(dual_err)).into_response()
 }
 
 pub async fn handle_list_models(State(state): State<AppState>) -> impl IntoResponse {

@@ -14,7 +14,12 @@ pub struct ClaudeRequest {
     pub tools: Option<Vec<Tool>>,
     #[serde(default)]
     pub stream: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        alias = "maxTokens",
+        alias = "max_completion_tokens",
+        alias = "maxCompletionTokens"
+    )]
     pub max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f64>,
@@ -41,7 +46,13 @@ pub struct ClaudeRequest {
 pub struct ThinkingConfig {
     #[serde(rename = "type")]
     pub type_: String, // "enabled" or "adaptive"
-    #[serde(alias = "budgetTokens")]
+    #[serde(
+        default,
+        rename = "budget_tokens",
+        alias = "budgetTokens",
+        alias = "max_tokens",
+        alias = "maxTokens"
+    )]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub budget_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]

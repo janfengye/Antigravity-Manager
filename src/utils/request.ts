@@ -56,6 +56,7 @@ const COMMAND_MAPPING: Record<string, { url: string; method: 'GET' | 'POST' | 'D
   'get_proxy_db_disk_size': { url: '/api/logs/disk-size', method: 'GET' },
   'clear_proxy_logs': { url: '/api/logs/clear', method: 'POST' },
   'clear_thinking_store': { url: '/api/proxy/thinking-store/clear', method: 'POST' },
+  'get_thinking_store_count': { url: '/api/proxy/thinking-store/count', method: 'GET' },
   'get_proxy_log_detail': { url: '/api/logs/:logId', method: 'GET' },
 
   // Debug Console
@@ -81,6 +82,20 @@ const COMMAND_MAPPING: Record<string, { url: string; method: 'GET' | 'POST' | 'D
   'execute_opencode_clear': { url: '/api/proxy/opencode/clear', method: 'POST' },
   'get_opencode_config_content': { url: '/api/proxy/opencode/config', method: 'POST' },
   'get_canonical_families': { url: '/api/proxy/opencode/families', method: 'GET' },
+
+  // Hermes Agent provider and model configuration
+  'get_hermes_sync_status': { url: '/api/proxy/hermes/status', method: 'POST' },
+  'execute_hermes_sync': { url: '/api/proxy/hermes/sync', method: 'POST' },
+  'execute_hermes_restore': { url: '/api/proxy/hermes/restore', method: 'POST' },
+  'execute_hermes_clear': { url: '/api/proxy/hermes/clear', method: 'POST' },
+  'get_hermes_config_content': { url: '/api/proxy/hermes/config', method: 'POST' },
+
+  // OpenClaw provider and model configuration (supports v1.0 and v2.0)
+  'get_openclaw_sync_status': { url: '/api/proxy/openclaw/status', method: 'POST' },
+  'execute_openclaw_sync': { url: '/api/proxy/openclaw/sync', method: 'POST' },
+  'execute_openclaw_restore': { url: '/api/proxy/openclaw/restore', method: 'POST' },
+  'execute_openclaw_clear': { url: '/api/proxy/openclaw/clear', method: 'POST' },
+  'get_openclaw_config_content': { url: '/api/proxy/openclaw/config', method: 'POST' },
 
   // Stats
   'get_token_stats_hourly': { url: '/api/stats/token/hourly', method: 'GET' },

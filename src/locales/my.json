@@ -1285,8 +1285,8 @@
       "action": "Tindakan"
     },
     "cli_sync": {
-      "title": "Segerak CLI Satu-klik",
-      "subtitle": "Segerakkan endpoint API semasa dan kunci ke alat CLI AI tempatan anda dengan cepat.",
+      "title": "Konfigurasi Alat Agent Satu-Klik",
+      "subtitle": "Segerakkan endpoint API semasa dan kunci ke alat AI Agent tempatan anda dengan cepat.",
       "card_title": "Konfigurasi {{name}}",
       "status": {
         "not_installed": "Tidak dikesan",
@@ -1673,5 +1673,12 @@
       "save_success": "Configuration saved",
       "save_error": "Failed to save configuration"
     }
+  },
+  "suggestion_delete_thinking": {
+    "title": "Cadangan Kemas Kini",
+    "message": "Versi baharu telah dipasang. Pembangun mencadangkan untuk mengosongkan cache blok pemikiran untuk memastikan keserasian. Ia akan dibina semula secara automatik. Adakah anda mahu memadamkannya sekarang?",
+    "confirm": "Padam Sekarang",
+    "cancel": "Batal",
+    "success": "Cache blok pemikiran berjaya dipadamkan dan akan dibina semula secara automatik."
   }
 }

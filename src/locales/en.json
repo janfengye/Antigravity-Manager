@@ -1308,9 +1308,17 @@
       "action": "Action"
     },
     "cli_sync": {
-      "title": "One-click CLI Sync",
-      "subtitle": "Quickly sync current API endpoints and keys to your local AI CLI tools.",
+      "title": "One-Click Agent Tools Configuration",
+      "subtitle": "Quickly sync current API endpoints and keys to your local AI Agent tools.",
       "card_title": "{{name}} Config",
+      "jeikcode_recommended": "Recommended",
+      "jeikcode_badge": "Best Matched",
+      "jeikcode_author": "by Jeikl",
+      "jeikcode_tagline": "Built by Core Maintainer · Best Gateway Fit",
+      "jeikcode_tag_cache": "95%+ Insane Cache",
+      "jeikcode_tag_codegraph": "Code Graph",
+      "jeikcode_tag_surpass": "Beats CC & Codex",
+      "jeikcode_tag_custom": "Customizable",
       "status": {
         "not_installed": "Not detected",
         "installed": "v{{version}}",
@@ -1336,6 +1344,74 @@
       },
       "sync_confirm_title": "Sync Confirmation",
       "sync_confirm_message": "Ready to sync {{name}} configuration. ⚠️ Warning: This will overwrite your existing local configuration files (e.g. login tokens, API Keys). Are you sure you want to continue?"
+    },
+    "hermes_sync": {
+      "modal_title": "Configure Antigravity Manager in Hermes",
+      "endpoint_title": "Connection address",
+      "local_endpoint": "Local proxy",
+      "custom_endpoint": "Custom address",
+      "custom_endpoint_desc": "Docker, LAN or reverse proxy",
+      "url_required": "Enter the Hermes connection address",
+      "models_title": "Models available in Hermes",
+      "discover_models": "Discover automatically",
+      "discover_models_desc": "Hermes reads the live model list from /v1/models",
+      "selected_models": "Only selected models",
+      "models_required": "Select at least one model",
+      "activate_provider": "Make Antigravity Manager the default Hermes provider",
+      "activate_provider_desc": "Off by default so your current Hermes provider is not changed.",
+      "default_model": "Default model",
+      "select_default_model": "Select a model",
+      "default_model_required": "Select a default model",
+      "default_model_invalid": "Select a default model available through Antigravity Manager",
+      "currently_active": "Currently active in Hermes",
+      "btn_confirm_sync": "Save to Hermes",
+      "btn_view": "View Config",
+      "btn_restore": "Restore",
+      "btn_clear": "Clear",
+      "clear_confirm_title": "Clear Hermes Configuration",
+      "clear_confirm_message": "This will remove the Antigravity Manager provider from Hermes. Are you sure?",
+      "toast": {
+        "sync_success": "Hermes synced successfully",
+        "clear_success": "Hermes configuration cleared successfully",
+        "clear_error": "Failed to clear Hermes: {{error}}"
+      }
+    },
+    "openclaw_sync": {
+      "modal_title": "Configure Antigravity Manager in OpenClaw",
+      "version_title": "OpenClaw SDK Version Specification",
+      "detected_hint": "Detected environment: {{target}}",
+      "v2_label": "≥ 2026.8.1 (v2.0 Spec)",
+      "v2_desc": "Uses modelPolicy.allow allowlist spec and entries structure with native multimodal image & tool support",
+      "v1_label": "< 2026.8.1 (v1.0 Spec)",
+      "v1_desc": "Uses agents.defaults.models dictionary registration, fully compatible with 2026.7 and legacy SDKs",
+      "endpoint_title": "Connection Address (Base URL)",
+      "local_endpoint": "Local proxy",
+      "custom_endpoint": "Custom address",
+      "custom_endpoint_desc": "Docker, LAN, or reverse proxy",
+      "url_required": "Please enter the OpenClaw connection address",
+      "models_title": "Models available in OpenClaw",
+      "all_models": "Sync all models",
+      "all_models_desc": "Sync all {{count}} available models",
+      "selected_models": "Select models",
+      "models_required": "Select at least one model",
+      "activate_provider": "Set as OpenClaw primary model",
+      "activate_provider_desc": "Automatically updates agents.defaults.model.primary",
+      "default_model": "Default model",
+      "select_default_model": "Select a model",
+      "default_model_required": "Please select a default model",
+      "currently_active": "Currently active as primary model",
+      "btn_sync_v1": "Sync (< 2026.8.1 v1.0)",
+      "btn_sync_v2": "Sync (≥ 2026.8.1 v2.0)",
+      "btn_view": "View Config",
+      "btn_restore": "Restore",
+      "btn_clear": "Clear",
+      "clear_confirm_title": "Clear OpenClaw Configuration",
+      "clear_confirm_message": "This will remove the Antigravity Manager provider and model allowlists from OpenClaw. Are you sure?",
+      "toast": {
+        "sync_success": "OpenClaw ({{version}}) synced successfully",
+        "clear_success": "OpenClaw configuration cleared successfully",
+        "clear_error": "Failed to clear OpenClaw configuration: {{error}}"
+      }
     }
   },
   "monitor": {
@@ -1730,5 +1806,12 @@
     },
     "syncSuccess": "Successfully synced to {{app}}",
     "syncError": "Failed to sync: {{error}}"
+  },
+  "suggestion_delete_thinking": {
+    "title": "Update Recommendation",
+    "message": "A new version has been installed. The maintainer recommends clearing the thinking block cache to ensure compatibility. It will be rebuilt automatically. Would you like to clear it now?",
+    "confirm": "Clear Now",
+    "cancel": "Cancel",
+    "success": "Thinking block cache cleared successfully and will rebuild automatically."
   }
 }

@@ -14,7 +14,15 @@ pub struct OpenAIRequest {
     pub stream: bool,
     #[serde(default)]
     pub n: Option<u32>, // [NEW] 支持多候选结果数量
-    #[serde(rename = "max_tokens")]
+    #[serde(
+        default,
+        rename = "max_tokens",
+        alias = "max_completion_tokens",
+        alias = "maxCompletionTokens",
+        alias = "maxTokens",
+        alias = "max_output_tokens",
+        alias = "maxOutputTokens"
+    )]
     pub max_tokens: Option<u32>,
     pub temperature: Option<f64>,
     #[serde(rename = "top_p")]
@@ -79,7 +87,13 @@ pub struct StreamOptions {
 pub struct ThinkingConfig {
     #[serde(rename = "type")]
     pub thinking_type: Option<String>, // "enabled", "disabled", or "adaptive"
-    #[serde(rename = "budget_tokens", alias = "budgetTokens")]
+    #[serde(
+        default,
+        rename = "budget_tokens",
+        alias = "budgetTokens",
+        alias = "max_tokens",
+        alias = "maxTokens"
+    )]
     pub budget_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>, // "low", "high", or "max"
@@ -88,6 +102,14 @@ pub struct ThinkingConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ReasoningConfig {
     pub effort: Option<String>,
+    #[serde(
+        default,
+        rename = "max_tokens",
+        alias = "maxTokens",
+        alias = "budget_tokens",
+        alias = "budgetTokens"
+    )]
+    pub max_tokens: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

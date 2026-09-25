@@ -11,6 +11,6 @@ pub mod inbound;
 pub mod policy;
 pub mod usage;
 
-pub use inbound::InboundThinkingPipeline;
+pub use inbound::{extract_client_thinking_switch, ClientThinkingSwitch, InboundThinkingPipeline};
 pub use policy::{ProxyProtocol, UpstreamClassification};
 pub use usage::CanonicalUsage;

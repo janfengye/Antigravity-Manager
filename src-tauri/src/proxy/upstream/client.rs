@@ -330,19 +330,25 @@ impl UpstreamClient {
         extra_headers: std::collections::HashMap<String, String>,
         account_id: Option<&str>, // [NEW] Account ID
     ) -> Result<UpstreamCallResult, String> {
-        // [DEFENSE] 全局终极防御拦截：净化所有发往上游报文中的损坏/空 inlineData 以及触发 Google WAF 拦截的违规计费元数据
+        // [DEFENSE] 全局终极防御拦截：净化所有发往上游报文中的损坏/空 inlineData 以及触发 Google WAF 拦截的违规计费元数据，并最终统一对齐前缀拓扑
         if let Some(inner) = body.get_mut("request") {
             crate::proxy::mappers::common_utils::sanitize_gemini_payload_inline_data(inner);
             crate::proxy::mappers::prompt_sanitizer::PromptSanitizer::sanitize_gemini_payload(
                 inner,
             );
             crate::proxy::mappers::common_utils::ensure_gemini_payload_ends_with_user(inner);
+            crate::proxy::pipeline::InboundThinkingPipeline::align_google_request_prefix_topology(
+                inner,
+            );
         } else {
             crate::proxy::mappers::common_utils::sanitize_gemini_payload_inline_data(&mut body);
             crate::proxy::mappers::prompt_sanitizer::PromptSanitizer::sanitize_gemini_payload(
                 &mut body,
             );
             crate::proxy::mappers::common_utils::ensure_gemini_payload_ends_with_user(&mut body);
+            crate::proxy::pipeline::InboundThinkingPipeline::align_google_request_prefix_topology(
+                &mut body,
+            );
         }
 
         // [NEW] Get client based on account (cached in proxy pool manager)

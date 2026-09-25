@@ -96,7 +96,7 @@ checksum = "34fde25430d87a9388dadbe6e34d7f72a462c8b43ac8d309b42b0a8505d7e2a5"
 
 [[package]]
 name = "antigravity-tools"
-version = "4.8.0"
+version = "4.8.1"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -158,6 +158,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "yaml-rt",
 ]
 
 [[package]]
@@ -3775,7 +3776,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls",
- "socket2 0.5.10",
+ "socket2 0.6.2",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -3812,9 +3813,9 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -7183,6 +7184,21 @@ dependencies = [
  "libc",
  "rustix",
 ]
+
+[[package]]
+name = "yaml-rt"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47cba0986904d72ac28dd1afa6c55cbed7b3bf761ed72062adcd53e310025a0c"
+dependencies = [
+ "yaml-rt-core",
+]
+
+[[package]]
+name = "yaml-rt-core"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2c25dd380b82002cfed6591070a8c20adbc055f5e299d9909eb4d9b21d155457"
 
 [[package]]
 name = "yoke"

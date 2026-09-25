@@ -1,6 +1,6 @@
 [package]
 name = "antigravity-tools"
-version = "4.8.0"
+version = "4.8.1"
 description = "Antigravity Tools"
 authors = ["you"]
 license = "CC-BY-NC-SA-4.0"
@@ -23,6 +23,7 @@ tauri = { version = "^2.2.5", features = ["tray-icon", "image-png"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
+yaml-rt = { version = "0.3.0", default-features = false }
 uuid = { version = "1.10", features = ["v4", "serde"] }
 chrono = "0.4"
 dirs = "5.0"

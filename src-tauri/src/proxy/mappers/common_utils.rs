@@ -1206,6 +1206,138 @@ pub fn parse_markdown_images_to_parts(text: &str) -> Vec<Value> {
     parts
 }
 
+/// 严格受支持的常见图片 MIME 白名单（Gemini 官方原生兼容），
+/// 坚决排除非图片格式（音频、视频、PDF、文档、二进制文件等），避免上游报 400 不兼容。
+pub const SUPPORTED_TOOL_IMAGE_MIMES: &[&str] = &[
+    "image/png",
+    "image/jpeg",
+    "image/jpg",
+    "image/webp",
+    "image/gif",
+];
+
+#[inline]
+pub fn is_supported_tool_image_mime(mime: &str) -> bool {
+    let lower = mime.trim().to_ascii_lowercase();
+    SUPPORTED_TOOL_IMAGE_MIMES.contains(&lower.as_str())
+}
+
+/// 智能解析并提取工具输出中的多模态图像数据（全协议共享：OpenAI / Claude / Gemini / Responses）。
+/// 支持：
+/// 1. Markdown 格式图片：`![alt](data:image/...;base64,...)`
+/// 2. 文本中内嵌或直接传递的 Data URL：`data:image/...;base64,...`
+/// 3. JSON 格式工具输出中的图片字段：`{"image": "data:image/...", ...}` 或 `{"screenshot": "...", ...}`
+///
+/// 安全约束：
+/// - 仅严格识别并放行常见白名单图片格式（png, jpeg, webp, gif）；
+/// - 绝对不处理音频、视频、PDF、文本或二进制文件，保证非图片数据原样透传，杜绝破坏兼容性；
+/// - 自动将提取出的 Base64 图像转化为规范的 Gemini `inlineData` part，追加到 `extra_parts` 中；
+/// - 将原工具响应字符串中冗长庞大的 Base64 替换为精炼的摘要标记（如 `[Image: forwarded to visual input (image/png)]`），
+///   既避免了 `functionResponse` JSON 负载膨胀，又让底层视觉模型能够原汁原味地进行视觉感知。
+pub fn extract_multimodal_from_tool_text(raw_text: &str, extra_parts: &mut Vec<Value>) -> String {
+    if !raw_text.contains("data:image/") {
+        return raw_text.to_string();
+    }
+
+    // 1. 如果 raw_text 是 JSON 字符串，尝试解析并提取其中的图片字段
+    if let Ok(mut val) = serde_json::from_str::<Value>(raw_text) {
+        let mut extracted_any = false;
+        if let Some(obj) = val.as_object_mut() {
+            let candidate_keys = ["image", "screenshot", "data", "image_url", "picture"];
+            for key in candidate_keys {
+                if let Some(v) = obj.get_mut(key) {
+                    if let Some(s) = v.as_str() {
+                        if s.starts_with("data:image/") {
+                            if let Some(pos) = s.find(',') {
+                                let mime_part = &s[5..pos];
+                                let mime_type = mime_part.split(';').next().unwrap_or("image/png");
+                                // 严格限制：只允许白名单中的常见图片格式，排除任何音频、文档或非标图片
+                                if is_supported_tool_image_mime(mime_type) {
+                                    let b64_data = &s[pos + 1..];
+                                    if let Some((valid_mime, valid_b64)) =
+                                        validate_and_sanitize_inline_data(Some(mime_type), b64_data)
+                                    {
+                                        extra_parts.push(create_gemini_inline_part(
+                                            Some(&valid_mime),
+                                            &valid_b64,
+                                            "Tool Result Image",
+                                        ));
+                                        *v = json!(format!(
+                                            "[Image: forwarded to visual input ({})]",
+                                            valid_mime
+                                        ));
+                                        extracted_any = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if extracted_any {
+            return val.to_string();
+        }
+    }
+
+    // 2. 检测 Markdown 图片格式：![alt](data:image/...) 或文本内嵌的 data:image/
+    let mut clean_text = String::new();
+    let mut rest = raw_text;
+    let mut found_image = false;
+
+    while let Some(start_idx) = rest.find("data:image/") {
+        clean_text.push_str(&rest[..start_idx]);
+        let data_slice = &rest[start_idx..];
+
+        if let Some(comma_idx) = data_slice.find(',') {
+            let mime_part = &data_slice[5..comma_idx];
+            let mime_type = mime_part.split(';').next().unwrap_or("image/png");
+
+            // 严格白名单校验：非白名单图片（如 svg/tiff/未知）或伪装格式不予解构，直接作为普通文本保留
+            if !is_supported_tool_image_mime(mime_type) {
+                clean_text.push_str("data:image/");
+                rest = &data_slice["data:image/".len()..];
+                continue;
+            }
+
+            let b64_start = comma_idx + 1;
+            let b64_end = data_slice[b64_start..]
+                .find(|c: char| c.is_whitespace() || c == ')' || c == '"' || c == '\'' || c == '`')
+                .map(|idx| b64_start + idx)
+                .unwrap_or(data_slice.len());
+
+            let b64_data = &data_slice[b64_start..b64_end];
+            if let Some((valid_mime, valid_b64)) =
+                validate_and_sanitize_inline_data(Some(mime_type), b64_data)
+            {
+                extra_parts.push(create_gemini_inline_part(
+                    Some(&valid_mime),
+                    &valid_b64,
+                    "Tool Result Image",
+                ));
+                clean_text.push_str(&format!(
+                    "[Image: forwarded to visual input ({})]",
+                    valid_mime
+                ));
+                found_image = true;
+            } else {
+                clean_text.push_str(&data_slice[..b64_end]);
+            }
+            rest = &data_slice[b64_end..];
+        } else {
+            clean_text.push_str("data:image/");
+            rest = &data_slice["data:image/".len()..];
+        }
+    }
+    clean_text.push_str(rest);
+
+    if found_image {
+        clean_text
+    } else {
+        raw_text.to_string()
+    }
+}
+
 /// [FIX] Inject explicit tool mapping instructions for Gemini to read SKILL.md
 pub fn enhance_gemini_skills_prompt(text: &str) -> String {
     let mut enhanced = text.to_string();
@@ -1745,5 +1877,62 @@ mod defense_tests {
         assert_eq!(safe_truncate_chars(emoji_text, 6), "🎉Hello");
         assert_eq!(safe_truncate_chars(emoji_text, 8), "🎉Hello世界");
         assert_eq!(safe_truncate_chars(emoji_text, 9), "🎉Hello世界🦀");
+    }
+
+    #[test]
+    fn test_extract_multimodal_strictly_respects_image_whitelist_and_rejects_audio_and_files() {
+        let fake_png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
+        // 1. 合法白名单图片 (PNG)：正常提取
+        let mut extra_parts = Vec::new();
+        let valid_img_text = format!("![screen](data:image/png;base64,{})", fake_png_b64);
+        let res = extract_multimodal_from_tool_text(&valid_img_text, &mut extra_parts);
+        assert_eq!(extra_parts.len(), 1);
+        assert_eq!(extra_parts[0]["inlineData"]["mimeType"], "image/png");
+        assert!(res.contains("[Image: forwarded to visual input (image/png)]"));
+
+        // 2. 音频文件 (data:audio/mp3)：绝对不提取，保持原样透传
+        let mut audio_parts = Vec::new();
+        let audio_text = "Audio output: data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA";
+        let res_audio = extract_multimodal_from_tool_text(audio_text, &mut audio_parts);
+        assert_eq!(
+            audio_parts.len(),
+            0,
+            "音频文件绝对不能被提取为 inlineData 多模态"
+        );
+        assert_eq!(res_audio, audio_text, "音频文本必须 100% 原始透传");
+
+        // 3. PDF/文档文件 (data:application/pdf)：绝对不提取，保持原样透传
+        let mut pdf_parts = Vec::new();
+        let pdf_text = "PDF doc: data:application/pdf;base64,JVBERi0xLjQKJcOkw7zDtsOfCjIgMCBvYmoKPDwKL0xlbmd0aCAzIDA";
+        let res_pdf = extract_multimodal_from_tool_text(pdf_text, &mut pdf_parts);
+        assert_eq!(
+            pdf_parts.len(),
+            0,
+            "PDF/文档文件绝对不能被提取为 inlineData 多模态"
+        );
+        assert_eq!(res_pdf, pdf_text, "PDF 文本必须 100% 原始透传");
+
+        // 4. 非白名单图片格式 (SVG/TIFF)：绝对不提取，保持原样透传
+        let mut svg_parts = Vec::new();
+        let svg_text = "Vector icon: data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjwvc3ZnPg==";
+        let res_svg = extract_multimodal_from_tool_text(svg_text, &mut svg_parts);
+        assert_eq!(
+            svg_parts.len(),
+            0,
+            "SVG 非标准光栅图片绝对不能被提取为 inlineData"
+        );
+        assert_eq!(res_svg, svg_text, "SVG 必须保持原始透传");
+
+        // 5. JSON 格式工具输出中的音频或未知文件：绝对不提取
+        let mut json_audio_parts = Vec::new();
+        let json_audio = r#"{"type":"audio","image":"data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA="}"#;
+        let res_json = extract_multimodal_from_tool_text(json_audio, &mut json_audio_parts);
+        assert_eq!(
+            json_audio_parts.len(),
+            0,
+            "JSON 中的音频字段绝对不能被误提取为多模态图片"
+        );
+        assert_eq!(res_json, json_audio);
     }
 }

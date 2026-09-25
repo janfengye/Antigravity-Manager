@@ -453,11 +453,21 @@ impl ThinkingStore {
             let (visible, tool_ids, tool_names, existing_thought) =
                 inspect_parts_with_anchor(parts, &anchor);
             let existing_sig = parts.iter().find_map(|p| {
-                p.get("thoughtSignature")
+                let sig = p
+                    .get("thoughtSignature")
                     .or_else(|| p.get("thought_signature"))
                     .and_then(|s| s.as_str())
                     .filter(|s| is_real_signature(s))
-                    .map(str::to_string)
+                    .map(str::to_string);
+                sig.or_else(|| {
+                    p.get("functionCall")
+                        .and_then(|fc| fc.get("id"))
+                        .and_then(|id| id.as_str())
+                        .and_then(|id| {
+                            crate::proxy::SignatureCache::global().get_tool_signature(id)
+                        })
+                        .filter(|s| is_real_signature(s))
+                })
             });
             let already_complete = !turn_needs_restore(parts, &existing_thought);
             // Agent tool turns match by tool_id (Phase 1). Skip fingerprint /
@@ -631,10 +641,13 @@ impl ThinkingStore {
                     }
                     let norm_rec = &rec_norms[rec_idx];
                     let norm_vis = &turn.norm_visible;
+                    let thought_matches_prefix = !rec.thought.trim().is_empty()
+                        && norm_vis.starts_with(&normalize_ws(&rec.thought));
                     if norm_rec == norm_vis
                         || norm_rec.starts_with(norm_vis)
                         || norm_vis.starts_with(norm_rec)
-                        || (norm_rec.len() >= 20 && norm_vis.ends_with(norm_rec))
+                        || (norm_rec.len() >= 10 && norm_vis.ends_with(norm_rec))
+                        || (thought_matches_prefix && norm_vis.ends_with(norm_rec))
                     {
                         turn.matched_record_idx = Some(rec_idx);
                         used[rec_idx] = true;
@@ -809,6 +822,62 @@ impl ThinkingStore {
                 "text": thought_text,
                 "thought": true,
             });
+
+            // [DE-DUPLICATION & ELEVATION] 正文残留思考文本切除与去重：
+            // 解决关思考时降级到正文的思考文本，在重新开思考时被再次提升复活后，导致正文残留双份复读的问题！
+            if !is_placeholder_thought(&rec.thought) && !rec.thought.trim().is_empty() {
+                let rec_thought_trimmed = rec.thought.trim();
+                let rec_thought_norm = normalize_ws(&rec.thought);
+
+                let mut cleaned_parts = Vec::with_capacity(parts.len());
+                for part in parts.drain(..) {
+                    let is_plain_text = part.get("text").is_some()
+                        && part.get("functionCall").is_none()
+                        && part.get("functionResponse").is_none()
+                        && part.get("thought").and_then(|v| v.as_bool()) != Some(true);
+
+                    if is_plain_text {
+                        let text = part["text"].as_str().unwrap_or("");
+                        let text_trimmed = text.trim();
+
+                        // 0. 若正文带有 <think>...</think> 标签，精准切除标签与思考内容，保留剩余真实正文
+                        if let Some((_, rem)) = extract_think_tags(text) {
+                            if !rem.is_empty() {
+                                cleaned_parts.push(json!({ "text": rem }));
+                            }
+                            continue;
+                        }
+
+                        // 1. 完全相同（之前作为独立降级部件存在）：直接丢弃该部件
+                        if text_trimmed == rec_thought_trimmed
+                            || (!rec_thought_norm.is_empty()
+                                && normalize_ws(text) == rec_thought_norm)
+                        {
+                            continue;
+                        }
+                        // 2. 正文以思考文本开头（思考文本与正文被客户端合并为一个部件）：切除前缀
+                        if text.starts_with(&rec.thought) {
+                            let remainder = &text[rec.thought.len()..];
+                            let trimmed_rem =
+                                remainder.trim_start_matches(|c| c == '\r' || c == '\n');
+                            if !trimmed_rem.is_empty() {
+                                cleaned_parts.push(json!({ "text": trimmed_rem }));
+                            }
+                            continue;
+                        } else if text_trimmed.starts_with(rec_thought_trimmed) {
+                            let remainder = &text_trimmed[rec_thought_trimmed.len()..];
+                            let trimmed_rem =
+                                remainder.trim_start_matches(|c| c == '\r' || c == '\n');
+                            if !trimmed_rem.is_empty() {
+                                cleaned_parts.push(json!({ "text": trimmed_rem }));
+                            }
+                            continue;
+                        }
+                    }
+                    cleaned_parts.push(part);
+                }
+                *parts = cleaned_parts;
+            }
             let has_function_call = parts.iter().any(|p| p.get("functionCall").is_some());
             let is_claude_target = target_model
                 .map(|m| m.to_lowercase().contains("claude"))
@@ -1187,29 +1256,49 @@ impl TurnAccumulator {
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown")
                 .to_string();
-            let mut id = fc
+            let explicit_id = fc
                 .get("id")
                 .and_then(|v| v.as_str())
                 .filter(|s| !s.trim().is_empty())
                 .map(str::to_string);
 
-            if id.is_none() {
-                let synthetic = synthesize_tool_id(
-                    &name,
-                    fc.get("args"),
-                    &self.context_anchor,
-                    self.function_call_count,
-                );
-                id = Some(synthetic);
-            }
+            let synthetic = synthesize_tool_id(
+                &name,
+                fc.get("args"),
+                &self.context_anchor,
+                self.function_call_count,
+            );
             self.function_call_count += 1;
 
-            if let Some(id_str) = id {
-                if !self.tool_ids.iter().any(|x| x == &id_str) {
-                    self.tool_ids.push(id_str);
-                    self.tool_names.push(name);
+            // 核心演进：全面转战因果伪哈希 ID！首位强制存入确定性 synthetic ID，客户端 real_id 紧随其后作为元数据兜底
+            if !self.tool_ids.iter().any(|x| x == &synthetic) {
+                self.tool_ids.push(synthetic.clone());
+            }
+
+            if let Some(ref real_id) = explicit_id {
+                if !self.tool_ids.iter().any(|x| x == real_id) {
+                    self.tool_ids.push(real_id.clone());
                 }
-            } else if !self.tool_names.iter().any(|x| x == &name) {
+                if let Some(sig) = part
+                    .get("thoughtSignature")
+                    .or_else(|| part.get("thought_signature"))
+                    .and_then(|s| s.as_str())
+                {
+                    crate::proxy::SignatureCache::global()
+                        .cache_tool_signature(real_id, sig.to_string());
+                    crate::proxy::SignatureCache::global()
+                        .cache_tool_signature(&synthetic, sig.to_string());
+                }
+            } else if let Some(sig) = part
+                .get("thoughtSignature")
+                .or_else(|| part.get("thought_signature"))
+                .and_then(|s| s.as_str())
+            {
+                crate::proxy::SignatureCache::global()
+                    .cache_tool_signature(&synthetic, sig.to_string());
+            }
+
+            if !self.tool_names.iter().any(|x| x == &name) {
                 self.tool_names.push(name);
             }
         }
@@ -1390,25 +1479,33 @@ pub fn finalize_gemini_contents_thinking_with_model(
     is_thinking_enabled: bool,
     target_model: Option<&str>,
 ) {
-    for msg in contents.iter_mut() {
+    // 预先计算每一轮的前置因果锚点 (causal anchor)，以便无 ID 的 Gemini 原生工具调用也能合成确定性 ID
+    let anchors: Vec<String> = (0..contents.len())
+        .map(|i| {
+            let preceding = if i > 0 { contents.get(i - 1) } else { None };
+            compute_causal_anchor(preceding)
+        })
+        .collect();
+
+    for (msg_idx, msg) in contents.iter_mut().enumerate() {
+        let anchor = &anchors[msg_idx];
         let is_model = matches!(
             msg.get("role").and_then(|r| r.as_str()),
             Some("model") | Some("assistant")
         );
 
-        if !is_thinking_enabled {
-            // 当思考模式为关时，清洗所有角色部件（包括 functionResponse）上的签名
+        if !is_model {
+            // 非 model 轮次（如 user 轮次的 functionResponse）：清洗可能混入的误标签名
             if let Some(parts) = msg.get_mut("parts").and_then(|p| p.as_array_mut()) {
                 for part in parts.iter_mut() {
                     if let Some(obj) = part.as_object_mut() {
                         obj.remove("thought_signature");
-                        obj.remove("thoughtSignature");
+                        if obj.contains_key("functionResponse") {
+                            obj.remove("thoughtSignature");
+                        }
                     }
                 }
             }
-        }
-
-        if !is_model {
             continue;
         }
 
@@ -1437,32 +1534,119 @@ pub fn finalize_gemini_contents_thinking_with_model(
                 }
             }
 
-            if is_thinking_enabled {
-                let is_claude_turn = target_model
-                    .map(|m| m.to_lowercase().contains("claude"))
-                    .unwrap_or(false);
+            let is_claude_turn = target_model
+                .map(|m| m.to_lowercase().contains("claude"))
+                .unwrap_or(false);
 
-                // Prefer a real tool signature from this turn when aligning placeholder thoughts.
-                let turn_real_sig: Option<String> = other_parts.iter().find_map(|p| {
-                    if p.get("functionCall").is_some() {
-                        p.get("thoughtSignature")
-                            .and_then(|s| s.as_str())
-                            .filter(|s| is_real_signature(s))
-                            .filter(|s| {
-                                if is_claude_turn {
-                                    is_claude_signature(s)
-                                } else {
-                                    is_likely_gemini_signature(s)
-                                }
+            // 1. 提取当前轮次已有合法的真实工具签名 (若有，优先已有签名，其次查询全局 SignatureCache 兜底)
+            let mut fc_probe_counter = 0usize;
+            let turn_real_sig: Option<String> = other_parts.iter().find_map(|p| {
+                if let Some(fc) = p.get("functionCall") {
+                    let sig_from_part = p
+                        .get("thoughtSignature")
+                        .and_then(|s| s.as_str())
+                        .filter(|s| is_real_signature(s))
+                        .map(str::to_string);
+                    let sig = sig_from_part.or_else(|| {
+                        let name = fc.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
+                        let synthetic =
+                            synthesize_tool_id(name, fc.get("args"), anchor, fc_probe_counter);
+                        fc_probe_counter += 1;
+
+                        crate::proxy::SignatureCache::global()
+                            .get_tool_signature(&synthetic)
+                            .or_else(|| {
+                                fc.get("id")
+                                    .and_then(|id| id.as_str())
+                                    .filter(|s| !s.trim().is_empty())
+                                    .and_then(|id| {
+                                        crate::proxy::SignatureCache::global()
+                                            .get_tool_signature(id)
+                                    })
                             })
-                            .map(|s| s.to_string())
-                    } else {
-                        None
+                            .filter(|s| is_real_signature(s))
+                    });
+                    sig.filter(|s| {
+                        if is_claude_turn {
+                            is_claude_signature(s)
+                        } else {
+                            is_likely_gemini_signature(s)
+                        }
+                    })
+                } else {
+                    None
+                }
+            });
+
+            let has_function_call = other_parts.iter().any(|p| p.get("functionCall").is_some());
+
+            // 2. 规范化工具调用 (functionCall) 签名：
+            // 核心铁律：无论当前轮思考是开是关，发往 Gemini 原生模型的 functionCall 必须具备合法签名或哨兵！
+            if is_claude_turn {
+                // Claude 模型：Anthropic 官方规范要求签名必须且只能在思考块上，工具调用绝不携带签名，更不塞假哨兵
+                for part in other_parts.iter_mut() {
+                    if let Some(obj) = part.as_object_mut() {
+                        obj.remove("thoughtSignature");
+                        obj.remove("thought_signature");
                     }
-                });
+                }
+            } else if has_function_call {
+                // Gemini 原生模型：Google 引擎强制要求每一个 functionCall 必须挂载 thoughtSignature！
+                // 无论思考开还是关：首个 functionCall 承载真实大签名 (若有且合法) 或哨兵，后续并行工具打上 32 字节哨兵
+                let mut first_fc_seen = false;
+                let mut fc_assign_counter = 0usize;
+                for part in other_parts.iter_mut() {
+                    if let Some(fc) = part.get("functionCall") {
+                        let name = fc.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
+                        let synthetic =
+                            synthesize_tool_id(name, fc.get("args"), anchor, fc_assign_counter);
+                        fc_assign_counter += 1;
 
-                let has_function_call = other_parts.iter().any(|p| p.get("functionCall").is_some());
+                        let cached_tool_sig = crate::proxy::SignatureCache::global()
+                            .get_tool_signature(&synthetic)
+                            .or_else(|| {
+                                fc.get("id")
+                                    .and_then(|id| id.as_str())
+                                    .filter(|s| !s.trim().is_empty())
+                                    .and_then(|id| {
+                                        crate::proxy::SignatureCache::global()
+                                            .get_tool_signature(id)
+                                    })
+                            })
+                            .filter(|s| is_likely_gemini_signature(s));
 
+                        if !first_fc_seen {
+                            first_fc_seen = true;
+                            if let Some(sig) = cached_tool_sig {
+                                part["thoughtSignature"] = json!(sig);
+                            } else if let Some(ref real_sig) = turn_real_sig {
+                                if is_likely_gemini_signature(real_sig) {
+                                    part["thoughtSignature"] = json!(real_sig);
+                                } else {
+                                    part["thoughtSignature"] = json!(SENTINEL_SIGNATURE);
+                                }
+                            } else if part.get("thoughtSignature").is_none() {
+                                part["thoughtSignature"] = json!(SENTINEL_SIGNATURE);
+                            } else if let Some(existing) =
+                                part.get("thoughtSignature").and_then(|s| s.as_str())
+                            {
+                                if !is_likely_gemini_signature(existing) {
+                                    part["thoughtSignature"] = json!(SENTINEL_SIGNATURE);
+                                }
+                            }
+                        } else {
+                            if let Some(sig) = cached_tool_sig {
+                                part["thoughtSignature"] = json!(sig);
+                            } else {
+                                part["thoughtSignature"] = json!(SENTINEL_SIGNATURE);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 3. 治理思考块 (thinking_parts)
+            if is_thinking_enabled {
                 if is_claude_turn {
                     // Claude 模型：Anthropic 引擎强制要求签名必须且只能在思考块上！
                     // 工具调用 (functionCall) 彻底剥离签名，绝不注入假哨兵
@@ -1512,25 +1696,26 @@ pub fn finalize_gemini_contents_thinking_with_model(
                                 }
                                 valid_thinking.push(tp);
                             } else {
-                                // 无合法签名的思考块：降级为普通文本或剥除，防止 Anthropic 报 Field required
+                                // 无合法签名的思考块（如 Gemini 历史思考块跨切至 Claude）：
+                                // Anthropic 强制要求思考块签名必须合法。无合法 Claude 签名时，
+                                // 将思考内容降级为带 <think> 标签的正文文本置于首位，既完整保留思考上下文，又彻底规避 Anthropic 400 校验报错！
                                 if let Some(text) = tp.get("text").and_then(|t| t.as_str()) {
                                     if text != "..." && !text.trim().is_empty() {
-                                        other_parts.insert(0, json!({ "text": text }));
+                                        let wrapped = if text.trim_start().starts_with("<think>") {
+                                            text.to_string()
+                                        } else {
+                                            format!("<think>\n{}\n</think>\n\n", text.trim())
+                                        };
+                                        other_parts.insert(0, json!({ "text": wrapped }));
                                     }
                                 }
                             }
                         }
                         thinking_parts = valid_thinking;
                     }
-
-                    for part in other_parts.iter_mut() {
-                        if let Some(obj) = part.as_object_mut() {
-                            obj.remove("thoughtSignature");
-                            obj.remove("thought_signature");
-                        }
-                    }
                 } else if has_function_call {
                     // Gemini 原生模型：Google 引擎强制要求签名必须挂在 functionCall 上！
+                    // 首位思考块保持纯净思考文本，不重复挂载签名，消除双倍膨胀
                     if thinking_parts.is_empty() {
                         let thought_obj = json!({
                             "text": "...",
@@ -1545,54 +1730,13 @@ pub fn finalize_gemini_contents_thinking_with_model(
                             }
                         }
                     }
-
-                    // 规范化所有工具调用 (functionCall)：
-                    // 1. 首个 functionCall 承载真实签名 (若有) 或哨兵
-                    // 2. 后续并行工具调用统一使用 32 字节哨兵占位，满足 Google AST 校验并杜绝几何级膨胀
-                    let mut first_fc_seen = false;
-                    for part in other_parts.iter_mut() {
-                        if part.get("functionCall").is_some() {
-                            if !first_fc_seen {
-                                first_fc_seen = true;
-                                if let Some(ref real_sig) = turn_real_sig {
-                                    if is_likely_gemini_signature(real_sig) {
-                                        part["thoughtSignature"] = json!(real_sig);
-                                    } else {
-                                        part["thoughtSignature"] = json!(SENTINEL_SIGNATURE);
-                                    }
-                                } else if part.get("thoughtSignature").is_none() {
-                                    part["thoughtSignature"] = json!(SENTINEL_SIGNATURE);
-                                } else if let Some(existing) =
-                                    part.get("thoughtSignature").and_then(|s| s.as_str())
-                                {
-                                    if !is_likely_gemini_signature(existing) {
-                                        part["thoughtSignature"] = json!(SENTINEL_SIGNATURE);
-                                    }
-                                }
-                            } else {
-                                part["thoughtSignature"] = json!(SENTINEL_SIGNATURE);
-                            }
-                        }
-                    }
                 } else {
                     // 纯文本轮次（无 tool_call）：
-                    if is_claude_turn {
-                        // Claude 模型：绝不注入哨兵签名；已有真实签名执行 Google 格式包装
-                        for tp in thinking_parts.iter_mut() {
-                            if let Some(sig) = tp.get("thoughtSignature").and_then(|s| s.as_str()) {
-                                if is_claude_signature(sig) {
-                                    tp["thoughtSignature"] =
-                                        json!(ensure_google_claude_thought_signature(sig));
-                                }
-                            }
-                        }
-                    } else {
-                        // Gemini 原生模型纯文本轮次：无 functionCall 工具调用，纯文本思考块天然无需签名
-                        for tp in thinking_parts.iter_mut() {
-                            if let Some(obj) = tp.as_object_mut() {
-                                obj.remove("thoughtSignature");
-                                obj.remove("thought_signature");
-                            }
+                    // Gemini 原生模型纯文本轮次：无 functionCall 工具调用，纯文本思考块天然无需签名
+                    for tp in thinking_parts.iter_mut() {
+                        if let Some(obj) = tp.as_object_mut() {
+                            obj.remove("thoughtSignature");
+                            obj.remove("thought_signature");
                         }
                     }
                 }
@@ -1600,17 +1744,23 @@ pub fn finalize_gemini_contents_thinking_with_model(
                 // 思考块始终强制排在最前面，其他部件紧随其后
                 parts.extend(thinking_parts);
             } else {
-                // 当思考模式为关时，清洗所有 functionCall 上的 thoughtSignature
-                for part in other_parts.iter_mut() {
-                    if let Some(obj) = part.as_object_mut() {
-                        obj.remove("thoughtSignature");
-                    }
-                }
-                // 若含有实质性思考内容的思考块，单次出站降级为普通文本以防丢失语义；纯占位符（如 "..."）则直接剔除
+                // 当思考模式为关时：
+                // 1. 绝不主动注入任何占位思考块（如 "..."）；
+                // 2. 若含有实质性思考内容的思考块，单次出站降级为普通文本以防丢失语义，摘除 thought: true 标记；
+                // 3. 纯占位符则直接剔除，绝不上送 thought: true 结构
                 for tp in thinking_parts {
                     let text = tp.get("text").and_then(|t| t.as_str()).unwrap_or("");
                     if is_meaningful_thought(text) {
-                        parts.push(json!({ "text": text }));
+                        let wrapped = if is_claude_turn {
+                            if text.trim_start().starts_with("<think>") {
+                                text.to_string()
+                            } else {
+                                format!("<think>\n{}\n</think>\n\n", text.trim())
+                            }
+                        } else {
+                            text.to_string()
+                        };
+                        parts.push(json!({ "text": wrapped }));
                     }
                 }
             }
@@ -2193,6 +2343,39 @@ pub fn is_meaningful_thought(thought: &str) -> bool {
     true
 }
 
+/// 提取并切除文本中的 `<think>...</think>` 标签内容（用于跨模型自愈与正文思考文本重提升）
+/// 支持任意大小写（<think> / <THINK>）、前后正文无缝缝合拼接、以及未闭合标签容错
+/// 返回 `Some((thought, remaining_visible))`
+pub fn extract_think_tags(text: &str) -> Option<(String, String)> {
+    let lower = text.to_lowercase();
+    let start_tag = "<think>";
+    let end_tag = "</think>";
+
+    if let Some(start_pos) = lower.find(start_tag) {
+        let after_start = start_pos + start_tag.len();
+        if let Some(end_rel) = lower[after_start..].find(end_tag) {
+            let end_pos = after_start + end_rel;
+            let thought = text[after_start..end_pos].trim().to_string();
+            let before = text[..start_pos].trim();
+            let after = text[end_pos + end_tag.len()..].trim();
+            let visible = if before.is_empty() {
+                after.to_string()
+            } else if after.is_empty() {
+                before.to_string()
+            } else {
+                format!("{}\n\n{}", before, after)
+            };
+            return Some((thought, visible));
+        } else {
+            // 未闭合标签容错：截断到文本末尾
+            let thought = text[after_start..].trim().to_string();
+            let before = text[..start_pos].trim();
+            return Some((thought, before.to_string()));
+        }
+    }
+    None
+}
+
 fn is_capturable_thought(thought: &str, signature: Option<&str>) -> bool {
     // 占位符或纯空白思考绝对不可捕获为新的持久化思考记录！
     if is_placeholder_thought(thought) || thought.trim().is_empty() {
@@ -2478,22 +2661,22 @@ fn inspect_parts_with_anchor(
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown")
                 .to_string();
-            let mut id = fc
+            let explicit_id = fc
                 .get("id")
                 .and_then(|v| v.as_str())
                 .filter(|s| !s.trim().is_empty())
                 .map(str::to_string);
 
-            if id.is_none() {
-                let synthetic =
-                    synthesize_tool_id(&name, fc.get("args"), anchor, function_call_count);
-                id = Some(synthetic);
-            }
+            let synthetic = synthesize_tool_id(&name, fc.get("args"), anchor, function_call_count);
             function_call_count += 1;
 
-            if let Some(id_str) = id {
-                if !tool_ids.iter().any(|x| x == &id_str) {
-                    tool_ids.push(id_str);
+            // 核心演进：全面转战因果伪哈希 ID！首位强制存入确定性 synthetic ID
+            if !tool_ids.iter().any(|x| x == &synthetic) {
+                tool_ids.push(synthetic);
+            }
+            if let Some(real_id) = explicit_id {
+                if !tool_ids.iter().any(|x| x == &real_id) {
+                    tool_ids.push(real_id);
                 }
             }
             tool_names.push(name);
@@ -3036,6 +3219,23 @@ mod tests {
         let scope_ord1 = SessionScope::from_headers(&headers_order1, "anchor-1");
         let scope_ord2 = SessionScope::from_headers(&headers_order2, "anchor-1");
         assert_eq!(scope_ord1.client_id, scope_ord2.client_id);
+
+        // 5. 跨协议相同显式会话头（如 Claude 切到 OpenAI）：相同会话锚点下 store_key 绝对一致共享，不同锚点下强隔离
+        let mut claude_headers = HeaderMap::new();
+        claude_headers.insert("x-session-id", "conv-uuid-999".parse().unwrap());
+        claude_headers.insert("x-api-key", "secret-token".parse().unwrap());
+
+        let mut openai_headers = HeaderMap::new();
+        openai_headers.insert("x-session-id", "conv-uuid-999".parse().unwrap());
+        openai_headers.insert("authorization", "Bearer secret-token".parse().unwrap());
+
+        let scope_claude = SessionScope::from_headers(&claude_headers, "shared-anchor");
+        let scope_openai = SessionScope::from_headers(&openai_headers, "shared-anchor");
+
+        assert_eq!(
+            scope_claude.store_key, scope_openai.store_key,
+            "Cross-protocol requests in the same session must share the identical store_key"
+        );
     }
 
     #[test]
@@ -3355,7 +3555,7 @@ mod tests {
         assert!(parts[1].get("functionCall").is_some());
         assert_eq!(parts[1]["thoughtSignature"], real_sig);
 
-        // Case 2: thinking disabled → signed functionCall must survive (not discarded as thought)
+        // Case 2: thinking disabled → signed functionCall must survive and preserve thoughtSignature for Gemini AST validator
         let mut contents_off = vec![json!({
             "role": "model",
             "parts": [
@@ -3377,7 +3577,10 @@ mod tests {
             "functionCall must not be dropped when thinking is off"
         );
         assert!(parts_off[0].get("functionCall").is_some());
-        assert!(parts_off[0].get("thoughtSignature").is_none());
+        assert_eq!(
+            parts_off[0]["thoughtSignature"], real_sig,
+            "Gemini native model requires functionCall to retain its signature even when thinking is off"
+        );
     }
 
     #[test]
@@ -3948,5 +4151,393 @@ mod tests {
                     == Some("Thought generated by Gemini")),
             "Original thinking content must be safely preserved as text in conversation history"
         );
+    }
+
+    #[test]
+    fn test_finalize_thinking_disabled_preserves_historical_thinking_and_signatures() {
+        let real_sig = "Ep4MCpsMARFNMg9NDlK9RXXz5Mzq9mniX9KSQBBzbUx3k85w/qDgtcE+28NH+1EvPeULAprqUquvYXGMzUXGy1xJoMnqdkC4vqebuhyd2Xhs0oz+OhqcOTwLhGYOG0KBKQ87Hfw4q/sMCSgf2gz4vFMa6V6kKMJepYlPXKFJJF4ok+W6lUt3PfYln8K9Dh7wB/40iHiZ2BnJd++6hfUwu9Bz1n795S50l0yCj84EaSCDDF334Erxq7Fo";
+        // 模拟多轮对话：
+        // Turn 1: User
+        // Turn 2: Model (历史已发生，包含合法思考块与工具调用及签名)
+        // Turn 3: User (工具返回)
+        // Turn 4: User (最新一轮用户提问，并且在这一轮用户把思考开关关闭了)
+        let mut contents = vec![
+            json!({
+                "role": "user",
+                "parts": [{ "text": "Run bash command" }]
+            }),
+            json!({
+                "role": "model",
+                "parts": [
+                    {
+                        "text": "Planning to run ls...",
+                        "thought": true
+                    },
+                    {
+                        "functionCall": {
+                            "name": "bash",
+                            "args": { "command": "ls" }
+                        },
+                        "thoughtSignature": real_sig
+                    }
+                ]
+            }),
+            json!({
+                "role": "user",
+                "parts": [{
+                    "functionResponse": {
+                        "name": "bash",
+                        "response": { "output": "file1.txt" }
+                    }
+                }]
+            }),
+            json!({
+                "role": "user",
+                "parts": [{ "text": "Now answer without thinking" }]
+            }),
+        ];
+
+        // 最新一轮关思考 (is_thinking_enabled = false)
+        finalize_gemini_contents_thinking_with_model(
+            &mut contents,
+            false,
+            Some("gemini-3.8-flash-tiered"),
+        );
+
+        // 验证历史 Turn 2 的思考块与工具调用签名是否被完好保留：
+        let history_model_parts = contents[1]["parts"].as_array().expect("parts array");
+        assert_eq!(history_model_parts.len(), 2);
+        assert_eq!(history_model_parts[0]["text"], "Planning to run ls...");
+        assert_eq!(history_model_parts[1]["thoughtSignature"], real_sig, "Historical tool thoughtSignature must NOT be stripped when thinking is disabled in the current turn");
+    }
+
+    #[test]
+    fn test_finalize_thinking_disabled_attaches_sentinel_to_unsigned_function_call_for_gemini() {
+        let mut contents = vec![json!({
+            "role": "model",
+            "parts": [
+                {
+                    "functionCall": {
+                        "name": "grep",
+                        "id": "call_unsigned",
+                        "args": { "pattern": "abc" }
+                    }
+                }
+            ]
+        })];
+
+        // 关思考出站，发往 Gemini
+        finalize_gemini_contents_thinking_with_model(
+            &mut contents,
+            false,
+            Some("gemini-3.8-flash-tiered"),
+        );
+
+        let parts = contents[0]["parts"].as_array().unwrap();
+        assert_eq!(parts.len(), 1);
+        assert_eq!(
+            parts[0]["thoughtSignature"], SENTINEL_SIGNATURE,
+            "Unsigned functionCall must be injected with sentinel signature when sent to Gemini, even if thinking is off"
+        );
+    }
+
+    #[test]
+    fn test_finalize_recovers_tool_signature_from_global_signature_cache() {
+        let tool_id = "call_finalize_cache_777";
+        let valid_gemini_sig = "EmIKYAFpFH0TDqviLY1vZ8EuHqBLLj5xxD+0hchYg2VaoyolUQRP+hSCsKRpSpj+yrQA2H27yVFnF7tlp5OHIUvTdZKKErAqILJzK5FG8RJg42jCaaI2/iwqoBuRd5BDVwBxaQ==";
+        crate::proxy::SignatureCache::global()
+            .cache_tool_signature(tool_id, valid_gemini_sig.to_string());
+
+        let mut contents = vec![json!({
+            "role": "model",
+            "parts": [
+                {
+                    "functionCall": {
+                        "name": "run_command",
+                        "id": tool_id,
+                        "args": { "cmd": "cargo test" }
+                    }
+                    // 注意：未带 thoughtSignature（模拟从任何未带签名的协议转入）
+                }
+            ]
+        })];
+
+        // 终审出站，发往 Gemini
+        finalize_gemini_contents_thinking_with_model(
+            &mut contents,
+            true,
+            Some("gemini-3.8-flash-tiered"),
+        );
+
+        let parts = contents[0]["parts"].as_array().unwrap();
+        // 验证：无论开思考还是关思考，只要 SignatureCache 中有该工具的真实签名，就必须恢复真实签名而非哨兵！
+        let fc = parts
+            .iter()
+            .find(|p| p.get("functionCall").is_some())
+            .unwrap();
+        assert_eq!(
+            fc["thoughtSignature"], valid_gemini_sig,
+            "Pipeline finalize must backfill real signature from SignatureCache for any protocol"
+        );
+    }
+
+    #[test]
+    fn test_finalize_thinking_disabled_strips_tool_signature_for_claude() {
+        let real_sig = "s".repeat(60);
+        let mut contents = vec![json!({
+            "role": "model",
+            "parts": [
+                {
+                    "functionCall": {
+                        "name": "grep",
+                        "id": "call_123",
+                        "args": {}
+                    },
+                    "thoughtSignature": real_sig
+                }
+            ]
+        })];
+
+        // 关思考出站，发往 Claude
+        finalize_gemini_contents_thinking_with_model(
+            &mut contents,
+            false,
+            Some("claude-3-7-sonnet"),
+        );
+
+        let parts = contents[0]["parts"].as_array().unwrap();
+        assert_eq!(parts.len(), 1);
+        assert!(
+            parts[0].get("thoughtSignature").is_none(),
+            "Tool call thoughtSignature must be stripped for Claude models"
+        );
+    }
+
+    #[test]
+    fn test_restore_deduplicates_and_elevates_thought_from_plain_text() {
+        let store = ThinkingStore::new();
+        let key = "t:re-elevation-dedup-test";
+        let tool_id = "call_dedup_001";
+        let real_sig = "Ep4MCpsMARFNMg9NDlK9RXXz5Mzq9mniX9KSQBBzbUx3k85w/qDgtcE+28NH+1EvPeULAprqUquvYXGMzUXGy1xJoMnqdkC4vqebuhyd2Xhs0oz+OhqcOTwLhGYOG0KBKQ87Hfw4q/sMCSgf2gz4vFMa6V6kKMJepYlPXKFJJF4ok+W6lUt3PfYln8K9Dh7wB/40iHiZ2BnJd++6hfUwu9Bz1n795S50l0yCj84EaSCDDF334Erxq7Fo";
+        let thought_text =
+            "I am analyzing the repository carefully and formulating a search query.";
+        let visible_answer = "Here is the exact file path you requested.";
+
+        // 1. 模拟旧轮次入库（开思考时发生的思维记录）
+        let _ = crate::modules::proxy_db::save_thinking_record(
+            key,
+            "fp_dedup_001",
+            thought_text,
+            Some(real_sig),
+            &[tool_id.to_string()],
+            &["grep".to_string()],
+            visible_answer,
+        );
+
+        // 2. 模拟客户端发上来的历史：之前关思考时降级的思考文本变成了普通正文部件，残留或与正文拼接在一起
+        let mut contents = vec![
+            json!({
+                "role": "user",
+                "parts": [{ "text": "Find the file" }]
+            }),
+            json!({
+                "role": "model",
+                "parts": [
+                    { "text": thought_text }, // 降级残留的普通文本部件
+                    { "text": visible_answer },
+                    {
+                        "functionCall": {
+                            "name": "grep",
+                            "id": tool_id,
+                            "args": {}
+                        }
+                    }
+                ]
+            }),
+            json!({
+                "role": "user",
+                "parts": [{ "functionResponse": { "name": "grep", "response": { "res": "ok" } } }]
+            }),
+        ];
+
+        // 3. 当前轮次重新开启思考，执行复活与重提升
+        let restored = store.restore_gemini_contents_with_model(
+            key,
+            &mut contents,
+            Some("gemini-3.8-flash-tiered"),
+        );
+        assert_eq!(restored, 1, "Must restore exactly 1 turn");
+
+        let model_parts = contents[1]["parts"].as_array().expect("parts array");
+        // 验证：
+        // 1. 首位成功提升恢复为真正的思考块 (thought: true)
+        assert_eq!(model_parts[0]["thought"], true);
+        assert_eq!(model_parts[0]["text"], thought_text);
+
+        // 2. 正文部件中的降级残留部件被精准剔除，只保留真实的可见回答，消灭双份复读！
+        assert_eq!(model_parts[1]["text"], visible_answer);
+        assert!(model_parts[1].get("thought").is_none());
+
+        // 3. 工具调用挂载真实签名
+        assert_eq!(model_parts[2]["functionCall"]["id"], tool_id);
+        assert_eq!(model_parts[2]["thoughtSignature"], real_sig);
+
+        let _ = crate::modules::proxy_db::delete_thinking_records_for_session(key);
+    }
+
+    #[test]
+    fn test_gemini_to_claude_wraps_foreign_thought_in_think_tags_and_strips_tool_sig() {
+        let gemini_sig = "Ep4MCpsMARFNMg9NDlK9RXXz5Mzq9mniX9KSQBBzbUx3k85w/qDgtcE+28NH+1EvPeULAprqUquvYXGMzUXGy1xJoMnqdkC4vqebuhyd2Xhs0oz+OhqcOTwLhGYOG0KBKQ87Hfw4q/sMCSgf2gz4vFMa6V6kKMJepYlPXKFJJF4ok+W6lUt3PfYln8K9Dh7wB/40iHiZ2BnJd++6hfUwu9Bz1n795S50l0yCj84EaSCDDF334Erxq7Fo";
+        let thought_text = "Step 1: Check database schema. Step 2: Query tables.";
+        let visible_answer = "Found 3 matching records in the database.";
+
+        let mut contents = vec![json!({
+            "role": "model",
+            "parts": [
+                {
+                    "text": thought_text,
+                    "thought": true,
+                    "thoughtSignature": gemini_sig
+                },
+                {
+                    "text": visible_answer
+                },
+                {
+                    "functionCall": {
+                        "name": "query_db",
+                        "id": "call_db_1",
+                        "args": {}
+                    },
+                    "thoughtSignature": gemini_sig
+                }
+            ]
+        })];
+
+        // 目标模型切为 Claude
+        finalize_gemini_contents_thinking_with_model(
+            &mut contents,
+            true,
+            Some("claude-3-7-sonnet"),
+        );
+
+        let parts = contents[0]["parts"].as_array().expect("parts array");
+        // 1. Gemini 的思考块不具备 Claude 签名，因此绝不可作为 thought: true 上送 Claude
+        assert!(parts
+            .iter()
+            .all(|p| p.get("thought").and_then(|v| v.as_bool()) != Some(true)));
+
+        // 2. 思考文本被包装为 <think> 标签前置于正文部件
+        let first_text = parts[0]["text"].as_str().expect("text");
+        assert!(first_text.starts_with("<think>"));
+        assert!(first_text.contains(thought_text));
+        assert!(first_text.contains("</think>"));
+
+        // 3. 正文回答完好保留
+        assert_eq!(parts[1]["text"], visible_answer);
+
+        // 4. 工具调用上的签名被彻底拔出
+        assert_eq!(parts[2]["functionCall"]["id"], "call_db_1");
+        assert!(parts[2].get("thoughtSignature").is_none());
+        assert!(parts[2].get("thought_signature").is_none());
+    }
+
+    #[test]
+    fn test_extract_think_tags_helper() {
+        let input =
+            "<think>\nThinking line 1\nThinking line 2\n</think>\n\nFinal response text here.";
+        let res = extract_think_tags(input);
+        assert!(res.is_some());
+        let (thought, visible) = res.unwrap();
+        assert_eq!(thought, "Thinking line 1\nThinking line 2");
+        assert_eq!(visible, "Final response text here.");
+
+        // No tags
+        assert!(extract_think_tags("Just normal text").is_none());
+    }
+
+    #[test]
+    fn test_gemini_native_synthetic_id_bridges_cross_protocol_signature_recovery() {
+        let store = ThinkingStore::new();
+        let key = "t:cross-proto-synthetic-id-test";
+        let client_tool_id = "call_openai_native_456";
+        let real_sig = "EmIKYAFpFH0TDqviLY1vZ8EuHqBLLj5xxD+0hchYg2VaoyolUQRP+hSCsKRpSpj+yrQA2H27yVFnF7tlp5OHIUvTdZKKErAqILJzK5FG8RJg42jCaaI2/iwqoBuRd5BDVwBxaQ==";
+        let thought_text = "Analyzing directory and listing files.";
+        let visible_answer = "Running bash tool.";
+
+        // 1. 模拟 OpenAI 协议下生成的工具调用（带有 client_tool_id）
+        let mut acc = TurnAccumulator::with_anchor("user-root-anchor");
+        acc.ingest_part(&json!({
+            "thought": true,
+            "text": thought_text,
+            "thoughtSignature": real_sig
+        }));
+        acc.ingest_part(&json!({
+            "functionCall": {
+                "name": "bash",
+                "args": { "command": "ls -la" },
+                "id": client_tool_id
+            },
+            "thoughtSignature": real_sig
+        }));
+        acc.commit(key);
+
+        // 2. 模拟用户切换到了原生 Gemini 协议发起后续对话：
+        // 原生 Gemini 请求的 contents 中天生没有 id 字段（id: None）！
+        let mut gemini_contents = vec![
+            json!({
+                "role": "user",
+                "parts": [{ "text": "List the files" }]
+            }),
+            json!({
+                "role": "model",
+                "parts": [
+                    {
+                        "functionCall": {
+                            "name": "bash",
+                            "args": { "command": "ls -la" }
+                            // 注意：完全无 id 字段！
+                        }
+                    }
+                ]
+            }),
+            json!({
+                "role": "user",
+                "parts": [{ "functionResponse": { "name": "bash", "response": { "res": "file.txt" } } }]
+            }),
+        ];
+
+        // 3. 原生 Gemini 协议执行流水线复活与终审出站
+        let restored = store.restore_gemini_contents_with_model(
+            key,
+            &mut gemini_contents,
+            Some("gemini-3.8-flash-tiered"),
+        );
+        assert_eq!(
+            restored, 1,
+            "Must match via synthetic context ID even though Gemini request had no tool id"
+        );
+
+        finalize_gemini_contents_thinking_with_model(
+            &mut gemini_contents,
+            true,
+            Some("gemini-3.8-flash-tiered"),
+        );
+
+        let model_parts = gemini_contents[1]["parts"].as_array().expect("parts");
+        // 验证思考块被成功提升复活：
+        assert_eq!(model_parts[0]["thought"], true);
+        assert_eq!(model_parts[0]["text"], thought_text);
+
+        // 验证工具调用依靠内部确定性伪 ID 成功找回真实签名：
+        let fc = &model_parts[1];
+        assert_eq!(fc["functionCall"]["name"], "bash");
+        assert_eq!(fc["thoughtSignature"], real_sig);
+        // 验证伪 ID 纯粹内部使用，绝不外泄给无 ID 协议：
+        assert!(
+            fc["functionCall"].get("id").is_none(),
+            "Synthetic ID must remain internal and not leak to client"
+        );
+
+        let _ = crate::modules::proxy_db::delete_thinking_records_for_session(key);
     }
 }

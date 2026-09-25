@@ -289,6 +289,37 @@ const VirtualLine = React.memo<VirtualLineProps>(({
 VirtualLine.displayName = 'VirtualLine';
 
 
+/**
+ * 递归深度反转义并反序列化嵌套在 JSON 字符串属性中的 JSON 内容
+ * 例如将 "response": "{\"error\":{\"code\":400...}}" 自动展开为真实的嵌套对象
+ * 彻底消除转义反斜杠 \"，并在 JSON.stringify 时自动美化换行和缩进
+ */
+function deepUnescapeJsonValue(val: any): any {
+    if (typeof val === 'string') {
+        const trimmed = val.trim();
+        if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+            try {
+                const parsed = JSON.parse(trimmed);
+                return deepUnescapeJsonValue(parsed);
+            } catch {
+                return val;
+            }
+        }
+        return val;
+    }
+    if (Array.isArray(val)) {
+        return val.map(deepUnescapeJsonValue);
+    }
+    if (val && typeof val === 'object') {
+        const res: Record<string, any> = {};
+        for (const [k, v] of Object.entries(val)) {
+            res[k] = deepUnescapeJsonValue(v);
+        }
+        return res;
+    }
+    return val;
+}
+
 export const VirtualizedPayloadViewer: React.FC<VirtualizedPayloadViewerProps> = ({
     cardId,
     title,
@@ -375,12 +406,19 @@ export const VirtualizedPayloadViewer: React.FC<VirtualizedPayloadViewerProps> =
         return rawPayload || '';
     }, [viewMode, concisePayload, rawPayload]);
 
-    // 格式化后的 JSON 字符串
+    // 格式化后的 JSON 字符串（深度反转义并格式化，消除嵌套转义与单行拥挤）
     const formattedContent = useMemo(() => {
         if (!activeContent) return '';
         try {
-            const obj = JSON.parse(activeContent);
-            return JSON.stringify(obj, null, 2);
+            let obj = JSON.parse(activeContent);
+            // 处理顶层被二次转义为字符串的情况
+            if (typeof obj === 'string') {
+                try {
+                    obj = JSON.parse(obj);
+                } catch {}
+            }
+            const unescaped = deepUnescapeJsonValue(obj);
+            return JSON.stringify(unescaped, null, 2);
         } catch {
             return activeContent;
         }

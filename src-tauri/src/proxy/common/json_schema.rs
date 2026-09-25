@@ -1,6 +1,28 @@
 use serde_json::{json, Value};
 
 const MAX_RECURSION_DEPTH: usize = 10;
+pub const MAX_DESCRIPTION_LENGTH: usize = 2048;
+
+/// 规范化工具或参数的描述文本（借鉴 JeikCode & OpenCode）：
+/// 1. 折叠换行符、回车与连续空白字符为单空格；
+/// 2. 截断超长描述至安全预算（默认 2048 字符），防止上游解析溢出或拒收。
+pub fn sanitize_description(s: &str) -> String {
+    let collapsed = s
+        .split(['\n', '\r'])
+        .flat_map(|line| line.split_whitespace())
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    if collapsed.chars().count() <= MAX_DESCRIPTION_LENGTH {
+        collapsed
+    } else {
+        let truncated: String = collapsed
+            .chars()
+            .take(MAX_DESCRIPTION_LENGTH.saturating_sub(15))
+            .collect();
+        format!("{}... [truncated]", truncated)
+    }
+}
 
 /// 递归清理 JSON Schema 以符合 Gemini 接口要求
 ///
@@ -413,12 +435,19 @@ fn clean_json_schema_recursive(value: &mut Value, is_schema_node: bool, depth: u
                     map.remove(&k);
                 }
 
+                // 5. 保持客户端原始 description 文本，不折叠换行，不截断内容，保证完全保真透传
+
                 // 6. [SAFETY] 处理空 Object
                 // [FIX] 移除 reason 字段注入逻辑
                 // 之前的实现会为空 Object 注入 reason 字段，导致 Gemini CLI 等工具报 "malformed function call"
                 // 因为模型会生成包含 reason 参数的调用，但工具定义中并没有这个参数
                 // 现在改为：空 Object 保持空的 properties，让 Gemini 模型自行决定是否需要参数
-                if map.get("type").and_then(|t| t.as_str()) == Some("object") {
+                let is_object_type = map
+                    .get("type")
+                    .and_then(|t| t.as_str())
+                    .map(|t| t.eq_ignore_ascii_case("object"))
+                    .unwrap_or(false);
+                if is_object_type {
                     if !map.contains_key("properties") {
                         map.insert("properties".to_string(), serde_json::json!({}));
                     }
@@ -1698,5 +1727,32 @@ mod tests {
             schema["properties"]["query"]["properties"]["where"]["items"]["items"],
             json!({ "type": "string" })
         );
+    }
+
+    #[test]
+    fn test_sanitize_description() {
+        let multi_line = "This is a tool description\nwith multiple lines\r\nand   extra   spaces.";
+        assert_eq!(
+            sanitize_description(multi_line),
+            "This is a tool description with multiple lines and extra spaces."
+        );
+
+        let overlong = "a".repeat(3000);
+        let sanitized = sanitize_description(&overlong);
+        assert!(sanitized.len() <= MAX_DESCRIPTION_LENGTH);
+        assert!(sanitized.ends_with("... [truncated]"));
+    }
+
+    #[test]
+    fn test_clean_json_schema_ensures_properties_on_object() {
+        let mut schema = json!({
+            "type": "OBJECT",
+            "description": "Some description\nwith newlines"
+        });
+
+        clean_json_schema(&mut schema);
+        assert_eq!(schema["type"], "object");
+        assert_eq!(schema["properties"], json!({}));
+        assert_eq!(schema["description"], "Some description with newlines");
     }
 }

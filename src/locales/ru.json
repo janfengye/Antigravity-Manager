@@ -1303,8 +1303,8 @@
       "action": "Действие"
     },
     "cli_sync": {
-      "title": "Синхронизация CLI",
-      "subtitle": "Синхронизируйте текущий API URL и ключ с вашими AI CLI инструментами",
+      "title": "Быстрая настройка инструментов Agent",
+      "subtitle": "Синхронизируйте текущий API URL и ключ с вашими локальными AI Agent инструментами",
       "card_title": "Конфиг {{name}}",
       "status": {
         "not_installed": "Не установлено",
@@ -1331,6 +1331,74 @@
       },
       "sync_confirm_title": "Подтверждение синхронизации",
       "sync_confirm_message": "Готово к синхронизации конфигурации {{name}}. ⚠️ Внимание: это перезапишет ваши существующие локальные файлы конфигурации (например, токены входа, API ключи). Вы уверены, что хотите продолжить?"
+    },
+    "hermes_sync": {
+      "modal_title": "Настройка Antigravity Manager в Hermes",
+      "endpoint_title": "Адрес подключения",
+      "local_endpoint": "Локальный прокси",
+      "custom_endpoint": "Другой адрес",
+      "custom_endpoint_desc": "Docker, LAN или reverse proxy",
+      "url_required": "Укажите адрес подключения Hermes",
+      "models_title": "Модели, доступные в Hermes",
+      "discover_models": "Обнаруживать автоматически",
+      "discover_models_desc": "Hermes получает актуальный список моделей через /v1/models",
+      "selected_models": "Только выбранные модели",
+      "models_required": "Выберите хотя бы одну модель",
+      "activate_provider": "Сделать Antigravity Manager провайдером Hermes по умолчанию",
+      "activate_provider_desc": "По умолчанию выключено, чтобы не менять текущего провайдера Hermes.",
+      "default_model": "Модель по умолчанию",
+      "select_default_model": "Выберите модель",
+      "default_model_required": "Выберите модель по умолчанию",
+      "default_model_invalid": "Выберите модель, доступную через Antigravity Manager",
+      "currently_active": "Сейчас активен в Hermes",
+      "btn_confirm_sync": "Сохранить в Hermes",
+      "btn_view": "Просмотреть конфиг",
+      "btn_restore": "Восстановить",
+      "btn_clear": "Удалить",
+      "clear_confirm_title": "Удалить конфигурацию Hermes",
+      "clear_confirm_message": "Провайдер Antigravity Manager будет удалён из Hermes. Продолжить?",
+      "toast": {
+        "sync_success": "Конфигурация Hermes успешно сохранена",
+        "clear_success": "Конфигурация Hermes успешно удалена",
+        "clear_error": "Не удалось удалить конфигурацию Hermes: {{error}}"
+      }
+    },
+    "openclaw_sync": {
+      "modal_title": "Настройка Antigravity Manager в OpenClaw",
+      "version_title": "Спецификация версии OpenClaw SDK",
+      "detected_hint": "Обнаружено окружение: {{target}}",
+      "v2_label": "≥ 2026.8.1 (v2.0 Спецификация)",
+      "v2_desc": "Использует белый список modelPolicy.allow и структуру entries с нативной поддержкой изображений и инструментов",
+      "v1_label": "< 2026.8.1 (v1.0 Спецификация)",
+      "v1_desc": "Использует словарь agents.defaults.models, полностью совместимо с 2026.7 и старыми SDK",
+      "endpoint_title": "Адрес подключения (Base URL)",
+      "local_endpoint": "Локальный прокси",
+      "custom_endpoint": "Другой адрес",
+      "custom_endpoint_desc": "Docker, LAN или reverse proxy",
+      "url_required": "Укажите адрес подключения OpenClaw",
+      "models_title": "Модели, доступные в OpenClaw",
+      "all_models": "Синхронизировать все",
+      "all_models_desc": "Синхронизировать все доступные модели ({{count}})",
+      "selected_models": "Выбранные модели",
+      "models_required": "Выберите хотя бы одну модель",
+      "activate_provider": "Сделать основной моделью OpenClaw (Primary)",
+      "activate_provider_desc": "Автоматически обновит agents.defaults.model.primary",
+      "default_model": "Модель по умолчанию",
+      "select_default_model": "Выберите модель",
+      "default_model_required": "Выберите модель по умолчанию",
+      "currently_active": "Сейчас активна как основная модель",
+      "btn_sync_v1": "Синхронизация (< 2026.8.1 v1.0)",
+      "btn_sync_v2": "Синхронизация (≥ 2026.8.1 v2.0)",
+      "btn_view": "Просмотреть конфиг",
+      "btn_restore": "Восстановить",
+      "btn_clear": "Удалить",
+      "clear_confirm_title": "Удалить конфигурацию OpenClaw",
+      "clear_confirm_message": "Провайдер Antigravity Manager и списки моделей будут удалены из OpenClaw. Продолжить?",
+      "toast": {
+        "sync_success": "Конфигурация OpenClaw ({{version}}) успешно сохранена",
+        "clear_success": "Конфигурация OpenClaw успешно удалена",
+        "clear_error": "Не удалось удалить конфигурацию OpenClaw: {{error}}"
+      }
     }
   },
   "monitor": {
@@ -1723,5 +1791,12 @@
     },
     "syncSuccess": "Успешно синхронизировано с {{app}}",
     "syncError": "Ошибка синхронизации: {{error}}"
+  },
+  "suggestion_delete_thinking": {
+    "title": "Рекомендация по обновлению",
+    "message": "Установлена новая версия. Разработчик рекомендует очистить кэш блоков рассуждений для обеспечения совместимости. Он будет автоматически пересоздан. Удалить сейчас?",
+    "confirm": "Очистить сейчас",
+    "cancel": "Отмена",
+    "success": "Кэш блоков рассуждений успешно очищен и будет пересоздан автоматически."
   }
 }

@@ -3,6 +3,32 @@
 > Complete version history for Antigravity Tools. Return to project home at [README_EN.md](README_EN.md).
 
 *   **Version History**:
+    *   **v4.8.1 (2026-09-25)**:
+        -   **[Unified 4-Protocol Egress & 100% Prefix Caching Invariance] Reconstruct egress payloads across 4 protocols, preventing prefix collapse and thought signature mismatch**:
+            -   **Deterministic Key Ordering & Topological Alignment**: Completely reconstructed egress payload serialization across OpenAI Chat, OpenAI Responses, Anthropic Claude, and Google Gemini using deterministic field sorting and canonical structure alignment. Payloads remain 100% byte-consistent when switching between protocols, ensuring universal, rock-solid Prefix Caching hits.
+            -   **Lossless Gemini <-> Claude Thinking Fusion & Signature Recovery**:
+                - For Claude protocol, upstream Gemini thinking is gracefully wrapped in `<think>` tags and embedded into message content;
+                - When migrating back to Gemini, `<think>` content is precisely lifted back into native thinking blocks and resolves real upstream signatures from causal stores (with compliant sentinel fallback if missing), completely eliminating prefix thrashing and signature validation errors.
+        -   **[Context Causal Pseudo-Hash IDs Over Client tool_id] Completely eliminate topological mismatch caused by missing or disparate tool IDs**:
+            -   **Causal Deterministic Pseudo-Hash ID**: Fully discarded dependence on client-generated random or missing `tool_id`s across all 4 protocols. Synthesize deterministic pseudo-IDs in the pipeline based on context causal hashes, unifying bidirectional retrieval for tool invocations, result backfilling, and thinking signatures.
+        -   **[Tool Result Images Direct to Google Vision Payloads] Complete multimodal visual loop for Agent tools**:
+            -   **Base64 Tool Image Ingestion**: Fully supports Base64 images returned by client tools, automatically extracting and structuring them into native Google Gemini `inlineData` image payloads, enabling Gemini to natively perceive and analyze tool-generated charts, screenshots, and visual outputs.
+        -   **[Pipeline Convergence & Dead Code Elimination] Remove adapter tool filtering and hardcoded prompts**:
+            -   **Lift Tool Handling to Pipeline**: Completely removed legacy filtering of `web_search` and hardcoded prompt rewriting scattered across protocol adapters; eliminated dead code and converged tool governance into the unified InboundThinkingPipeline.
+        -   **[Client Thinking Budget Control & Thinking Disable Fixes] (Fixes #3516, #3515)**:
+            -   **Budget Mode Thinking Disable Fix**: Fixed failures when disabling thinking (Budget = 0 / `disabled`) under client budget mode; recommended using un-suffixed models or tiered models for granular thinking intensity control.
+            -   **Complete Alias Resolution**: Enhanced full-chain alias mappings for `max_completion_tokens`, `max_output_tokens`, and `reasoning.max_tokens` / `budget_tokens`.
+        -   **[Agent CLI Ecosystem Expansion & Brand App Icons] (PR #3518, Thanks to @avlaaak)**:
+            -   **One-Click Agent Sync**: Added CLI synchronization support for JeikCode, Hermes, OpenClaw, and Grok Build (supporting lossless YAML config backups, safe restore, and automatic deactivation upon cleanup).
+            -   **App Icon Unification**: Unified CLI sync card visual language with edge-to-edge square app avatars, integrating JeikCode and official `@lobehub/icons` brand assets.
+        -   **[Thinking Cache Invalidation Modal on Upgrade]**:
+            -   **Adaptive Thinking Cache Cleanup Prompt**: Added multilingual `SuggestionDeleteThinkingModal` (12 languages) to guide existing users through a one-time thinking cache cleanup when updating across architectural changes.
+
+    *   **v4.8.1-beta.1 (2026-09-25)**:
+        -   **[OpenAI Responses Protocol Enhancement] Add max_output_tokens Alias Support & Precise Thinking Budget/Level Mapping**:
+            -   **Support max_output_tokens Deserialization Alias**: Added `max_output_tokens` and `maxOutputTokens` field aliases to top-level `OpenAIRequest`, ensuring standard client outputs are properly mapped to upstream `maxOutputTokens`.
+            -   **Unit Tests & Edge-Case Coverage**: Enhanced test suites to cover `max_completion_tokens`, `max_output_tokens`, and `reasoning.max_tokens` thinking budget alias resolution paths.
+
     *   **v4.8.0 (2026-09-23)**:
         -   **[Full-Protocol Tool & Argument 100% Pure Passthrough] Eliminate Agent-Client Tool Call Failures Caused by Legacy Truncation and Opaque Rewriting (PR #3504)**:
             -   **Lossless Tool & Argument Egress**: Removed tool-name mapping, argument alias rewriting, and error command injection across OpenAI, Anthropic Claude, and Google Gemini adapters, allowing tool names and arguments to reach upstream with the client's original semantics intact — resolving tool call errors in OpenClaw and other agent clients.

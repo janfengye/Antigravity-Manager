@@ -1303,8 +1303,8 @@
       "action": "Acción"
     },
     "cli_sync": {
-      "title": "Sincronización CLI con Un Clic",
-      "subtitle": "Sincronice rápidamente endpoints API actuales y claves a sus herramientas CLI de IA locales.",
+      "title": "Configuración Rápida de Herramientas de Agent",
+      "subtitle": "Sincronice rápidamente endpoints API actuales y claves a sus herramientas AI Agent locales.",
       "card_title": "Configuración de {{name}}",
       "status": {
         "not_installed": "No detectado",
@@ -1707,5 +1707,12 @@
       "fetchFailed": "Error al obtener datos: {{err}}",
       "queryFailed": "Error al obtener cuotas o modelos válidos. Compruebe si la API Key y la Base URL son correctas."
     }
+  },
+  "suggestion_delete_thinking": {
+    "title": "Recomendación de actualización",
+    "message": "Se ha instalado una nueva versión. El desarrollador recomienda borrar la caché de bloques de pensamiento para garantizar la compatibilidad. Se reconstruirá automáticamente. ¿Desea borrarla ahora?",
+    "confirm": "Borrar ahora",
+    "cancel": "Cancelar",
+    "success": "La caché de bloques de pensamiento se ha borrado correctamente y se reconstruirá automáticamente."
   }
 }

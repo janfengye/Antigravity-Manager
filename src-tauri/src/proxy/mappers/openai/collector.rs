@@ -204,9 +204,19 @@ where
         Some(calls.into_iter().map(|(_, tc)| tc).collect())
     };
 
+    let final_finish_reason = if final_tool_calls.is_some() {
+        Some("tool_calls".to_string())
+    } else {
+        finish_reason.or(Some("stop".to_string()))
+    };
+
     let message = OpenAIMessage {
         role: role.unwrap_or("assistant".to_string()),
-        content: Some(OpenAIContent::String(full_content)),
+        content: if full_content.is_empty() && final_tool_calls.is_some() {
+            None
+        } else {
+            Some(OpenAIContent::String(full_content))
+        },
         reasoning_content: full_reasoning,
         signature: None,
         tool_calls: final_tool_calls,
@@ -218,7 +228,7 @@ where
     response.choices.push(Choice {
         index: 0,
         message,
-        finish_reason: finish_reason.or(Some("stop".to_string())),
+        finish_reason: final_finish_reason,
     });
 
     Ok(response)

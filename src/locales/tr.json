@@ -1292,8 +1292,8 @@
       "copy_base": "Base Kopyala"
     },
     "cli_sync": {
-      "title": "CLI Senkronizasyonu",
-      "subtitle": "Mevcut API URL'sini ve anahtarını AI CLI araçlarınızla senkronize edin",
+      "title": "Tek Tıkla Agent Araçları Yapılandırması",
+      "subtitle": "Mevcut API URL'sini ve anahtarını AI Agent araçlarınızla senkronize edin",
       "card_title": "{{name}} Yapılandırması",
       "status": {
         "not_installed": "Yüklü Değil",
@@ -1734,5 +1734,12 @@
       "stream_error": "Stream transmission error, please retry later",
       "unknown_error": "Unknown error occurred, please retry later"
     }
+  },
+  "suggestion_delete_thinking": {
+    "title": "Güncelleme Önerisi",
+    "message": "Yeni bir sürüm yüklendi. Geliştirici, uyumluluğu sağlamak için düşünme bloğu önbelleğini temizlemenizi önerir. Otomatik olarak yeniden oluşturulacaktır. Şimdi temizlensin mi?",
+    "confirm": "Şimdi Temizle",
+    "cancel": "İptal",
+    "success": "Düşünme bloğu önbelleği başarıyla temizlendi ve otomatik olarak yeniden oluşturulacak."
   }
 }

@@ -1299,9 +1299,17 @@
       "action": "操作"
     },
     "cli_sync": {
-      "title": "CLI 配置一键同步",
-      "subtitle": "快速将当前 API 服务地址与 API 密钥同步到本地 AI CLI 工具中",
+      "title": "Agent工具一键配置",
+      "subtitle": "快速将当前 API 服务地址与 API 密钥同步到本地 AI Agent 工具中",
       "card_title": "{{name}} 配置",
+      "jeikcode_recommended": "推荐使用",
+      "jeikcode_badge": "Best Matched",
+      "jeikcode_author": "by Jeikl",
+      "jeikcode_tagline": "核心维护者深度打造 · 原生网关最佳兼容",
+      "jeikcode_tag_cache": "95%+ 恐怖缓存",
+      "jeikcode_tag_codegraph": "代码图谱",
+      "jeikcode_tag_surpass": "超越 CC / Codex",
+      "jeikcode_tag_custom": "自由定制",
       "status": {
         "not_installed": "未检测到安装",
         "installed": "v{{version}}",
@@ -1327,6 +1335,74 @@
       },
       "sync_confirm_title": "同步确认",
       "sync_confirm_message": "即将为您同步 {{name}} 的配置。⚠️ 注意：此操作将覆盖您本地已有的配置文件（如登录状态、API Key 等）。确定要继续吗？"
+    },
+    "hermes_sync": {
+      "modal_title": "在 Hermes 中配置 Antigravity Manager",
+      "endpoint_title": "连接地址",
+      "local_endpoint": "本地代理",
+      "custom_endpoint": "自定义地址",
+      "custom_endpoint_desc": "Docker、局域网或反向代理",
+      "url_required": "请输入 Hermes 连接地址",
+      "models_title": "Hermes 中可用的模型",
+      "discover_models": "自动发现",
+      "discover_models_desc": "Hermes 通过 /v1/models 获取实时模型列表",
+      "selected_models": "仅使用选中的模型",
+      "models_required": "请至少选择一个模型",
+      "activate_provider": "将 Antigravity Manager 设为 Hermes 默认提供商",
+      "activate_provider_desc": "默认关闭，以避免更改当前的 Hermes 提供商。",
+      "default_model": "默认模型",
+      "select_default_model": "选择模型",
+      "default_model_required": "请选择默认模型",
+      "default_model_invalid": "请选择 Antigravity Manager 提供的可用模型",
+      "currently_active": "当前已在 Hermes 中启用",
+      "btn_confirm_sync": "保存到 Hermes",
+      "btn_view": "查看配置",
+      "btn_restore": "恢复",
+      "btn_clear": "清除",
+      "clear_confirm_title": "清除 Hermes 配置",
+      "clear_confirm_message": "此操作将从 Hermes 中移除 Antigravity Manager 提供商。确定要继续吗？",
+      "toast": {
+        "sync_success": "Hermes 配置同步成功",
+        "clear_success": "Hermes 配置已成功清除",
+        "clear_error": "清除 Hermes 配置失败：{{error}}"
+      }
+    },
+    "openclaw_sync": {
+      "modal_title": "在 OpenClaw 中配置 Antigravity Manager",
+      "version_title": "OpenClaw SDK 版本规范",
+      "detected_hint": "环境已检测: {{target}}",
+      "v2_label": "≥ 2026.8.1 (v2.0 规范)",
+      "v2_desc": "采用 modelPolicy.allow 白名单规范与 entries 架构，原生支持图像/工具多模态",
+      "v1_label": "< 2026.8.1 (v1.0 规范)",
+      "v1_desc": "采用 agents.defaults.models 显式模型字典注册，全面兼容 2026.7 及更早 SDK",
+      "endpoint_title": "连接地址 (Base URL)",
+      "local_endpoint": "本地代理",
+      "custom_endpoint": "自定义地址",
+      "custom_endpoint_desc": "Docker、局域网或反向代理",
+      "url_required": "请输入 OpenClaw 连接地址",
+      "models_title": "同步到 OpenClaw 的模型",
+      "all_models": "全部同步",
+      "all_models_desc": "同步当前全部 {{count}} 个可用模型",
+      "selected_models": "部分挑选",
+      "models_required": "请至少选择一个模型",
+      "activate_provider": "设为 OpenClaw 默认主要模型 (Primary)",
+      "activate_provider_desc": "勾选后将自动更新 agents.defaults.model.primary",
+      "default_model": "默认模型",
+      "select_default_model": "选择模型",
+      "default_model_required": "请选择默认模型",
+      "currently_active": "当前已激活为主模型",
+      "btn_sync_v1": "同步 (< 2026.8.1 v1.0)",
+      "btn_sync_v2": "同步 (≥ 2026.8.1 v2.0)",
+      "btn_view": "查看配置",
+      "btn_restore": "恢复",
+      "btn_clear": "清除",
+      "clear_confirm_title": "清除 OpenClaw 配置",
+      "clear_confirm_message": "此操作将从 OpenClaw 中移除 Antigravity Manager 提供商及模型白名单。确定要继续吗？",
+      "toast": {
+        "sync_success": "OpenClaw ({{version}}) 配置同步成功",
+        "clear_success": "OpenClaw 配置已成功清除",
+        "clear_error": "清除 OpenClaw 配置失败：{{error}}"
+      }
     },
     "error": {
       "load_failed": "加载失败"
@@ -1696,5 +1772,12 @@
     },
     "syncSuccess": "成功同步至 {{app}}",
     "syncError": "同步失败: {{error}}"
+  },
+  "suggestion_delete_thinking": {
+    "title": "版本更新提示",
+    "message": "新版本已更新，维护者建议您删除思考块缓存，下次会自动重建，是否删除？",
+    "confirm": "立即删除",
+    "cancel": "暂不删除",
+    "success": "已成功删除思考块缓存，将在后续对话中自动重建。"
   }
 }

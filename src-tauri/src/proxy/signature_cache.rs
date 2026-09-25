@@ -289,6 +289,7 @@ impl SignatureCache {
     /// Returns None if not found or expired.
     pub fn get_session_signature(&self, session_id: &str) -> Option<String> {
         if let Ok(cache) = self.session_signatures.lock() {
+            // 1. 精确匹配
             if let Some(entry) = cache.get(session_id) {
                 if !entry.is_expired() {
                     // Find the signature with the maximum message_count (the latest one)
@@ -303,6 +304,24 @@ impl SignatureCache {
                     }
                 } else {
                     tracing::debug!("[SignatureCache] Session {} -> EXPIRED", session_id);
+                }
+            }
+
+            // 2. 租户前缀容错后缀匹配 (兼容传入裸 session_id 匹配 tenant:session_id)
+            let suffix = format!(":{}", session_id);
+            for (key, entry) in cache.iter() {
+                if (key.ends_with(&suffix) || session_id.ends_with(&format!(":{}", key)))
+                    && !entry.is_expired()
+                {
+                    if let Some(sig_entry) = entry.data.values().max_by_key(|e| e.message_count) {
+                        tracing::debug!(
+                            "[SignatureCache] Session suffix match {} -> key {} -> HIT (len={})",
+                            session_id,
+                            key,
+                            sig_entry.signature.len()
+                        );
+                        return Some(sig_entry.signature.clone());
+                    }
                 }
             }
         }

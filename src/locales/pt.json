@@ -1316,8 +1316,8 @@
       "action": "Ação"
     },
     "cli_sync": {
-      "title": "Sincronização de Ferramentas CLI",
-      "subtitle": "Sincronize a URL e chave da API com suas ferramentas de CLI de IA",
+      "title": "Configuração Rápida de Ferramentas de Agent",
+      "subtitle": "Sincronize a URL e chave da API com suas ferramentas de AI Agent locais",
       "card_title": "Config {{name}}",
       "status": {
         "not_installed": "Não instalado",
@@ -1755,5 +1755,12 @@
     "no_logs_hint": "Os logs de execução aparecerão aqui em tempo real",
     "scroll_to_bottom": "Rolar para o final",
     "toggle": "Alternar Console de Depuração"
+  },
+  "suggestion_delete_thinking": {
+    "title": "Recomendação de Atualização",
+    "message": "Uma nova versão foi instalada. O desenvolvedor recomenda limpar o cache dos blocos de pensamento para garantir a compatibilidade. Ele será recriado automaticamente. Deseja limpar agora?",
+    "confirm": "Limpar Agora",
+    "cancel": "Cancelar",
+    "success": "Cache dos blocos de pensamento limpo com sucesso e será recriado automaticamente."
   }
 }

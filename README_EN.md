@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> Professional Account Management & Protocol Proxy System for AI Services (v4.8.0)
+> Professional Account Management & Protocol Proxy System for AI Services (v4.8.1)
 
 <div align="center">
   <img src="public/icon.png" width="100" height="100" alt="Antigravity Tools Logo">
@@ -11,7 +11,7 @@
       <img src="https://img.shields.io/github/v/release/lbjlaq/Antigravity-Manager?color=blue&style=flat-square" alt="GitHub release">
     </a>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.8.0-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.8.1-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -448,7 +448,7 @@ In clients that support OpenAI protocol (e.g., Cherry Studio), you can configure
 
 ## 📝 Changelog
 
-> Latest version **v4.7.13** (2026-09-22): Introduced "Lightweight Mode" — actively releasing the WebView renderer on window close or minimize-to-tray cuts background RAM from ~160-250MB down to ~30-35MB while the reverse proxy gateway, smart warmup, quota monitor, and circuit breaker stay 100% resident, with seamless window reconstruction on tray click or duplicate app launch; eliminated intermittent IDE relaunch errors and failures after account switching (strict `language_server` engine exclusion, cross-platform startup argument sanitization, and normalized macOS `open --args` passing); fixed missing Gemini warmup, absent traffic logs, and stalled countdown timers by unlocking uninitialized weekly-quota cold starts and honoring user-configured warmup models; high-frequency `GET /health` probes are now filtered by default, preventing probe flooding from drowning real API traffic and bloating SQLite, while anomalous probes (5xx) are fully retained for diagnostics.
+> Latest version **v4.8.1** (2026-09-25): Completely reconstructed egress message serialization across all 4 protocols with deterministic key ordering and canonical structure alignment, ensuring 100% byte consistency across protocol switching and universal Prefix Caching invariance; resolved thought signature drift during Claude <-> Gemini migration with bi-directional `<think>` embedding and causal signature recovery; discarded client tool IDs in favor of context-causal deterministic pseudo-hash IDs for unified bidirectional lookup; bridged agent tool multimodal vision loop with native conversion of Base64 tool images into Gemini visual payloads; eliminated legacy adapter-level `web_search` tool filtering and hardcoded dead code, unifying all tool handling into the inbound pipeline; fixed client budget mode thinking disable failures; introduced one-click CLI synchronization cards and modern edge-to-edge square app avatars for JeikCode, Hermes, OpenClaw, and Grok Build; added multilingual adaptive thinking cache cleanup prompt on major updates.
 
 👉 **[View Full Changelog → CHANGELOG_EN.md](CHANGELOG_EN.md)**
 

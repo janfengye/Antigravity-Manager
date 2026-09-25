@@ -1290,8 +1290,8 @@
       "copy_base": "Sao chép Base"
     },
     "cli_sync": {
-      "title": "Đồng bộ CLI",
-      "subtitle": "Đồng bộ URL API và Key hiện tại với các công cụ AI CLI của bạn",
+      "title": "Cấu hình một cú nhấp cho công cụ Agent",
+      "subtitle": "Đồng bộ URL API và Key hiện tại với các công cụ AI Agent của bạn",
       "card_title": "Cấu hình {{name}}",
       "status": {
         "not_installed": "Chưa cài đặt",
@@ -1750,5 +1750,12 @@
       "stream_error": "Stream transmission error, please retry later",
       "unknown_error": "Unknown error occurred, please retry later"
     }
+  },
+  "suggestion_delete_thinking": {
+    "title": "Khuyến nghị cập nhật",
+    "message": "Phiên bản mới đã được cập nhật. Nhà phát triển khuyên bạn nên xóa bộ nhớ đệm khối suy nghĩ để đảm bảo tính tương thích. Nó sẽ tự động được tạo lại. Bạn có muốn xóa ngay bây giờ không?",
+    "confirm": "Xóa ngay",
+    "cancel": "Hủy bỏ",
+    "success": "Đã xóa bộ nhớ đệm khối suy nghĩ thành công và sẽ tự động tạo lại."
   }
 }

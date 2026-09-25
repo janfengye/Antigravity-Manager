@@ -1303,8 +1303,8 @@
       "action": "작업"
     },
     "cli_sync": {
-      "title": "원클릭 CLI 동기화",
-      "subtitle": "현재 API 엔드포인트와 키를 로컬 AI CLI 도구에 빠르게 동기화합니다.",
+      "title": "Agent 도구 원클릭 설정",
+      "subtitle": "현재 API 엔드포인트와 키를 로컬 AI Agent 도구에 빠르게 동기화합니다.",
       "card_title": "{{name}} 구성",
       "status": {
         "not_installed": "감지되지 않음",
@@ -1707,5 +1707,12 @@
       "fetchFailed": "가져오기 실패: {{err}}",
       "queryFailed": "유효한 잔액 또는 모델을 가져오지 못했습니다. API Key와 Base URL이 올바른지 확인하세요."
     }
+  },
+  "suggestion_delete_thinking": {
+    "title": "버전 업데이트 안내",
+    "message": "새 버전이 업데이트되었습니다. 호환성을 위해 기존 생각 블록 캐시를 삭제하는 것을 권장합니다. 다음 번에 자동으로 재구축됩니다. 지금 삭제하시겠습니까?",
+    "confirm": "지금 삭제",
+    "cancel": "취소",
+    "success": "생각 블록 캐시가 성공적으로 삭제되었습니다. 자동으로 재구축됩니다."
   }
 }

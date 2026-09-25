@@ -443,6 +443,11 @@ pub fn simplify_payload_json(value: &Value) -> Value {
         "reasoning",
         "reasoning_content",
         "error",
+        "gateway_error",
+        "upstream_error",
+        "type",
+        "code",
+        "status",
     ] {
         if let Some(v) = inner.get(key).or_else(|| value.get(key)) {
             concise.insert(key.to_string(), v.clone());
@@ -681,7 +686,7 @@ pub fn apply_storage_mode_to_body(raw: Option<String>, mode: &str) -> Option<Str
         return Some(raw);
     }
     match serde_json::from_str::<Value>(&raw) {
-        Ok(json) => serde_json::to_string(&simplify_payload_json(&json))
+        Ok(json) => serde_json::to_string_pretty(&simplify_payload_json(&json))
             .ok()
             .or(Some(raw)),
         Err(_) => Some(truncate_chars(&raw, 8000)),

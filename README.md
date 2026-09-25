@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> 专业级 AI 账号管理与协议代理系统 (v4.8.0)
+> 专业级 AI 账号管理与协议代理系统 (v4.8.1)
 
 <div align="center">
   <img src="public/icon.png" width="100" height="100" alt="Antigravity Tools Logo">
@@ -11,7 +11,7 @@
       <img src="https://img.shields.io/github/v/release/lbjlaq/Antigravity-Manager?color=blue&style=flat-square" alt="GitHub release">
     </a>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.8.0-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.8.1-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Frontend-React-61DAFB?style=flat-square" alt="React">
     <img src="https://img.shields.io/badge/License-CC--BY--NC--SA--4.0-lightgrey?style=flat-square" alt="License">
@@ -458,7 +458,7 @@ response = client.chat.completions.create(
 
 ## 📝 更新日志
 
-> 最新版本 **v4.7.13**（2026-09-22）：新增「轻量模式」，关闭窗口或最小化到托盘时主动释放 WebView 渲染进程，后台常驻内存从约 160~250MB 骤降至约 30~35MB，反代网关 / 智能预热 / 额度监控 / 熔断器等核心服务 100% 常驻，托盘点击或二次启动应用即无感重建窗口；彻底解决账号切换后 IDE 自动重启偶发弹窗报错或无法拉起（严格过滤 `language_server` 引擎进程、跨平台启动参数安全清洗、macOS `open --args` 规范化传参）；修复 Gemini 系列账号无预热、流量日志缺失与倒计时不走动，解除未激活周配额冷启动死锁并联动自定义预热模型范围；默认过滤 `GET /health` 等高频探活请求，彻底杜绝探针刷屏淹没真实业务调用与 SQLite 存储膨胀，异常探活（5xx）仍完整保留用于故障诊断。
+> 最新版本 **v4.8.1**（2026-09-25）：全面重构四大协议中转报文，引入确定性键序排序与拓扑拉齐，实现跨协议来回切换转出报文 100% 字节级一致，长上下文前缀缓存（Prefix Caching）通用不崩塌；彻底解决 Claude 与 Gemini 协议切换思考签名不同引发的异常，支持 `<think>` 标签包装及原生思考块无损提升与签名因果召回；全面抛弃客户端随机 tool_id，改用上下文因果确定性伪哈希 ID 统一双向检索；全面打通 Agent 视觉链路，支持工具结果中 Base64 图片原生转换为 Gemini 视觉输入载荷；全面拔除适配器层历史遗留的 `web_search` 工具过滤与硬编码死代码，统一收敛至 Pipeline 集中治理；修复客户端预算模式下关闭思考偶发失效的问题；新增 JeikCode、Hermes、OpenClaw、Grok Build 等 Agent 客户端一键配置卡片与无边框正方形 App 图标生态；新增全语言自适应版本升级清理思考块缓存建议弹窗。
 
 👉 **[查看完整更新日志 CHANGELOG.md →](CHANGELOG.md)**
 

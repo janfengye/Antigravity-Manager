@@ -95,6 +95,10 @@ fn connect_db() -> Result<Connection, String> {
     Ok(conn)
 }
 
+pub fn is_synthetic_tool_id(id: &str) -> bool {
+    id.starts_with("call_") && id.chars().filter(|&c| c == '_').count() >= 3
+}
+
 fn init_thinking_schema(conn: &Connection) -> Result<(), String> {
     conn.execute(
         "CREATE TABLE IF NOT EXISTS thinking_records (
@@ -113,47 +117,52 @@ fn init_thinking_schema(conn: &Connection) -> Result<(), String> {
     )
     .map_err(|e| e.to_string())?;
 
-    // 动态升级：增加 primary_tool_id 列用于超长会话极速穿透点查与防叠加查重
+    // 动态升级：增加 primary_tool_id 列用于旧版兼容点查
     let _ = conn.execute(
         "ALTER TABLE thinking_records ADD COLUMN primary_tool_id TEXT",
         [],
     );
 
-    // 1. 覆盖 load_thinking_records 的正向序列扫描 (ORDER BY id ASC)，避免内存二次排序
+    // 动态升级：增加 causal_tool_id 列用于确定性因果伪哈希 ID 极速穿透点查
+    let _ = conn.execute(
+        "ALTER TABLE thinking_records ADD COLUMN causal_tool_id TEXT",
+        [],
+    );
+
+    // 1. 覆盖 load_thinking_records 的正向序列扫描 (ORDER BY id ASC)，同时完美承接逆序扫描 (ORDER BY id DESC)
     let _ = conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_thinking_rec_seq ON thinking_records (session_key, id ASC)",
         [],
     );
-    // 2. 覆盖基于 primary_tool_id 的快速穿透点查 (极简 Partial Index，极致纳秒响应)
+    // 2. 覆盖基于 causal_tool_id 的快速穿透点查 (极简 Partial Index，极致纳秒响应)
+    let _ = conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_thinking_rec_causal ON thinking_records (session_key, causal_tool_id) WHERE causal_tool_id IS NOT NULL",
+        [],
+    );
+    // 3. 覆盖基于 primary_tool_id 的快速穿透点查 (兼容旧版数据)
     let _ = conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_thinking_rec_tool ON thinking_records (session_key, primary_tool_id) WHERE primary_tool_id IS NOT NULL",
         [],
     );
-    // 3. 覆盖基于 fingerprint 的指纹点查
+    // 4. 覆盖基于 fingerprint 的指纹点查
     let _ = conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_thinking_rec_fp ON thinking_records (session_key, fingerprint)",
         [],
     );
-    // 4. 覆盖最新记录查询 (ORDER BY id DESC)
-    let _ = conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_thinking_rec_latest ON thinking_records (session_key, id DESC)",
-        [],
-    );
-    // 5. 覆盖会话创建时间索引
-    let _ = conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_thinking_rec_session ON thinking_records (session_key, created_at ASC)",
-        [],
-    );
-    // 6. 覆盖历史清理时间索引
+    // 5. 覆盖历史清理时间索引
     let _ = conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_thinking_rec_accessed ON thinking_records (last_accessed ASC)",
         [],
     );
-    // 7. 覆盖基于 signature 的精准穿透点查 (极简 Partial Index，WHERE signature IS NOT NULL)
+    // 6. 覆盖基于 signature 的精准穿透点查 (极简 Partial Index，WHERE signature IS NOT NULL)
     let _ = conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_thinking_rec_sig ON thinking_records (session_key, signature) WHERE signature IS NOT NULL",
         [],
     );
+
+    // 7. 索引大瘦身：安全清理物理冗余的重复索引，削减写放大开销
+    let _ = conn.execute("DROP INDEX IF EXISTS idx_thinking_rec_latest", []);
+    let _ = conn.execute("DROP INDEX IF EXISTS idx_thinking_rec_session", []);
     conn.execute(
         "CREATE TABLE IF NOT EXISTS thinking_sessions (
             session_key TEXT PRIMARY KEY,
@@ -566,6 +575,10 @@ pub fn save_thinking_record(
     let mut conn = thinking_db()?;
     let now = chrono::Utc::now().timestamp_millis();
     let tool_ids_json = serde_json::to_string(tool_ids).unwrap_or_else(|_| "[]".to_string());
+    let causal_tool_id = tool_ids
+        .iter()
+        .find(|id| is_synthetic_tool_id(id))
+        .map(|s| s.as_str());
     let primary_tool_id = tool_ids.first().map(|s| s.as_str());
     // tool_names / full visible for tool turns are reconstructable from the next
     // request JSON at fill time. Do not write them.
@@ -575,23 +588,41 @@ pub fn save_thinking_record(
 
     // 智能防叠加与幂等查重：只允许合并/更新当前会话中的【最新一条】活跃轮次（流式碎片拼接或更长思考补齐）
     // 绝不能回溯更新历史早期轮次！
-    let latest_row: Option<(i64, usize, Option<String>, String, Option<String>)> = conn
+    let latest_row: Option<(
+        i64,
+        usize,
+        Option<String>,
+        String,
+        Option<String>,
+        Option<String>,
+    )> = conn
         .query_row(
-            "SELECT id, length(thought), signature, fingerprint, primary_tool_id
+            "SELECT id, length(thought), signature, fingerprint, primary_tool_id, causal_tool_id
              FROM thinking_records
              WHERE session_key = ?1
              ORDER BY id DESC LIMIT 1",
             params![session_key],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
+            },
         )
         .ok();
 
     let existing_id: Option<(i64, usize, Option<String>)> = match latest_row {
-        Some((id, len, sig, ref last_fp, ref last_tool_id)) => {
-            let is_match = if let Some(p_id) = primary_tool_id {
+        Some((id, len, sig, ref last_fp, ref last_tool_id, ref last_causal_id)) => {
+            let is_match = if let Some(c_id) = causal_tool_id {
+                last_causal_id.as_deref() == Some(c_id) || last_tool_id.as_deref() == Some(c_id)
+            } else if let Some(p_id) = primary_tool_id {
                 last_tool_id.as_deref() == Some(p_id)
             } else {
-                last_fp == fingerprint && last_tool_id.is_none()
+                last_fp == fingerprint && last_tool_id.is_none() && last_causal_id.is_none()
             };
             if is_match {
                 Some((id, len, sig))
@@ -616,8 +647,8 @@ pub fn save_thinking_record(
             let mut stmt = conn
                 .prepare_cached(
                     "UPDATE thinking_records
-                     SET thought = ?1, signature = ?2, tool_ids = ?3, visible = ?4, created_at = ?5, primary_tool_id = ?6
-                     WHERE id = ?7",
+                     SET thought = ?1, signature = ?2, tool_ids = ?3, visible = ?4, created_at = ?5, primary_tool_id = ?6, causal_tool_id = ?7
+                     WHERE id = ?8",
                 )
                 .map_err(|e| e.to_string())?;
             stmt.execute(params![
@@ -627,6 +658,7 @@ pub fn save_thinking_record(
                 visible_persist,
                 now,
                 primary_tool_id,
+                causal_tool_id,
                 id,
             ])
             .map_err(|e| e.to_string())?;
@@ -643,11 +675,11 @@ pub fn save_thinking_record(
                 .map_err(|e| e.to_string())?;
         }
     } else {
-        // 全新轮次：插入新记录（包含 primary_tool_id 列）
+        // 全新轮次：插入新记录（同时写入 primary_tool_id 与 causal_tool_id 列）
         let mut stmt = conn
             .prepare_cached(
-                "INSERT INTO thinking_records (session_key, fingerprint, thought, signature, tool_ids, tool_names, visible, created_at, primary_tool_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, '[]', ?6, ?7, ?8)",
+                "INSERT INTO thinking_records (session_key, fingerprint, thought, signature, tool_ids, tool_names, visible, created_at, primary_tool_id, causal_tool_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, '[]', ?6, ?7, ?8, ?9)",
             )
             .map_err(|e| e.to_string())?;
         stmt.execute(params![
@@ -659,6 +691,7 @@ pub fn save_thinking_record(
             visible_persist,
             now,
             primary_tool_id,
+            causal_tool_id,
         ])
         .map_err(|e| e.to_string())?;
     }
@@ -725,7 +758,8 @@ pub fn load_thinking_records(session_key: &str) -> Result<Vec<PersistedThinkingR
     Ok(result)
 }
 
-/// 根据 tool_id 精准穿透点查历史思考（利用 primary_tool_id 极速 Partial Index）
+/// 根据 tool_id (因果伪哈希 ID 或原生 ID) 精准穿透点查历史思考
+/// 采用双轨索引极速点查 + 老数据自动静默自愈机制
 pub fn load_thinking_by_tool_id(
     session_key: &str,
     tool_id: &str,
@@ -735,21 +769,21 @@ pub fn load_thinking_by_tool_id(
     }
     let mut conn = thinking_db()?;
 
-    // 1. Fast Path: 优先通过 primary_tool_id 走专属索引极速点查 (0ms 纳秒级命中)
-    let mut stmt = conn
+    // 1. Track 1 (Fastest Path): 优先按因果伪哈希 ID 走 idx_thinking_rec_causal 专属局部索引 (0.02ms 纳秒级命中)
+    let mut causal_stmt = conn
         .prepare_cached(
             "SELECT fingerprint, thought, signature, tool_ids, tool_names, visible
              FROM thinking_records
-             WHERE session_key = ?1 AND primary_tool_id = ?2
+             WHERE session_key = ?1 AND causal_tool_id = ?2
              ORDER BY id DESC LIMIT 1",
         )
         .map_err(|e| e.to_string())?;
 
-    let mut rows = stmt
+    let mut causal_rows = causal_stmt
         .query(params![session_key, tool_id])
         .map_err(|e| e.to_string())?;
 
-    if let Some(row) = rows.next().map_err(|e| e.to_string())? {
+    if let Some(row) = causal_rows.next().map_err(|e| e.to_string())? {
         let fp: String = row.get(0).map_err(|e| e.to_string())?;
         let thought_raw: Vec<u8> = row.get(1).map_err(|e| e.to_string())?;
         let signature: Option<String> = row.get(2).map_err(|e| e.to_string())?;
@@ -768,11 +802,54 @@ pub fn load_thinking_by_tool_id(
         }));
     }
 
-    // 2. Fallback Path: 针对历史旧记录 (tool_ids 列表内模糊包含)
+    // 2. Track 2 (Legacy Path): 兼容旧版 primary_tool_id (走 idx_thinking_rec_tool 索引点查)
+    let mut primary_stmt = conn
+        .prepare_cached(
+            "SELECT id, fingerprint, thought, signature, tool_ids, tool_names, visible
+             FROM thinking_records
+             WHERE session_key = ?1 AND primary_tool_id = ?2
+             ORDER BY id DESC LIMIT 1",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let mut primary_rows = primary_stmt
+        .query(params![session_key, tool_id])
+        .map_err(|e| e.to_string())?;
+
+    if let Some(row) = primary_rows.next().map_err(|e| e.to_string())? {
+        let rec_id: i64 = row.get(0).map_err(|e| e.to_string())?;
+        let fp: String = row.get(1).map_err(|e| e.to_string())?;
+        let thought_raw: Vec<u8> = row.get(2).map_err(|e| e.to_string())?;
+        let signature: Option<String> = row.get(3).map_err(|e| e.to_string())?;
+        let tool_ids_str: String = row.get(4).map_err(|e| e.to_string())?;
+        let tool_names_str: String = row.get(5).map_err(|e| e.to_string())?;
+        let visible: String = row.get(6).map_err(|e| e.to_string())?;
+        let tool_ids: Vec<String> = serde_json::from_str(&tool_ids_str).unwrap_or_default();
+        let tool_names: Vec<String> = serde_json::from_str(&tool_names_str).unwrap_or_default();
+
+        // 3. Track 3 (In-Place Self-Healing): 若当前请求使用的是因果伪哈希 ID，顺手静默修复老数据
+        if is_synthetic_tool_id(tool_id) {
+            let _ = conn.execute(
+                "UPDATE thinking_records SET causal_tool_id = ?1 WHERE id = ?2 AND causal_tool_id IS NULL",
+                params![tool_id, rec_id],
+            );
+        }
+
+        return Ok(Some(PersistedThinkingRecord {
+            fingerprint: fp,
+            thought: unpack_thought(&thought_raw),
+            signature: persist_signature(signature.as_deref()).map(str::to_string),
+            tool_ids,
+            tool_names,
+            visible,
+        }));
+    }
+
+    // 4. Track 4 (Fallback Path): 极端情况兼容最古老旧记录 (tool_ids 列表内模糊包含)
     let pattern = format!("%\"{}\"%", tool_id);
     let mut fallback_stmt = conn
         .prepare_cached(
-            "SELECT fingerprint, thought, signature, tool_ids, tool_names, visible
+            "SELECT id, fingerprint, thought, signature, tool_ids, tool_names, visible
              FROM thinking_records
              WHERE session_key = ?1 AND tool_ids LIKE ?2
              ORDER BY id DESC LIMIT 1",
@@ -784,14 +861,23 @@ pub fn load_thinking_by_tool_id(
         .map_err(|e| e.to_string())?;
 
     if let Some(row) = fallback_rows.next().map_err(|e| e.to_string())? {
-        let fp: String = row.get(0).map_err(|e| e.to_string())?;
-        let thought_raw: Vec<u8> = row.get(1).map_err(|e| e.to_string())?;
-        let signature: Option<String> = row.get(2).map_err(|e| e.to_string())?;
-        let tool_ids_str: String = row.get(3).map_err(|e| e.to_string())?;
-        let tool_names_str: String = row.get(4).map_err(|e| e.to_string())?;
-        let visible: String = row.get(5).map_err(|e| e.to_string())?;
+        let rec_id: i64 = row.get(0).map_err(|e| e.to_string())?;
+        let fp: String = row.get(1).map_err(|e| e.to_string())?;
+        let thought_raw: Vec<u8> = row.get(2).map_err(|e| e.to_string())?;
+        let signature: Option<String> = row.get(3).map_err(|e| e.to_string())?;
+        let tool_ids_str: String = row.get(4).map_err(|e| e.to_string())?;
+        let tool_names_str: String = row.get(5).map_err(|e| e.to_string())?;
+        let visible: String = row.get(6).map_err(|e| e.to_string())?;
         let tool_ids: Vec<String> = serde_json::from_str(&tool_ids_str).unwrap_or_default();
         let tool_names: Vec<String> = serde_json::from_str(&tool_names_str).unwrap_or_default();
+
+        if is_synthetic_tool_id(tool_id) {
+            let _ = conn.execute(
+                "UPDATE thinking_records SET causal_tool_id = ?1 WHERE id = ?2 AND causal_tool_id IS NULL",
+                params![tool_id, rec_id],
+            );
+        }
+
         Ok(Some(PersistedThinkingRecord {
             fingerprint: fp,
             thought: unpack_thought(&thought_raw),
@@ -847,6 +933,42 @@ pub fn load_thinking_by_signature(
     } else {
         Ok(None)
     }
+}
+
+/// 为 UI 展示层兜底提供：按会话查找最新记录中的权威签名 (支持带租户前缀的容错匹配)
+pub fn lookup_latest_thinking_signature(session_id: &str) -> Option<String> {
+    if session_id.trim().is_empty() {
+        return None;
+    }
+    let conn = thinking_db().ok()?;
+    let suffix = format!("%:{}", session_id.trim());
+    conn.query_row(
+        "SELECT signature FROM thinking_records 
+         WHERE (session_key = ?1 OR session_key LIKE ?2) 
+           AND signature IS NOT NULL 
+         ORDER BY id DESC LIMIT 1",
+        rusqlite::params![session_id.trim(), suffix],
+        |r| r.get(0),
+    )
+    .ok()
+}
+
+/// 为 UI 展示层兜底提供：按思考内容片段模糊查找权威签名
+pub fn lookup_signature_by_thought_snippet(snippet: &str) -> Option<String> {
+    let clean = snippet.trim();
+    if clean.is_empty() {
+        return None;
+    }
+    let conn = thinking_db().ok()?;
+    let pattern = format!("%{}%", clean);
+    conn.query_row(
+        "SELECT signature FROM thinking_records 
+         WHERE thought LIKE ?1 AND signature IS NOT NULL 
+         ORDER BY id DESC LIMIT 1",
+        rusqlite::params![pattern],
+        |r| r.get(0),
+    )
+    .ok()
 }
 
 /// 根据 fingerprint 精准穿透点查纯文本历史思考（利用 idx_thinking_rec_fp 索引）
@@ -1019,6 +1141,16 @@ pub fn clear_all_thinking_data() -> Result<usize, String> {
     }
 
     Ok(total_deleted)
+}
+
+pub fn get_thinking_records_count() -> Result<usize, String> {
+    let conn = thinking_db()?;
+    let count: usize = conn
+        .query_row("SELECT COUNT(*) FROM thinking_records", [], |row| {
+            row.get(0)
+        })
+        .unwrap_or(0);
+    Ok(count)
 }
 
 pub fn cleanup_old_thinking_records(days: i64) -> Result<usize, String> {

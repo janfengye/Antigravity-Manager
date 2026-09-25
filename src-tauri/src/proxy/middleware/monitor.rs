@@ -377,10 +377,33 @@ fn build_canonical_consolidated_response(
             }
         }
         if thinking_signature.is_empty() {
-            if let Some(sid) = session_id {
-                if let Some(sig) = crate::proxy::SignatureCache::global().get_session_signature(sid)
+            // 1. 优先按当前轮次的思考文本片段精准直捞专属签名
+            if !thinking_content.is_empty() {
+                let trimmed = thinking_content.trim();
+                let snippet = if trimmed.len() > 32 {
+                    &trimmed[..32]
+                } else {
+                    trimmed
+                };
+                if let Some(sig) =
+                    crate::modules::proxy_db::lookup_signature_by_thought_snippet(snippet)
                 {
                     thinking_signature = sig;
+                }
+            }
+
+            // 2. 兜底按会话状态机与会话数据库查找最新签名
+            if thinking_signature.is_empty() {
+                if let Some(sid) = session_id {
+                    if let Some(sig) =
+                        crate::proxy::SignatureCache::global().get_session_signature(sid)
+                    {
+                        thinking_signature = sig;
+                    } else if let Some(sig) =
+                        crate::modules::proxy_db::lookup_latest_thinking_signature(sid)
+                    {
+                        thinking_signature = sig;
+                    }
                 }
             }
         }
@@ -1573,7 +1596,9 @@ pub async fn monitor_middleware(
                                 .ok()
                                 .or_else(|| Some(s.to_string()));
                         } else {
-                            log.response_body = Some(s.to_string());
+                            log.response_body = serde_json::to_string_pretty(&json)
+                                .ok()
+                                .or_else(|| Some(s.to_string()));
                         }
                     } else {
                         log.response_body = Some(s.to_string());

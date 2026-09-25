@@ -211,8 +211,18 @@ pub async fn handle_generate(
         );
 
         // 4. 获取 Token (使用准确的 request_type)
-        // 提取 SessionId (粘性指纹)
-        let fallback_sid = SessionManager::extract_gemini_session_id(&body, &model_name);
+        // 提取 SessionId (粘性指纹，优先以显式会话头对齐跨协议 store_key)
+        let explicit_sid = headers
+            .get("x-session-id")
+            .or_else(|| headers.get("x-jeikcode-session-id"))
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty());
+        let fallback_sid = if let Some(sid) = explicit_sid {
+            sid.to_string()
+        } else {
+            SessionManager::extract_gemini_session_id(&body, &model_name)
+        };
         let session_scope = crate::proxy::thinking_store::SessionScope::from_headers_and_body(
             &headers,
             Some(&body),
@@ -356,7 +366,9 @@ pub async fn handle_generate(
         }
 
         let preceding_turn_anchor = wrapped_body
-            .get("contents")
+            .get("request")
+            .and_then(|r| r.get("contents"))
+            .or_else(|| wrapped_body.get("contents"))
             .and_then(|c| c.as_array())
             .and_then(|a| a.last())
             .cloned();
@@ -921,13 +933,19 @@ pub async fn handle_generate(
                 "[Gemini] Target model [{}] not found on upstream (HTTP {}). Terminating retry loop without account lockout.",
                 mapped_model, status_code
             );
+            let dual_err = crate::proxy::handlers::common::build_dual_track_error(
+                "gemini",
+                status_code,
+                &mapped_model,
+                &error_text,
+            );
             return Ok((
                 StatusCode::from_u16(status_code).unwrap_or(StatusCode::NOT_FOUND),
                 [
                     ("X-Account-Email", email.as_str()),
                     ("X-Mapped-Model", mapped_model.as_str()),
                 ],
-                error_text,
+                Json(dual_err),
             )
                 .into_response());
         }
@@ -944,20 +962,7 @@ pub async fn handle_generate(
                     .purge_corrupted_signatures(&session_id, &mapped_model);
                 // 2. 清理当前 session 的 SignatureCache
                 crate::proxy::SignatureCache::global().delete_session_signature(&client_session_id);
-                // 3. 追加修复提示词到请求体的最后一条内容
-                if let Some(contents) = body.get_mut("contents").and_then(|v| v.as_array_mut()) {
-                    if let Some(last_content) = contents.last_mut() {
-                        if let Some(parts) =
-                            last_content.get_mut("parts").and_then(|v| v.as_array_mut())
-                        {
-                            parts.push(json!({
-                                "text": "\n\n[System Recovery] Your previous output contained an invalid signature. Please regenerate the response without the corrupted signature block."
-                            }));
-                            tracing::debug!("[Gemini] Appended repair prompt to last content");
-                        }
-                    }
-                }
-                // 4. 保持同一账号原地重试
+                // 3. 保持同一账号原地重试
                 force_rotate = false;
                 continue;
             } else {
@@ -1040,20 +1045,19 @@ pub async fn handle_generate(
             "Gemini Upstream non-retryable error {}: {}",
             status_code, error_text
         );
+        let dual_err = crate::proxy::handlers::common::build_dual_track_error(
+            "gemini",
+            status_code,
+            &mapped_model,
+            &error_text,
+        );
         return Ok((
             status,
             [
                 ("X-Account-Email", email.as_str()),
                 ("X-Mapped-Model", mapped_model.as_str()),
             ],
-            // [FIX] Return JSON error
-            Json(json!({
-                "error": {
-                    "code": status_code,
-                    "message": error_text,
-                    "status": "UPSTREAM_ERROR"
-                }
-            })),
+            Json(dual_err),
         )
             .into_response());
     }
@@ -1066,12 +1070,14 @@ pub async fn handle_generate(
         &last_error,
     );
 
-    Ok((
-        final_status,
-        headers,
-        format!("All accounts exhausted. Last error: {}", last_error),
-    )
-        .into_response())
+    let dual_err = crate::proxy::handlers::common::build_dual_track_error(
+        "gemini",
+        final_status.as_u16(),
+        initial_mapped_model.as_str(),
+        &last_error,
+    );
+
+    Ok((final_status, headers, Json(dual_err)).into_response())
 }
 
 pub async fn handle_list_models(

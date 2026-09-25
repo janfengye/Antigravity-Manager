@@ -233,29 +233,30 @@ pub fn transform_openai_response(
             }
 
             let raw_finish_reason = candidate.get("finishReason").and_then(|f| f.as_str());
-            let is_malformed_function_call = raw_finish_reason == Some("MALFORMED_FUNCTION_CALL");
 
-            let finish_reason = raw_finish_reason
-                .map(|f| match f {
-                    "STOP" => "stop",
-                    "MAX_TOKENS" => "length",
-                    "SAFETY" => "content_filter",
-                    "RECITATION" => "content_filter",
-                    "MALFORMED_FUNCTION_CALL" => "stop",
-                    _ => "stop",
-                })
-                .unwrap_or("stop");
+            // 规范化 finish_reason：若包含工具调用，强制遵循 OpenAI 规范映射为 tool_calls
+            let finish_reason = if !tool_calls.is_empty() {
+                "tool_calls"
+            } else {
+                raw_finish_reason
+                    .map(|f| match f {
+                        "STOP" => "stop",
+                        "MAX_TOKENS" => "length",
+                        "SAFETY" | "RECITATION" => "content_filter",
+                        "MALFORMED_FUNCTION_CALL" => "stop",
+                        _ => "stop",
+                    })
+                    .unwrap_or("stop")
+            };
 
             let refusal_val = if finish_reason == "content_filter" {
-                Some("生成由于安全策略或背诵保护被中止".to_string())
+                Some(
+                    "Generation was terminated due to safety policy or recitation checks."
+                        .to_string(),
+                )
             } else {
                 None
             };
-
-            // [FIX MALFORMED_FUNCTION_CALL] 避免客户端空白
-            if is_malformed_function_call && content_out.is_empty() {
-                content_out.push_str("很抱歉，当前模型在尝试调取实时信息时遇到了格式异常。若需要查询实时天气或最新资讯，请尝试使用联网模式（模型名带 -online 后缀）或配置天气/搜索插件。");
-            }
 
             choices.push(Choice {
                 index: idx as u32,
@@ -293,7 +294,10 @@ pub fn transform_openai_response(
                 .get("blockReason")
                 .and_then(|v| v.as_str())
                 .unwrap_or("UNKNOWN");
-            let refusal_msg = format!("请求由于安全策略被拦截 (blockReason: {})", reason);
+            let refusal_msg = format!(
+                "Request was blocked due to safety policy (blockReason: {}).",
+                reason
+            );
             choices.push(Choice {
                 index: 0,
                 message: OpenAIMessage {
@@ -478,5 +482,51 @@ mod tests {
         assert_eq!(args["description"], "Custom description");
         assert_eq!(args["arbitrary_field"], 123);
         assert!(!args.as_object().unwrap().contains_key("command"));
+    }
+
+    #[test]
+    fn test_malformed_function_call_never_injects_hardcoded_online_prompt() {
+        let gemini_resp = json!({
+            "candidates": [{
+                "content": {
+                    "parts": []
+                },
+                "finishReason": "MALFORMED_FUNCTION_CALL"
+            }],
+            "modelVersion": "gemini-3.7-flash",
+            "responseId": "resp_malformed"
+        });
+
+        let result = transform_openai_response(&gemini_resp, Some("session-123"), 1, None);
+        assert_eq!(result.choices.len(), 1);
+        assert_eq!(result.choices[0].finish_reason, Some("stop".to_string()));
+        assert!(result.choices[0].message.content.is_none());
+    }
+
+    #[test]
+    fn test_tool_calls_response_finish_reason_is_tool_calls() {
+        let gemini_resp = json!({
+            "candidates": [{
+                "content": {
+                    "parts": [{
+                        "functionCall": {
+                            "name": "read_file",
+                            "args": { "path": "src/main.rs" }
+                        }
+                    }]
+                },
+                "finishReason": "STOP"
+            }],
+            "modelVersion": "gemini-2.5-flash",
+            "responseId": "resp_tool"
+        });
+
+        let result = transform_openai_response(&gemini_resp, Some("session-123"), 1, None);
+        assert_eq!(result.choices.len(), 1);
+        assert_eq!(
+            result.choices[0].finish_reason,
+            Some("tool_calls".to_string())
+        );
+        assert!(result.choices[0].message.tool_calls.is_some());
     }
 }

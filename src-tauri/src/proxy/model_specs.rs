@@ -372,9 +372,7 @@ pub fn resolve_custom_budget(
     // 2. 顶级大选择：客户端直接控制（危险模式）
     if tb_config.control_source == ThinkingControlSource::Client {
         if let Some(b) = client_budget {
-            if b > 0 {
-                return Some(b as i64);
-            }
+            return Some(b as i64);
         }
         return None;
     }
