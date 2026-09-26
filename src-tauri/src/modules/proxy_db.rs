@@ -572,7 +572,7 @@ pub fn save_thinking_record(
     if session_key.is_empty() {
         return Ok(());
     }
-    let mut conn = thinking_db()?;
+    let conn = thinking_db()?;
     let now = chrono::Utc::now().timestamp_millis();
     let tool_ids_json = serde_json::to_string(tool_ids).unwrap_or_else(|_| "[]".to_string());
     let causal_tool_id = tool_ids
@@ -711,7 +711,7 @@ pub fn load_thinking_records(session_key: &str) -> Result<Vec<PersistedThinkingR
     if session_key.is_empty() {
         return Ok(Vec::new());
     }
-    let mut conn = thinking_db()?;
+    let conn = thinking_db()?;
     let mut stmt = conn
         .prepare_cached(
             "SELECT fingerprint, thought, signature, tool_ids, tool_names, visible
@@ -767,7 +767,7 @@ pub fn load_thinking_by_tool_id(
     if session_key.is_empty() || tool_id.is_empty() {
         return Ok(None);
     }
-    let mut conn = thinking_db()?;
+    let conn = thinking_db()?;
 
     // 1. Track 1 (Fastest Path): 优先按因果伪哈希 ID 走 idx_thinking_rec_causal 专属局部索引 (0.02ms 纳秒级命中)
     let mut causal_stmt = conn
@@ -899,7 +899,7 @@ pub fn load_thinking_by_signature(
     if session_key.is_empty() || signature.is_empty() {
         return Ok(None);
     }
-    let mut conn = thinking_db()?;
+    let conn = thinking_db()?;
     let mut stmt = conn
         .prepare_cached(
             "SELECT fingerprint, thought, signature, tool_ids, tool_names, visible
@@ -979,7 +979,7 @@ pub fn load_thinking_by_fingerprint(
     if session_key.is_empty() || fingerprint.is_empty() {
         return Ok(None);
     }
-    let mut conn = thinking_db()?;
+    let conn = thinking_db()?;
     let mut stmt = conn
         .prepare_cached(
             "SELECT fingerprint, thought, signature, tool_ids, tool_names, visible

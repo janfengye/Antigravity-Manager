@@ -8,6 +8,7 @@ use bytes::Bytes;
 use serde_json::{json, Value};
 use tracing::{debug, error, info}; // Import Engine trait for encode method
 
+use crate::proxy::mappers::gemini::SUMMARY_REQUEST_TIMEOUT_SECS;
 use crate::proxy::mappers::openai::{
     transform_openai_request, transform_openai_request_with_session, transform_openai_response,
     OpenAIContent, OpenAIContentBlock, OpenAIMessage, OpenAIRequest, OpenAIResponse,
@@ -2809,7 +2810,7 @@ pub async fn handle_chat_completions(
         }
 
         let scheduling_mode = token_manager.get_scheduling_mode().await;
-        let allow_grace = match scheduling_mode {
+        let _allow_grace = match scheduling_mode {
             crate::proxy::sticky_config::SchedulingMode::Balance => {
                 token_manager.tokens_count() <= 1
             }
@@ -3952,6 +3953,7 @@ pub async fn handle_completions(
                 &openai_req,
                 &trace_id,
                 &token_manager_clone,
+                &state.upstream,
                 &signature_session_id_str,
             )
             .await
@@ -4891,7 +4893,7 @@ pub async fn handle_completions(
         }
 
         let scheduling_mode = token_manager.get_scheduling_mode().await;
-        let allow_grace = match scheduling_mode {
+        let _allow_grace = match scheduling_mode {
             crate::proxy::sticky_config::SchedulingMode::Balance => {
                 token_manager.tokens_count() <= 1
             }
@@ -6618,7 +6620,7 @@ fn normalize_response_subsequent_request(
     state.last_request = Some(history_without_inline_media(&payload));
     Ok(payload)
 }
-#[allow(dead_code)]
+
 fn should_replace_websocket_transcript(payload: &Value) -> bool {
     let previous_response_id = payload
         .get("previous_response_id")
@@ -6666,7 +6668,7 @@ fn dedupe_input_items_by_id(items: Vec<Value>) -> Vec<Value> {
         }
         let call_id = item.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
         let is_referenced = !call_id.is_empty() && referenced_call_ids.contains(call_id);
-        if let Some(&(existing_idx, existing_referenced)) = keep_map.get(item_id) {
+        if let Some(&(_existing_idx, existing_referenced)) = keep_map.get(item_id) {
             if is_referenced || !existing_referenced {
                 keep_map.insert(item_id.to_string(), (idx, is_referenced));
             }
@@ -7432,6 +7434,7 @@ async fn call_openai_gemini_sync(
     model: &str,
     request: &OpenAIRequest,
     token_manager: &std::sync::Arc<crate::proxy::TokenManager>,
+    upstream: &std::sync::Arc<crate::proxy::upstream::client::UpstreamClient>,
     trace_id: &str,
 ) -> Result<String, String> {
     let (access_token, project_id, _, account_id, _wait_ms) = token_manager
@@ -7444,44 +7447,48 @@ async fn call_openai_gemini_sync(
     let (gemini_body, _, _, _) =
         transform_openai_request(request, &project_id, &session_id, token_obj.as_ref());
 
-    let upstream_url = format!(
-        "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
-        model
+    debug!(
+        "[{}] [OpenAI-BG] Calling {} via cloudcode v1internal for summary",
+        trace_id, model
     );
 
-    debug!("[{}] [OpenAI-BG] Calling Gemini API: {}", trace_id, model);
+    // 走共享的辅助调用通道。
+    //
+    // 历史实现把 `transform_openai_request` 产出的**已包装 cloudcode 信封**
+    // （内含 project / request / model / userAgent / requestId / requestType）
+    // POST 到 `https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent`
+    // —— host 与形状双双不符。实测该 host 对 Antigravity 账号恒返回
+    // 403 `ACCESS_TOKEN_SCOPE_INSUFFICIENT`（token 不具备公共 Generative Language API 权限），
+    // 因此该后台摘要从未成功过。
+    let gemini_response = upstream
+        .call_v1_internal_auxiliary(
+            "generateContent",
+            &access_token,
+            gemini_body,
+            Some(account_id.as_str()),
+            SUMMARY_REQUEST_TIMEOUT_SECS,
+        )
+        .await?;
 
-    let response = reqwest::Client::new()
-        .post(&upstream_url)
-        .header("Authorization", format!("Bearer {}", access_token))
-        .header("Content-Type", "application/json")
-        .json(&gemini_body)
-        .send()
-        .await
-        .map_err(|e| format!("API call failed: {}", e))?;
+    // 上游返回 `{"response": {...}}` 包装体，必须先解包。
+    let unwrapped = crate::proxy::mappers::gemini::unwrap_response(&gemini_response);
 
-    if !response.status().is_success() {
-        return Err(format!(
-            "API returned {}: {}",
-            response.status(),
-            response.text().await.unwrap_or_default()
-        ));
-    }
-
-    let gemini_response: Value = response
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse response: {}", e))?;
-
-    gemini_response
+    // 只拼接「非思考 part」的文本：前面可能存在 `{"thought": true, "text": ""}` 的空块，
+    // 直接取 `parts[0].text` 会拿到空串并把空摘要当成功。
+    unwrapped
         .get("candidates")
         .and_then(|c| c.get(0))
         .and_then(|c| c.get("content"))
         .and_then(|c| c.get("parts"))
-        .and_then(|p| p.get(0))
-        .and_then(|p| p.get("text"))
-        .and_then(|t| t.as_str())
-        .map(|s| s.to_string())
+        .and_then(|parts| parts.as_array())
+        .map(|parts| {
+            parts
+                .iter()
+                .filter(|part| !crate::proxy::thinking_store::is_thought_part(part))
+                .filter_map(|part| part.get("text").and_then(|t| t.as_str()))
+                .collect::<String>()
+        })
+        .filter(|text| !text.trim().is_empty())
         .ok_or_else(|| "Failed to extract text from response".to_string())
 }
 
@@ -7489,6 +7496,7 @@ async fn try_compress_openai_with_summary(
     original_request: &OpenAIRequest,
     trace_id: &str,
     token_manager: &std::sync::Arc<crate::proxy::TokenManager>,
+    upstream: &std::sync::Arc<crate::proxy::upstream::client::UpstreamClient>,
     session_id_str: &str,
 ) -> Result<OpenAIRequest, String> {
     info!(
@@ -7549,6 +7557,7 @@ async fn try_compress_openai_with_summary(
         INTERNAL_BACKGROUND_TASK,
         &summary_request,
         token_manager,
+        upstream,
         trace_id,
     )
     .await?;

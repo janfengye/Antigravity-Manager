@@ -403,12 +403,11 @@ impl PromptSanitizer {
             return;
         }
 
-        let thought_idx = parts.iter().position(|p| {
-            p.get("thought").and_then(Value::as_bool).unwrap_or(false)
-                || ((p.get("thoughtSignature").is_some() || p.get("thought_signature").is_some())
-                    && p.get("functionCall").is_none()
-                    && p.get("functionResponse").is_none())
-        });
+        // 铁律：只认 thought: true。若沿用"有签名即思考块"的启发式，会把带签名的正文
+        // 误判为思考块并前移 —— 既改写 part 顺序（= 签名锚点语义），也让真正的前缀错位。
+        let thought_idx = parts
+            .iter()
+            .position(|p| crate::proxy::thinking_store::is_thought_part(p));
 
         if let Some(idx) = thought_idx {
             if idx != 0 {

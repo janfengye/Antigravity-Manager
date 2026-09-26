@@ -11,12 +11,12 @@
   - *Model Routing Example*: Prioritize wildcard patterns (e.g., `gemini-*-flash-*`) to anticipate future model releases rather than exact string matches.
   - *Prompt Sanitization Example*: For agent-client prompt sanitization, prioritize regex-based pattern matching over static keyword replacement, ensuring full coverage without stripping pipeline system prompts or user queries.
 - **Formatting & CI Discipline**:
-  - **Unit Testing**: Prioritize targeted unit tests for touched modules rather than full-suite runs — CI compiles test targets without executing them. Skip writing tests for trivial edits (constants, prompts, or config tweaks).
-  - **Pre-flight Checks**: Run focused checks covering touched areas before submitting PRs or release tags:
+  - **Unit Testing**: Keep focused — run targeted tests for touched modules locally; CI compiles test targets without executing them. Skip tests for trivial edits (constants, prompts, or config tweaks). No need to run the full suite locally.
+  - **Pre-flight Checks**: Run the essentials before submitting PRs or release tags:
     - `cd src-tauri && cargo fmt -- --check` (for Rust edits)
-    - `cd src-tauri && cargo clippy --all-targets --all-features` (comprehensive Rust gate, rather than running redundant `cargo check`)
+    - `cd src-tauri && cargo clippy --all-targets --all-features` (comprehensive Rust gate, already includes compilation — no separate `cargo check` needed)
     - `npm run build` (when `src/` or frontend configs changed)
-    - Rely on CI for full-app compilation (`tauri build`), reserving local checks for fast feedback.
+    - Rely on CI for full-app compilation (`tauri build`) and full test execution. Local pre-flight covers fmt + clippy + frontend build only.
 - **Release Channels & Discipline**:
   - **Release Channel Separation**:
     - **Stable Releases (正式版)**: Exclusively on `main`. Deploys official production packages, updates Docker/GitHub `latest` tags, and services automatic update channels.

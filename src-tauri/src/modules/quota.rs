@@ -4,17 +4,23 @@ use rquest;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-// Quota API endpoints (fallback order: Sandbox → Daily → Prod)
+// Quota API endpoints (fallback order: Daily → Sandbox → Prod)
+//
+// [FIX Issue #3525] Daily 优先，与官方 Antigravity language_server 的出站端点一致。
+// Sandbox 在部分地区会对合规账号返回终止性 400 `User location is not supported for the API use.`；
+// 本函数的回退条件只覆盖 429 / 5xx，400 会直接终止整轮配额刷新，因此不能让 Sandbox 排首位。
+// 官方从不访问 sandbox 端点；保留它仅作为可用性兜底，回退判定规则不变。
 const QUOTA_API_ENDPOINTS: [&str; 3] = [
-    "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:fetchAvailableModels",
     "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
+    "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:fetchAvailableModels",
     "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
 ];
 
-// Quota Summary API endpoints (weekly + 5h grouped quota, fallback order 同上)
+// Quota Summary API endpoints (weekly + 5h grouped quota, fallback order: Daily → Sandbox → Prod)
+// 顺序理由同上：优先与官方客户端一致的 Daily 端点。
 const QUOTA_SUMMARY_ENDPOINTS: [&str; 3] = [
-    "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:retrieveUserQuotaSummary",
     "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
+    "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:retrieveUserQuotaSummary",
     "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
 ];
 
@@ -147,9 +153,11 @@ async fn create_long_standard_client(account_id: Option<&str>) -> rquest::Client
     }
 }
 
+// 项目 / 档位解析端点（fallback order: Daily → Sandbox → Prod）
+// [FIX Issue #3525] 与官方 Antigravity language_server 的出站端点保持一致，理由见上文 QUOTA_API_ENDPOINTS。
 const CLOUD_CODE_LOAD_PROJECT_ENDPOINTS: [&str; 3] = [
-    "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:loadCodeAssist",
     "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
+    "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:loadCodeAssist",
     "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
 ];
 
@@ -601,7 +609,6 @@ async fn fetch_quota_summary(
                                     remaining_fraction: b.remaining_fraction?,
                                     reset_time: b.reset_time.unwrap_or_default(),
                                     observed_at: Some(chrono::Utc::now().timestamp_millis()),
-                                    cycle_start: None,
                                     cycle_tokens: None,
                                     display_name: b.display_name,
                                     description: b.description,

@@ -110,7 +110,7 @@ pub fn inject_token(
     project_id: Option<&str>,
     id_token: Option<&str>,
     oauth_client_key: Option<&str>,
-    target_ide: Option<&str>,
+    _target_ide: Option<&str>,
 ) -> Result<String, String> {
     crate::modules::logger::log_info("Starting Token injection...");
 

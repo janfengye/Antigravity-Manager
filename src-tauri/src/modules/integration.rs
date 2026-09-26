@@ -1,6 +1,8 @@
 use crate::models::Account;
 use crate::modules::{db, device, process, version};
 use std::fs;
+// Command 仅用于 macos/Linux 分支（security / secret-tool / kill），Windows 裁剪不导入以免 unused
+#[cfg(not(windows))]
 use std::process::Command;
 
 pub trait SystemIntegration: Send + Sync {

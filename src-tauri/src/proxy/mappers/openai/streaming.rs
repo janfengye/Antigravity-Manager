@@ -5,7 +5,6 @@ use futures::{Stream, StreamExt};
 use rand::Rng;
 use serde_json::{json, Value};
 use std::pin::Pin;
-use tracing::debug;
 use uuid::Uuid;
 
 /// 保存 thoughtSignature 到会话缓存

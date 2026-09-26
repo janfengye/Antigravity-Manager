@@ -180,7 +180,7 @@ pub fn transform_openai_request_with_session(
     mapped_model: &str,
     token: Option<&ProxyToken>,
     routing_session_id: &str,
-    signature_read_key: Option<&str>,
+    _signature_read_key: Option<&str>,
     is_responses_api: bool,
 ) -> (Value, String, usize, String) {
     let remember_cwd =
@@ -317,24 +317,11 @@ pub fn transform_openai_request_with_session(
 
     let is_client_disabled = is_client_control && client_switch.is_disabled();
 
-    let mut actual_include_thinking = if is_client_disabled {
+    let actual_include_thinking = if is_client_disabled {
         false
     } else {
         !is_under_v3 && (is_thinking_model || force_server_thinking || is_client_control)
     };
-
-    // [REFACTORED] 使用 SignatureCache 获取 Session 级别的签名
-    // Responses may pass previous_response_id as signature_read_key; always fall back to
-    // the stable ThinkingStore key so chat/responses share the same signature namespace.
-    let session_thought_sig = signature_read_key
-        .and_then(|key| crate::proxy::SignatureCache::global().get_session_signature(key))
-        .or_else(|| {
-            if signature_read_key == Some(thinking_store_key.as_str()) {
-                None
-            } else {
-                crate::proxy::SignatureCache::global().get_session_signature(&thinking_store_key)
-            }
-        });
 
     if _user_enabled_thinking || _user_thinking_budget.is_some() {
         tracing::debug!(
@@ -389,16 +376,6 @@ pub fn transform_openai_request_with_session(
         }
     }
 
-    // 从缓存获取当前会话的思维签名
-    let thought_sig = session_thought_sig;
-    if thought_sig.is_some() {
-        tracing::debug!(
-            "[OpenAI-Request] Using session signature (sid: {}, len: {})",
-            session_id,
-            thought_sig.as_ref().unwrap().len()
-        );
-    }
-
     // [New] 预先构建工具名称到原始 Schema 的映射，用于后续参数类型修正
     let mut tool_name_to_schema = std::collections::HashMap::new();
     if let Some(tools) = &request.tools {
@@ -439,7 +416,7 @@ pub fn transform_openai_request_with_session(
         .count();
 
     // 找出 messages 中最后一个 assistant 角色的下标 (绝对索引)
-    let last_assistant_msg_idx = request
+    let _last_assistant_msg_idx = request
         .messages
         .iter()
         .enumerate()
@@ -695,27 +672,8 @@ pub fn transform_openai_request_with_session(
                         }
                     });
 
-                    // 签名提取与对齐：优先客户端自带签名；若无则查询全局 SignatureCache (与 Claude / Gemini 适配器严格对齐)
-                    let final_sig = tc
-                        .signature
-                        .as_deref()
-                        .filter(|s| {
-                            (*s == crate::proxy::thinking_store::SENTINEL_SIGNATURE
-                                || s.len() >= 50)
-                                && (!mapped_model.to_lowercase().contains("gemini")
-                                    || crate::proxy::thinking_store::is_likely_gemini_signature(s))
-                        })
-                        .map(str::to_string)
-                        .or_else(|| {
-                            crate::proxy::SignatureCache::global()
-                                .get_tool_signature(&tc.id)
-                                .filter(|s| {
-                                    !mapped_model.to_lowercase().contains("gemini")
-                                        || crate::proxy::thinking_store::is_likely_gemini_signature(s)
-                                })
-                        });
-
-                    if let Some(sig) = final_sig {
+                    // 纯净线缆透传：客户端若自带签名则原样透传，未带则留空，全权委托进站流水线统一对齐与回填
+                    if let Some(ref sig) = tc.signature {
                         func_call_part["thoughtSignature"] = json!(sig);
                     }
 
@@ -869,22 +827,13 @@ pub fn transform_openai_request_with_session(
         .filter(|msg| !msg["parts"].as_array().map(|a| a.is_empty()).unwrap_or(true))
         .collect();
 
-    // 合并连续相同角色的消息 (Gemini 强制要求 user/model 交替)
-    let mut merged_contents: Vec<Value> = Vec::new();
-    for msg in contents {
-        if let Some(last) = merged_contents.last_mut() {
-            if last["role"] == msg["role"] {
-                // 合并 parts
-                if let (Some(last_parts), Some(msg_parts)) =
-                    (last["parts"].as_array_mut(), msg["parts"].as_array())
-                {
-                    last_parts.extend(msg_parts.iter().cloned());
-                    continue;
-                }
-            }
-        }
-        merged_contents.push(msg);
-    }
+    // 连续相同角色的消息**保持独立**（对齐官方形态）。
+    //
+    // 历史实现会合并它们，理由是 "Gemini 强制要求 user/model 交替"。但官方
+    // Antigravity 报文里连续 user 轮与连续 model 轮都是常态，v1internal 上游
+    // 并不要求严格交替；实测（2026-09-26，`gemini-3.8-flash-tiered` @ daily）
+    // 两种形态均 200 且上下文理解一致。
+    let mut merged_contents = contents;
     let protocol = if is_responses_api {
         crate::proxy::pipeline::ProxyProtocol::OpenAIResponses
     } else {
@@ -1132,7 +1081,7 @@ pub fn transform_openai_request_with_session(
     );
 
     // 4. Handle Tools (Merged Cleaning)
-    let is_codex_style = request.model.contains("codex")
+    let _is_codex_style = request.model.contains("codex")
         || request.model.contains("realtime")
         || request.instructions.is_some()
         || request.input.is_some();
@@ -1284,28 +1233,10 @@ pub fn transform_openai_request_with_session(
     if !function_declarations.is_empty() {
         inner_request["tools"] = json!([{ "functionDeclarations": function_declarations }]);
 
-        let mut mode = "VALIDATED";
-        if let Some(tool_choice) = &request.tool_choice {
-            if let Some(s) = tool_choice.as_str() {
-                match s {
-                    "none" => mode = "NONE",
-                    "auto" => mode = "AUTO",
-                    "required" => mode = "ANY",
-                    _ => mode = "ANY",
-                }
-            } else {
-                mode = "ANY";
-            }
-        }
-
-        inner_request["toolConfig"] = json!({
-            "functionCallingConfig": { "mode": mode },
-            "includeServerSideToolInvocations": true
-        });
-        inner_request["tool_config"] = json!({
-            "function_calling_config": { "mode": mode },
-            "include_server_side_tool_invocations": true
-        });
+        // [REMOVED v4.8.2] toolConfig / tool_config 双写已移除：官方 Antigravity 报文不带该字段，
+        // 且 camelCase 与 snake_case 双份会写出一对矛盾配置 (AUTO vs VALIDATED)。
+        // 工具调用行为在协议无关节点 (align_google_request_prefix_topology) 统一处理。
+        let _mode = None as Option<&str>;
     }
 
     let global_prompt_config = crate::proxy::config::get_global_system_prompt();
@@ -1329,29 +1260,8 @@ pub fn transform_openai_request_with_session(
             &mut inner_request,
             Some(mapped_model),
         );
-        if let Some(tool_config) = inner_request.get_mut("toolConfig") {
-            if let Some(obj) = tool_config.as_object_mut() {
-                obj.insert("includeServerSideToolInvocations".to_string(), json!(true));
-            }
-        } else {
-            inner_request["toolConfig"] = json!({
-                "functionCallingConfig": { "mode": "VALIDATED" },
-                "includeServerSideToolInvocations": true
-            });
-        }
-        if let Some(tool_config_snake) = inner_request.get_mut("tool_config") {
-            if let Some(obj) = tool_config_snake.as_object_mut() {
-                obj.insert(
-                    "include_server_side_tool_invocations".to_string(),
-                    json!(true),
-                );
-            }
-        } else {
-            inner_request["tool_config"] = json!({
-                "function_calling_config": { "mode": "VALIDATED" },
-                "include_server_side_tool_invocations": true
-            });
-        }
+        // [REMOVED v4.8.2] toolConfig / tool_config 注入已移除（官方不带该字段），
+        // googleSearch 工具声明本身已由 inject_google_search_tool 写入 tools。
     }
 
     if let Some(image_config) = config.image_config {
@@ -1390,11 +1300,14 @@ pub fn transform_openai_request_with_session(
     );
     let reordered_request = inner_request;
 
-    // Match the Gemini entrypoint: every upstream attempt gets a unique request ID.
-    // Reusing session/message-count IDs can pin later requests to an earlier 429 result.
-    let timestamp_ms = chrono::Utc::now().timestamp_millis();
-    let random_hex = &uuid::Uuid::new_v4().simple().to_string()[..8];
-    let request_id = format!("agent/{}/{}", timestamp_ms, random_hex);
+    // requestId：官方 5 段形态，三适配器共用（含 unixMs → 幂等隔离）。
+    // 历史教训：复用 session / message-count 的 ID 会把后续请求 pin 到一次更早的 429 结果。
+    let request_id =
+        super::super::common_utils::build_official_request_id(&session_id, message_count as u64);
+
+    // 官方客户端指纹（企业 / GCP 账号为 jetski）—— 三适配器共用，避免指纹漂移
+    let (official_user_agent, _official_ide_type) =
+        super::super::common_utils::resolve_official_fingerprint(token);
 
     // [NEW] 动态检测是否需要标记为 agent 请求
     // 只有在请求携带 tools，或上下文包含工具调用交互时才打上 agent 标签
@@ -1415,7 +1328,7 @@ pub fn transform_openai_request_with_session(
         // [CACHE] 使用重排后的字段顺序，稳定前缀在前
         "request": reordered_request,
         "model": config.final_model,
-        "userAgent": "antigravity",
+        "userAgent": official_user_agent,
         // [CACHE] requestId stays last so its per-attempt value does not disturb the stable prefix.
         "requestId": request_id,
     });
@@ -1502,7 +1415,6 @@ pub fn enforce_uppercase_types(value: &mut Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proxy::mappers::openai::models::*;
 
     #[test]
     fn test_openai_aliases_max_completion_tokens_and_reasoning_max_tokens() {
@@ -2282,7 +2194,7 @@ mod tests {
         assert_eq!(max_output_tokens, 57344);
     }
     #[test]
-    fn test_vertex_ai_sentinel_injection() {
+    fn test_vertex_ai_drops_sentinel_injection() {
         // [FIX #1650] Verify sentinel signature injection for Vertex AI models
         let req = OpenAIRequest {
             model: "claude-3-7-sonnet-thinking".to_string(), // Triggers is_thinking_model
@@ -2323,10 +2235,11 @@ mod tests {
             .find(|p: &&serde_json::Value| p.get("functionCall").is_some())
             .expect("Should find functionCall part");
 
-        // Vertex AI requires sentinel
-        assert_eq!(
-            tool_part["thoughtSignature"].as_str(),
-            Some("skip_thought_signature_validator")
+        // 铁律：functionCall **绝不**携带哨兵 —— 官方报文 0/23 处出现哨兵，
+        // 它不属于 Antigravity 协议；签名归位统一交给流水线终审 `place_turn_signature`。
+        assert!(
+            tool_part.get("thoughtSignature").is_none(),
+            "functionCall must not carry a sentinel signature"
         );
     }
 
@@ -2369,10 +2282,12 @@ mod tests {
                 .find(|p: &&serde_json::Value| p.get("functionCall").is_some())
                 .expect(&format!("[{model}] Should find functionCall part"));
 
-            assert_eq!(
-                tool_part["thoughtSignature"].as_str(),
-                Some("skip_thought_signature_validator"),
-                "[{model}] gemini-3-flash functionCall must contain thoughtSignature sentinel"
+            // 铁律：无缓存签名时**留空**（字段缺席），绝不发明哨兵。
+            // 官方报文里哨兵出现 0 次；签名缺失是被上游容忍的（在飞轮即缺席），
+            // 且该轮签名由流水线终审 `place_turn_signature` 按锚点归位。
+            assert!(
+                tool_part.get("thoughtSignature").is_none(),
+                "[{model}] functionCall must not carry a sentinel signature when unsigned"
             );
         }
     }

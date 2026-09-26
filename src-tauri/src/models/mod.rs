@@ -8,5 +8,5 @@ pub use account::{
     DeviceProfileVersion,
 };
 pub use config::{AppConfig, CircuitBreakerConfig, QuotaProtectionConfig};
-pub use quota::{QuotaBucket, QuotaData, QuotaGroup};
+pub use quota::QuotaData;
 pub use token::TokenData;

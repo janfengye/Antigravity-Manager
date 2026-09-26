@@ -64,17 +64,27 @@ pub fn sanitize_error_for_log(error_text: &str) -> String {
     }
 }
 
-// Cloud Code v1internal endpoints (fallback order: Sandbox → Daily → Prod)
-// 优先使用 Sandbox/Daily 环境以避免 Prod环境的 429 错误 (Ref: Issue #1176)
+// Cloud Code v1internal endpoints (fallback order: Daily → Sandbox → Prod)
+//
+// Daily 优先 —— 它是官方 IDE 原生唯一主力端点（`language_server` 的启动参数即指向它），
+// 稳定支持思维链与工具调用；Sandbox 为沙箱备用、Prod 为生产兜底，
+// 后两者均易触发 Prod 环境的 429（Ref: Issue #1176, Issue #3523）。
+//
+// [FIX Issue #3525 / PR #3526] 顺序同时是**正确性**要求，不只是可用性偏好：
+// 同一账号 / 模型 / 代理下，Sandbox 对部分地区返回**终止性 400**
+// `User location is not supported for the API use.`，而 `should_try_next_endpoint`
+// 只对 408 / 404 / 5xx 回退 → 400 不触发回退，故 Sandbox 排首位会让已验证可用的
+// Daily 永远不被尝试。Sandbox 保留为回退项、回退判定规则不变 ——
+// **不对所有 400 无条件重试**。
 const V1_INTERNAL_BASE_URL_PROD: &str = "https://cloudcode-pa.googleapis.com/v1internal";
 const V1_INTERNAL_BASE_URL_DAILY: &str = "https://daily-cloudcode-pa.googleapis.com/v1internal";
 const V1_INTERNAL_BASE_URL_SANDBOX: &str =
     "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal";
 
 const V1_INTERNAL_BASE_URL_FALLBACKS: [&str; 3] = [
-    V1_INTERNAL_BASE_URL_SANDBOX, // 优先级 1: Sandbox (已知有效且稳定)
-    V1_INTERNAL_BASE_URL_DAILY,   // 优先级 2: Daily (备用)
-    V1_INTERNAL_BASE_URL_PROD,    // 优先级 3: Prod (仅作为兜底)
+    V1_INTERNAL_BASE_URL_DAILY, // 优先级 1: Daily (官方 IDE 原生唯一主力端点，稳定支持思维链与工具调用)
+    V1_INTERNAL_BASE_URL_SANDBOX, // 优先级 2: Sandbox (沙箱备用；部分地区对合规账号返回终止性 400)
+    V1_INTERNAL_BASE_URL_PROD,  // 优先级 3: Prod (生产兜底，易触发 429)
 ];
 
 pub struct UpstreamClient {
@@ -618,6 +628,90 @@ impl UpstreamClient {
             .await
             .map_err(|e| format!("Parse json failed: {}", e))?;
         Ok(json)
+    }
+
+    /// 辅助型 v1internal 调用（非用户请求路径，例如后台上下文摘要）。
+    ///
+    /// 为什么需要它：这类调用点位于 mapper / 辅助函数里，历史上拿不到 `AppState.upstream`
+    /// 便手写 URL —— 结果形状与 host 双双漂移
+    /// （`{host}/v1internal/projects/{p}/locations/global/models/{m}:generateContent`
+    /// 在 daily / sandbox / prod 三个 host 上一律返回 HTML 404，导致该功能从未成功过）。
+    ///
+    /// 这里复用与主请求路径**完全相同**的四个来源，避免再次漂移：
+    /// - 客户端 `self.get_client(account_id)` —— 同一套按账号代理池选择与 `client_cache`，
+    ///   并随上游代理热更新一并生效（见 `rebuild_default_client` / `clear_client_cache`）。
+    ///   账号绑定专属代理时辅助请求同样走它，不会从真实 IP 泄漏出去。
+    /// - 端点顺序 `V1_INTERNAL_BASE_URL_FALLBACKS`（Daily → Sandbox → Prod）
+    /// - URL 形状 `Self::build_url`（`{base}:{method}`，模型名放在 body 里）
+    /// - 回退判定 `Self::should_try_next_endpoint`（408 / 404 / 5xx 才换端点）
+    ///
+    /// 与 `call_v1_internal` 的差异（有意为之）：不注入请求级 Header
+    /// （`x-vscode-sessionid` 等）。超时由调用方用 `timeout_secs` 指定 ——
+    /// 客户端默认 600s，对摘要过长，故显式收紧。
+    pub async fn call_v1_internal_auxiliary(
+        &self,
+        method: &str,
+        access_token: &str,
+        body: Value,
+        account_id: Option<&str>,
+        timeout_secs: u64,
+    ) -> Result<Value, String> {
+        let client = self.get_client(account_id).await;
+        let mut last_error = String::new();
+
+        for base_url in V1_INTERNAL_BASE_URL_FALLBACKS.iter() {
+            let url = Self::build_url(base_url, method, None);
+
+            let response = match client
+                .post(&url)
+                .header("Authorization", format!("Bearer {}", access_token))
+                .header("Content-Type", "application/json")
+                .timeout(Duration::from_secs(timeout_secs))
+                .json(&body)
+                .send()
+                .await
+            {
+                Ok(response) => response,
+                Err(e) => {
+                    tracing::warn!(
+                        endpoint = %url,
+                        error = %e,
+                        "Auxiliary v1internal request failed, trying next endpoint"
+                    );
+                    last_error = format!("request to {} failed: {}", url, e);
+                    continue;
+                }
+            };
+
+            let status = response.status();
+            if !status.is_success() {
+                let text = response.text().await.unwrap_or_default();
+                last_error = format!("{} returned {}: {}", url, status, text);
+
+                // 与主请求路径同一判定：仅 408 / 404 / 5xx 换端点；
+                // 其余状态（如 400）说明请求本身有问题，直接终止，不做三倍重试。
+                if !Self::should_try_next_endpoint(status) {
+                    return Err(last_error);
+                }
+                tracing::warn!(
+                    endpoint = %url,
+                    status = %status,
+                    "Auxiliary v1internal request returned retryable status, trying next endpoint"
+                );
+                continue;
+            }
+
+            return response
+                .json()
+                .await
+                .map_err(|e| format!("failed to parse response from {}: {}", url, e));
+        }
+
+        Err(if last_error.is_empty() {
+            "no v1internal endpoint available".to_string()
+        } else {
+            last_error
+        })
     }
 }
 

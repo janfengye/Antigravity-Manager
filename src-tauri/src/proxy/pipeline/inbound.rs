@@ -93,26 +93,17 @@ impl InboundThinkingPipeline {
         // 0. 统一上下文结构对齐（Pipeline First 统一治理）：
         // 将连续的 user 消息直到下一个 model，统一合并为一个 user 轮次的多个 block (parts)，保持严格顺序。
         // 这彻底消除了 Adapter 层各自为政导致的轮次错位，使得四大协议进入流水线后结构 100% 同构！
-        let mut normalized_contents = Vec::with_capacity(contents.len());
-        for msg in contents.drain(..) {
-            let is_user = msg.get("role").and_then(|r| r.as_str()) == Some("user");
-            let prev_is_user = normalized_contents
-                .last()
-                .and_then(|last: &Value| last.get("role").and_then(|r| r.as_str()))
-                == Some("user");
-            if is_user && prev_is_user {
-                let last = normalized_contents.last_mut().unwrap();
-                if let (Some(last_parts), Some(msg_parts)) = (
-                    last.get_mut("parts").and_then(|p| p.as_array_mut()),
-                    msg.get("parts").and_then(|p| p.as_array()),
-                ) {
-                    last_parts.extend(msg_parts.iter().cloned());
-                    continue;
-                }
-            }
-            normalized_contents.push(msg);
-        }
-        *contents = normalized_contents;
+        // 连续 user 轮**保持独立**（对齐官方形态）。
+        //
+        // 历史实现会把连续 user 轮的 parts 合并进前一个 content，理由是
+        // "Gemini 强制要求 user/model 交替"。但官方 Antigravity 报文里连续 user 轮
+        // 是常态（`f81eae5c` 的 contents[11] 用户消息紧接 contents[12] SYSTEM_MESSAGE，
+        // 两者独立），v1internal 上游并不要求严格交替。
+        //
+        // 实测（2026-09-26，`gemini-3.8-flash-tiered` @ daily）：
+        //   两个独立 user content     → 200，上下文理解正确
+        //   合并为单个 user content   → 200，上下文理解正确
+        // 两者都成立，故按官方形态保留独立，以获得跨协议一致的前缀字节。
 
         // 预先计算每一轮的前置因果锚点 (causal anchor)，以便无 ID 的 Gemini 原生工具调用也能无损合成确定性 ID
         let anchors: Vec<String> = (0..contents.len())
@@ -124,7 +115,7 @@ impl InboundThinkingPipeline {
 
         // 1. 协议策略清洗与位置规范化
         for (msg_idx, content) in contents.iter_mut().enumerate() {
-            let anchor = &anchors[msg_idx];
+            let _anchor = &anchors[msg_idx];
             let is_model = matches!(
                 content.get("role").and_then(|r| r.as_str()),
                 Some("model") | Some("assistant")
@@ -135,16 +126,12 @@ impl InboundThinkingPipeline {
                     let mut thinking_part = None;
                     let mut extra_thinking_parts = Vec::new();
                     let mut other_parts = Vec::new();
-                    let mut fc_counter = 0usize;
 
                     for mut part in parts.drain(..) {
-                        let is_thought = part
-                            .get("thought")
-                            .and_then(|v| v.as_bool())
-                            .unwrap_or(false)
-                            || (part.get("thoughtSignature").is_some()
-                                && part.get("functionCall").is_none()
-                                && part.get("functionResponse").is_none());
+                        // 铁律：只认 thought: true。真机报文的正文 part 同样携带签名，
+                        // 绝不能凭"有签名"判定思考块 —— 否则可见回答会被改写成内部思考，
+                        // 并静默丢弃该轮唯一的签名。
+                        let is_thought = crate::proxy::thinking_store::is_thought_part(&part);
 
                         if is_thought {
                             let text = part.get("text").and_then(|v| v.as_str()).unwrap_or("");
@@ -224,7 +211,28 @@ impl InboundThinkingPipeline {
                                 "thought": true,
                             });
                             if let Some(sig) = effective_sig {
-                                thought_obj["thoughtSignature"] = json!(sig);
+                                // 铁律 I4：Gemini 目标的思考块**绝不**携带签名。
+                                // 客户端在思考块上携带签名属于**矛盾组合** ——
+                                // 官方 33 个 model 轮里 `thought:true` 与签名共现 0 次；
+                                // 文本为占位符（`...` / `·` / `[undefined]` 等）时更属
+                                // 典型的客户端占位脏数据污染。
+                                //
+                                // 只剥离 Gemini 目标的思考块签名 —— Claude 目标按
+                                // Anthropic 规范**必须**在思考块上携带签名。
+                                // 也不因此关闭思考：那会反向改写历史轮语义。
+                                if is_claude {
+                                    thought_obj["thoughtSignature"] = json!(sig);
+                                } else if is_placeholder {
+                                    tracing::warn!(
+                                        "[InboundPipeline] Placeholder thought block carried a signature (len: {}) — stripped as client-side pollution. I4: thought parts never carry signatures.",
+                                        sig.len(),
+                                    );
+                                } else {
+                                    tracing::debug!(
+                                        "[InboundPipeline] Stripped signature from thought block for Gemini target (len: {}). I4: thought parts never carry signatures.",
+                                        sig.len(),
+                                    );
+                                }
                             }
 
                             if thinking_part.is_none() {
@@ -238,63 +246,12 @@ impl InboundThinkingPipeline {
                             }
                         } else {
                             if target_model.to_lowercase().contains("gemini") {
-                                // 协议无关全局工具签名回填：若当前部件为 functionCall 且尚未携带签名，优先按显式 ID 或因果合成 ID 查询 SignatureCache
-                                if let Some(fc) = part.get("functionCall") {
-                                    let needs_real_sig = part
-                                        .get("thoughtSignature")
-                                        .and_then(|s| s.as_str())
-                                        .map_or(true, |s| {
-                                            s == crate::proxy::thinking_store::SENTINEL_SIGNATURE
-                                        });
-                                    if needs_real_sig {
-                                        let name = fc
-                                            .get("name")
-                                            .and_then(|v| v.as_str())
-                                            .unwrap_or("unknown");
-                                        let synthetic_id =
-                                            crate::proxy::thinking_store::synthesize_tool_id(
-                                                name,
-                                                fc.get("args"),
-                                                anchor,
-                                                fc_counter,
-                                            );
-                                        fc_counter += 1;
-
-                                        // 核心原则：统一根据上下文因果合成伪 ID 查库回填，不受客户端是否携带或使用何种 tool_id 限制
-                                        let found_sig = crate::proxy::SignatureCache::global()
-                                            .get_tool_signature(&synthetic_id)
-                                            .or_else(|| {
-                                                fc.get("id")
-                                                    .and_then(|id| id.as_str())
-                                                    .filter(|s| !s.trim().is_empty())
-                                                    .and_then(|id| {
-                                                        crate::proxy::SignatureCache::global()
-                                                            .get_tool_signature(id)
-                                                    })
-                                            });
-
-                                        if let Some(sig) = found_sig {
-                                            if crate::proxy::thinking_store::is_likely_gemini_signature(&sig)
-                                            {
-                                                part["thoughtSignature"] = json!(sig);
-                                            }
-                                        }
-                                    }
-                                }
-
-                                if let Some(fc_sig) =
-                                    part.get("thoughtSignature").and_then(|s| s.as_str())
-                                {
-                                    if !crate::proxy::thinking_store::is_likely_gemini_signature(
-                                        fc_sig,
-                                    ) {
-                                        tracing::warn!(
-                                            "[InboundPipeline] Replacing foreign functionCall thoughtSignature (len: {}) with sentinel for Gemini",
-                                            fc_sig.len()
-                                        );
-                                        part["thoughtSignature"] =
-                                            json!(crate::proxy::thinking_store::SENTINEL_SIGNATURE);
-                                    }
+                                // Gemini 原生：客户端自带的真实签名**原样透传**，绝不发明哨兵。
+                                // 依据（3 份官方报文 / 23 处签名）：哨兵出现 0 次，它不属于
+                                // Antigravity 协议；而签名缺失是被上游容忍的（在飞轮即缺席）。
+                                // 归位（含清除非锚点签名）统一交给终审 place_turn_signature。
+                                if let Some(obj) = part.as_object_mut() {
+                                    obj.remove("thought_signature");
                                 }
                             } else if is_claude {
                                 if let Some(obj) = part.as_object_mut() {
@@ -325,15 +282,12 @@ impl InboundThinkingPipeline {
                                         } else {
                                             extracted_thought.as_str()
                                         };
-                                        let mut t_obj = json!({
+                                        // 铁律 I4：思考块绝不携带签名
+                                        // （官方报文里 thought:true 的 part 没有 thoughtSignature）
+                                        let t_obj = json!({
                                             "text": final_thought,
                                             "thought": true,
                                         });
-                                        if !is_claude {
-                                            t_obj["thoughtSignature"] = json!(
-                                                crate::proxy::thinking_store::SENTINEL_SIGNATURE
-                                            );
-                                        }
                                         thinking_part = Some(t_obj);
                                     }
                                     if !clean_visible.is_empty() {
@@ -352,15 +306,11 @@ impl InboundThinkingPipeline {
                                         } else {
                                             &clean_thought
                                         };
-                                        let mut t_obj = json!({
+                                        // 铁律 I4：思考块绝不携带签名
+                                        let t_obj = json!({
                                             "text": final_thought,
                                             "thought": true,
                                         });
-                                        if !is_claude {
-                                            t_obj["thoughtSignature"] = json!(
-                                                crate::proxy::thinking_store::SENTINEL_SIGNATURE
-                                            );
-                                        }
                                         thinking_part = Some(t_obj);
                                     }
                                     // 若已有思考块，该遗留思考块作为陈旧副本剥离，防止二次污染正文
@@ -432,6 +382,137 @@ impl InboundThinkingPipeline {
             is_thinking_enabled,
             Some(target_model),
         );
+
+        // 4. 工具回执 role 归一化（对齐官方 Antigravity 形态）。
+        //    必须放在**末位**：若前置，回执轮会进入上面的 `is_model` 分支，
+        //    从而跳过 `role == "user"` 分支里的多模态解构（图片提升为 inlineData）。
+        Self::normalize_function_response_roles(contents);
+    }
+
+    /// 把工具回执（`functionResponse`）轮的 role 归一化为官方 Antigravity 形态。
+    ///
+    /// **官方形态**（3 份实样本逐字核对）：`functionResponse` 恒位于 `role: "model"` 的
+    /// content 中，紧跟同 role 的 `functionCall` content 之后。
+    /// 而 Gemini 原生协议与四大客户端协议都把工具回执放在 `role: "user"`。
+    ///
+    /// **实测**（2026-09-26，`gemini-3.8-flash-tiered` @ daily，魔数回执判据）：
+    ///
+    /// ```text
+    /// fr @ role:user             → 200，回执被正确消费
+    /// fr @ role:model            → 200，回执被正确消费
+    /// fc + fr 同 content @ model → 200，回执被正确消费
+    /// ```
+    ///
+    /// 上游对两种 role **完全宽容**。故本归一化是「对齐官方形态 + 稳定前缀字节」，
+    /// 而不是「修复 400」；同时天然**向下兼容** user / model 两种入站形态。
+    ///
+    /// 行为：
+    ///
+    /// 1. 纯回执轮（parts 含 `functionResponse`，且无非回执 part）→ 就地改为 `role: "model"`；
+    /// 2. 混合轮（回执与可见文本同处一轮）→ 按 part 类型切段，回执段归 `model`、
+    ///    其余段保持原 role，**part 相对顺序与 content 相对顺序原样保持**；
+    /// 3. 已在 `model` 轮内的回执不动（幂等）；无回执的轮次完全不碰；
+    /// 4. `inlineData` 视为「随行媒体」——跟随其前驱 part 的族群，
+    ///    避免把 `user [inlineData, text]`（用户发图提问）误判为回执轮。
+    ///
+    /// 返回被改写的 content 数。
+    pub fn normalize_function_response_roles(contents: &mut Vec<Value>) -> usize {
+        /// part 是否携带工具回执本体。
+        fn has_fr(p: &Value) -> bool {
+            p.get("functionResponse").is_some()
+        }
+        /// part 是否仅为随行媒体（无文本、无回执、无调用）。
+        fn is_media(p: &Value) -> bool {
+            (p.get("inlineData").is_some() || p.get("inline_data").is_some())
+                && p.get("text").is_none()
+                && !has_fr(p)
+                && p.get("functionCall").is_none()
+        }
+
+        let mut rewritten = 0usize;
+        let mut out: Vec<Value> = Vec::with_capacity(contents.len());
+
+        for content in contents.drain(..) {
+            let role = content
+                .get("role")
+                .and_then(|r| r.as_str())
+                .unwrap_or("user")
+                .to_string();
+
+            let parts = match content.get("parts").and_then(|p| p.as_array()) {
+                Some(p) if !p.is_empty() => p.clone(),
+                _ => {
+                    out.push(content);
+                    continue;
+                }
+            };
+
+            // 只处理「含回执本体」且当前不是 model 的轮次
+            if !parts.iter().any(has_fr) || role == "model" {
+                out.push(content);
+                continue;
+            }
+
+            let all_response = parts.iter().all(|p| has_fr(p) || is_media(p));
+
+            // 纯回执轮：只改 role，parts 原样。
+            // 例外：首条 content 不得变成 model（Gemini 要求对话以 user 开头），
+            // 实际上回执必然跟在 functionCall 轮之后，此处仅作防御。
+            if all_response {
+                if out.is_empty() {
+                    out.push(content);
+                    continue;
+                }
+                let mut c = content;
+                c["role"] = json!("model");
+                out.push(c);
+                rewritten += 1;
+                continue;
+            }
+
+            // 混合轮：按「回执族 / 非回执族」切段，保持 parts 相对顺序
+            let mut segments: Vec<(bool, Vec<Value>)> = Vec::new();
+            for part in parts {
+                let flag = if has_fr(&part) {
+                    true
+                } else if is_media(&part) {
+                    // 随行媒体跟随前驱族群；无前驱则视为普通内容
+                    segments.last().map(|(f, _)| *f).unwrap_or(false)
+                } else {
+                    false
+                };
+                match segments.last_mut() {
+                    Some((f, seg)) if *f == flag => seg.push(part),
+                    _ => segments.push((flag, vec![part])),
+                }
+            }
+
+            if segments.len() <= 1 {
+                out.push(content);
+                continue;
+            }
+
+            // 首段若为回执族且前面没有已产出的 content，会破坏「以 user 开头」——
+            // 此时把该段改为原 role（保留结构与顺序，仅不做对齐）。
+            let mut first = true;
+            for (flag, seg) in segments {
+                let seg_role = if flag {
+                    if first && out.is_empty() {
+                        role.as_str()
+                    } else {
+                        "model"
+                    }
+                } else {
+                    role.as_str()
+                };
+                out.push(json!({ "role": seg_role, "parts": seg }));
+                first = false;
+            }
+            rewritten += 1;
+        }
+
+        *contents = out;
+        rewritten
     }
 
     /// 统一进站思考配置与参数治理（流水线节点）：
@@ -684,40 +765,16 @@ impl InboundThinkingPipeline {
             None
         };
 
-        // 3. toolConfig 与 tool_config (存在工具时双重补齐对齐，模式统一为 VALIDATED)
-        let has_tools = canonical_tools
-            .as_ref()
-            .map_or(false, |t| t.as_array().map_or(false, |arr| !arr.is_empty()));
-        let (canonical_tool_config, canonical_tool_config_snake) = if has_tools {
-            let mut mode = "VALIDATED";
-            if let Some(tc) = inner_request
-                .get("toolConfig")
-                .or_else(|| inner_request.get("tool_config"))
-            {
-                let m = tc
-                    .get("functionCallingConfig")
-                    .or_else(|| tc.get("function_calling_config"))
-                    .and_then(|f| f.get("mode"))
-                    .and_then(|v| v.as_str());
-                if let Some(m_str) = m {
-                    if m_str == "NONE" || m_str == "ANY" {
-                        mode = m_str;
-                    }
-                }
-            }
-            (
-                Some(json!({
-                    "functionCallingConfig": { "mode": mode },
-                    "includeServerSideToolInvocations": true
-                })),
-                Some(json!({
-                    "function_calling_config": { "mode": mode },
-                    "include_server_side_tool_invocations": true
-                })),
-            )
-        } else {
-            (None, None)
-        };
+        // [REMOVED v4.8.2] 不再注入 [CRITICAL DISPATCH DISCIPLINE] / 异步派发工具 NOTE：
+        // 网关不改动客户端提供的工具描述与系统提示词，提示词保持客户端原样。
+
+        // 3. [REMOVED v4.8.2] toolConfig / tool_config: 官方 Antigravity 报文不携带该字段，
+        //    且历史实现同时写出 camelCase 与 snake_case 双份、mode 值自相矛盾 (AUTO vs VALIDATED)。
+        //    统一在协议无关节点移除，对齐官方信封形状。
+        inner_request.as_object_mut().map(|m| {
+            m.remove("toolConfig");
+            m.remove("tool_config");
+        });
 
         // 4. generationConfig (对齐默认 topK/topP)
         let canonical_gc = inner_request.get_mut("generationConfig").map(|gc| {
@@ -762,12 +819,6 @@ impl InboundThinkingPipeline {
         }
         if let Some(tools) = canonical_tools {
             reordered["tools"] = tools;
-        }
-        if let Some(tc) = canonical_tool_config {
-            reordered["toolConfig"] = tc;
-        }
-        if let Some(tc_snake) = canonical_tool_config_snake {
-            reordered["tool_config"] = tc_snake;
         }
         if let Some(gc) = canonical_gc {
             reordered["generationConfig"] = gc;
@@ -1344,13 +1395,158 @@ mod tests {
         // 1. 首位成功提升为 thought: true 的思考块
         assert_eq!(parts[0]["thought"], true);
         assert_eq!(parts[0]["text"], thought_text);
-        assert_eq!(
-            parts[0]["thoughtSignature"],
-            crate::proxy::thinking_store::SENTINEL_SIGNATURE
+        // 铁律 I4：Gemini 目标的思考块**绝不**携带签名。
+        // 哨兵（skip_thought_signature_validator）不属于 Antigravity 协议 ——
+        // 官方 3 份报文 23 处签名里出现 0 次。
+        assert!(
+            parts[0].get("thoughtSignature").is_none(),
+            "Gemini 目标的思考块不得携带签名（I4）"
         );
 
         // 2. 正文部件已干净剔除 <think>...</think> 标签与换行，仅保留真实回答
         assert_eq!(parts[1]["text"], visible_answer);
         assert!(parts[1].get("thought").is_none());
+    }
+
+    // ============ 工具回执（functionResponse）role 归一化 ============
+    //
+    // 目标：与官方 Antigravity 形态一比一 —— `functionResponse` 位于 `role: "model"` 的
+    // content 中。实测（gemini-3.8-flash-tiered @ daily）表明上游对 user / model 两种
+    // role **完全宽容**，故本归一化是「对齐官方形态 + 稳定前缀字节」，
+    // 并天然**向下兼容**两种入站形态。
+
+    fn fr_part(id: &str, name: &str) -> Value {
+        json!({"functionResponse": {"id": id, "name": name, "response": {"output": "ok"}}})
+    }
+
+    fn fc_part(id: &str, name: &str) -> Value {
+        json!({"functionCall": {"id": id, "name": name, "args": {}}})
+    }
+
+    /// 官方形态（回执已在 `role:"model"`）→ 必须完全幂等。
+    #[test]
+    fn test_fr_role_official_shape_is_idempotent() {
+        let mut contents = vec![
+            json!({"role": "user", "parts": [{"text": "go"}]}),
+            json!({"role": "model", "parts": [fc_part("c1", "view_file")]}),
+            json!({"role": "model", "parts": [fr_part("c1", "view_file")]}),
+            json!({"role": "user", "parts": [{"text": "next"}]}),
+        ];
+        let snapshot = contents.clone();
+        let n = InboundThinkingPipeline::normalize_function_response_roles(&mut contents);
+        assert_eq!(n, 0, "官方形态应零改动");
+        assert_eq!(contents, snapshot);
+    }
+
+    /// 入站形态：回执在 `role:"user"` → 归一到官方形态（`role:"model"`）。
+    #[test]
+    fn test_fr_role_user_response_is_mapped_to_model() {
+        let mut contents = vec![
+            json!({"role": "user", "parts": [{"text": "go"}]}),
+            json!({"role": "model", "parts": [fc_part("c1", "view_file")]}),
+            json!({"role": "user", "parts": [fr_part("c1", "view_file")]}),
+            json!({"role": "user", "parts": [{"text": "next"}]}),
+        ];
+        let n = InboundThinkingPipeline::normalize_function_response_roles(&mut contents);
+        assert_eq!(n, 1);
+        assert_eq!(contents.len(), 4, "纯回执轮只改 role，不增删 content");
+        assert_eq!(contents[2]["role"], "model");
+        assert_eq!(
+            contents[2]["parts"][0]["functionResponse"]["name"],
+            "view_file"
+        );
+        // 相邻轮次不受影响
+        assert_eq!(contents[3]["role"], "user");
+    }
+
+    /// 并发回执：一轮多个回执整体迁移，**内部顺序原样保持**。
+    #[test]
+    fn test_fr_role_parallel_responses_kept_in_order() {
+        let mut contents = vec![
+            json!({"role": "user", "parts": [{"text": "go"}]}),
+            json!({"role": "model", "parts": [fc_part("c1", "list_dir"), fc_part("c2", "run_command")]}),
+            json!({"role": "user", "parts": [fr_part("c1", "list_dir"), fr_part("c2", "run_command")]}),
+        ];
+        let n = InboundThinkingPipeline::normalize_function_response_roles(&mut contents);
+        assert_eq!(n, 1);
+        assert_eq!(contents[2]["role"], "model");
+        let parts = contents[2]["parts"].as_array().unwrap();
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0]["functionResponse"]["name"], "list_dir");
+        assert_eq!(parts[1]["functionResponse"]["name"], "run_command");
+    }
+
+    /// 混合轮：`user [text, fr]` → `user[text]` + `model[fr]`，顺序保持。
+    #[test]
+    fn test_fr_role_mixed_turn_is_split_preserving_order() {
+        let mut contents = vec![
+            json!({"role": "user", "parts": [{"text": "go"}]}),
+            json!({"role": "model", "parts": [fc_part("c1", "view_file")]}),
+            json!({"role": "user", "parts": [{"text": "顺便说明"}, fr_part("c1", "view_file")]}),
+        ];
+        let n = InboundThinkingPipeline::normalize_function_response_roles(&mut contents);
+        assert_eq!(n, 1);
+        assert_eq!(contents.len(), 4);
+        assert_eq!(contents[2]["role"], "user");
+        assert_eq!(contents[2]["parts"][0]["text"], "顺便说明");
+        assert_eq!(contents[3]["role"], "model");
+        assert!(contents[3]["parts"][0].get("functionResponse").is_some());
+    }
+
+    /// 回执附带图片：`user [fr, inlineData]` → `model [fr, inlineData]`。
+    #[test]
+    fn test_fr_role_response_with_inline_data_moves_together() {
+        let img = json!({"inlineData": {"mimeType": "image/png", "data": "AAA"}});
+        let mut contents = vec![
+            json!({"role": "user", "parts": [{"text": "go"}]}),
+            json!({"role": "model", "parts": [fc_part("c1", "view_file")]}),
+            json!({"role": "user", "parts": [fr_part("c1", "view_file"), img]}),
+        ];
+        let n = InboundThinkingPipeline::normalize_function_response_roles(&mut contents);
+        assert_eq!(n, 1);
+        assert_eq!(contents[2]["role"], "model");
+        assert_eq!(contents[2]["parts"].as_array().unwrap().len(), 2);
+    }
+
+    /// 用户发图提问 `user [inlineData, text]` **不得**被误判为回执轮。
+    #[test]
+    fn test_fr_role_user_image_question_is_untouched() {
+        let mut contents = vec![
+            json!({"role": "user", "parts": [{"text": "go"}]}),
+            json!({"role": "model", "parts": [{"text": "ok"}]}),
+            json!({"role": "user", "parts": [
+                {"inlineData": {"mimeType": "image/png", "data": "AAA"}},
+                {"text": "这张图是什么"}
+            ]}),
+        ];
+        let snapshot = contents.clone();
+        let n = InboundThinkingPipeline::normalize_function_response_roles(&mut contents);
+        assert_eq!(n, 0, "无 functionResponse 的轮次绝不改写");
+        assert_eq!(contents, snapshot);
+    }
+
+    /// 工具调用轮（`model [fc, fc]`）不受影响。
+    #[test]
+    fn test_fr_role_function_call_turns_untouched() {
+        let mut contents = vec![
+            json!({"role": "user", "parts": [{"text": "go"}]}),
+            json!({"role": "model", "parts": [fc_part("c1", "a"), fc_part("c2", "b")]}),
+        ];
+        let snapshot = contents.clone();
+        let n = InboundThinkingPipeline::normalize_function_response_roles(&mut contents);
+        assert_eq!(n, 0);
+        assert_eq!(contents, snapshot);
+    }
+
+    /// 防御：首条 content 不得被改成 `model`（Gemini 要求对话以 user 开头）。
+    #[test]
+    fn test_fr_role_leading_response_stays_user() {
+        let mut contents = vec![
+            json!({"role": "user", "parts": [fr_part("c1", "view_file")]}),
+            json!({"role": "user", "parts": [{"text": "hi"}]}),
+        ];
+        let n = InboundThinkingPipeline::normalize_function_response_roles(&mut contents);
+        assert_eq!(n, 0);
+        assert_eq!(contents[0]["role"], "user");
     }
 }

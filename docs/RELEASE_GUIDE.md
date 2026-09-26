@@ -34,7 +34,6 @@ git status          # 应显示 nothing to commit, working tree clean
 cd src-tauri
 cargo fmt -- --check
 cargo clippy --all-targets --all-features
-cargo check
 cd ..
 npm run build
 ```

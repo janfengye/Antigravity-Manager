@@ -655,6 +655,60 @@ pub fn contents_has_tool_interactions(contents: &Value) -> bool {
 mod tests {
     use super::*;
 
+    // ============ requestId 与 session_id 的关系 ============
+
+    /// 会话段必须**稳定**（同一 session 多次请求共享，贴近官方 conversationId 语义），
+    /// 但整体 ID 每次唯一（含 unixMs + 轨迹段 → 幂等隔离）。
+    #[test]
+    fn test_official_request_id_stable_conversation_unique_overall() {
+        let a = build_official_request_id("sess-aaaabbbbccccdddd", 3);
+        let b = build_official_request_id("sess-aaaabbbbccccdddd", 3);
+        assert_eq!(
+            a.split('/').nth(1),
+            b.split('/').nth(1),
+            "同一 session 的会话段必须稳定"
+        );
+        assert_ne!(a, b, "整体 requestId 必须每次唯一（幂等隔离）");
+        assert_eq!(
+            a.split('/').count(),
+            5,
+            "官方形态为 5 段：agent/conversation/unixMs/trajectory/step"
+        );
+        assert!(a.starts_with("agent/"));
+        assert!(a.ends_with("/3"));
+    }
+
+    /// requestId **不得**泄露网关内部 blended session_id 的原文。
+    #[test]
+    fn test_official_request_id_never_exposes_raw_session() {
+        let sid = "sess-deadbeefcafe1234";
+        let id = build_official_request_id(sid, 1);
+        assert!(
+            !id.contains(sid),
+            "requestId 不得包含 session_id 原文（应为单向哈希派生）"
+        );
+    }
+
+    /// 不同会话（主 agent / 子 agent 并发）必须产出不同会话段 —— 隔离性保持。
+    #[test]
+    fn test_official_request_id_separates_concurrent_sessions() {
+        let main = build_official_request_id("sess-main-00000001", 1);
+        let sub = build_official_request_id("sess-sub-00000002", 1);
+        assert_ne!(
+            main.split('/').nth(1),
+            sub.split('/').nth(1),
+            "不同 session 的会话段必须不同（主子 agent 隔离）"
+        );
+    }
+
+    /// 空 session 时退化为随机会话段，不 panic 且仍为 5 段。
+    #[test]
+    fn test_official_request_id_handles_empty_session() {
+        let id = build_official_request_id("", 7);
+        assert_eq!(id.split('/').count(), 5);
+        assert!(id.ends_with("/7"));
+    }
+
     #[test]
     fn test_high_quality_model_auto_grounding() {
         // Auto-grounding is currently disabled by default due to conflict with image gen
@@ -1592,9 +1646,68 @@ pub fn is_model_compatible(cached: &str, target: &str) -> bool {
     false
 }
 
-pub fn model_keeps_thinking_without_signature(mapped_model: &str) -> bool {
-    let m = mapped_model.to_lowercase();
-    m.contains("flash") || m.contains("gemini-pro-agent")
+/// 解析官方客户端指纹，返回 `(userAgent, ideType)`。
+///
+/// 官方 Go Worker 中**企业 / GCP 账号**（非 `@gmail.com` / `@googlemail.com` 邮箱）
+/// 使用 `jetski` 指纹，其余使用 `antigravity`。
+///
+/// **三个适配器必须共用本函数** —— 否则同一账号经不同协议入口会产出不同指纹。
+/// 历史缺陷：jetski 仿真只实现在 Gemini 路径，Claude / OpenAI 路径硬编码
+/// `"antigravity"`，导致企业账号发生指纹漂移。
+pub fn resolve_official_fingerprint(
+    token: Option<&crate::proxy::token_manager::ProxyToken>,
+) -> (&'static str, &'static str) {
+    let is_enterprise = token
+        .map(|t| !t.email.ends_with("@gmail.com") && !t.email.ends_with("@googlemail.com"))
+        .unwrap_or(false);
+    if is_enterprise {
+        ("jetski", "JETSKI")
+    } else {
+        ("antigravity", "ANTIGRAVITY")
+    }
+}
+
+/// 构造官方形态的 requestId：`agent/{conversationId}/{unixMs}/{trajectoryId}/{step}`。
+///
+/// 官方样本（3 份报文逐字核对），例如：
+///
+/// ```text
+/// agent/a89a2006-72b4-470d-8282-3f1e4c88dc29/1790410048596/d3a2e3d2-21f9-411b-967f-53811898c2cd/14
+/// ```
+///
+/// **第 2 段 `unixMs` 每次请求都不同 → 天然的幂等隔离**，避免重试命中上一次的
+/// 429 / 旧缓存。历史缺陷：Claude 路径曾用 `agent/antigravity/{session[:8]}/{count}`，
+/// **不含时间戳** —— 同一会话同一轮次重试会拿到完全相同的 ID。
+///
+/// **三适配器必须共用本函数** —— 否则同一对话经不同入口会产出不同 ID 形态。
+///
+/// ## 与 `session_id` 的关系（重要）
+///
+/// 本函数**只读 `session_id`，绝不写它**，也**不影响**它的唯一性：
+/// 防主子 agent 并发串话的机制是 `thinking_store::derive_blended_session_id`
+/// 的 SHA256 多维正交哈希（tenant + 会话语义头 + query sid + body sid + anchor），
+/// 它决定的是 thinking store / signature cache / prefix cache 的 key，
+/// 与出站 requestId 是**两条独立通路**（全仓无任何代码从 requestId 反推 session）。
+///
+/// 会话段使用 `session_id` 的**单向哈希派生**而非原文：
+/// - 同一会话稳定（贴近官方 conversationId 语义）；
+/// - 不把网关内部 blended session_id 的原文暴露给上游；
+/// - 不同 agent / 会话的 session_id 不同 → 派生值不同，隔离性保持。
+pub fn build_official_request_id(session_id: &str, step: u64) -> String {
+    let ts = chrono::Utc::now().timestamp_millis();
+    let sanitized = crate::proxy::thinking_store::sanitize_session_id(session_id);
+    let conversation = if sanitized.is_empty() {
+        uuid::Uuid::new_v4().to_string()
+    } else {
+        let mut hasher = <sha2::Sha256 as sha2::Digest>::new();
+        sha2::Digest::update(&mut hasher, sanitized.as_bytes());
+        let digest = sha2::Digest::finalize(hasher);
+        let hex = format!("{:x}", digest);
+        hex[..16].to_string()
+    };
+    // 轨迹段每请求唯一，与 unixMs 共同保证幂等隔离
+    let trajectory = &uuid::Uuid::new_v4().simple().to_string()[..8];
+    format!("agent/{}/{}/{}/{}", conversation, ts, trajectory, step)
 }
 
 /// [JEIKCODE SYNTHETIC USER REMINDER]
@@ -1623,6 +1736,9 @@ pub const TRANSIT_DEFENSE_FALLBACK_TEXT: &str = "Please continue your analysis."
 /// 1. 自动兼容平铺 payload 或包含 "request" 包装的 payload；
 /// 2. 若 contents 为空，追加 {"role": "user", "parts": [{"text": TRANSIT_DEFENSE_FALLBACK_TEXT}]}；
 /// 3. 若末尾轮次为 "model"（缺失用户轮次），追加 {"role": "user", "parts": [{"text": TRANSIT_DEFENSE_FALLBACK_TEXT}]}；
+///    例外：末尾 model 轮若携带 functionCall / functionResponse（模型主动发起的工具轮），
+///    视为合法中间态，不注入（否则会与 normalize_function_response_roles 的 fr@model 对齐
+///    打架，把官方合法报文误判为缺用户轮，注入"Please continue your analysis."造成工具死循环）；
 /// 4. 若末尾轮次为 "user" 且其 parts 为空、或仅含有空文本 / "(no content)" / "·" 且无工具/图片，规范化填充为 [{"text": TRANSIT_DEFENSE_FALLBACK_TEXT}]；
 /// 5. 修复中间轮次中 parts 为空的情况，防止 Google 返回 400 "parts must not be empty"。
 pub fn ensure_gemini_payload_ends_with_user(body: &mut Value) -> bool {
@@ -1669,11 +1785,25 @@ pub fn ensure_gemini_payload_ends_with_user(body: &mut Value) -> bool {
         }
     }
 
-    // 防御 3: 检查末尾轮次
+    // 防御 3: 检查末尾轮次。
+    // 注意：InboundThinkingPipeline::normalize_function_response_roles 会把纯回执轮对齐为
+    // role=model（官方 Antigravity 报文约定 fr 恒在 model 轮）。因此「末尾为 model 轮」
+    // 并不代表报文不完整——若该轮携带 functionCall（模型主动发起工具轮，等待回执，
+    // 属于合法的中间态），绝不能注入假用户话术，否则会放大成 Agent 工具死循环。
     let need_append_user = if let Some(last_turn) = contents.last_mut() {
         let role = last_turn.get("role").and_then(|r| r.as_str()).unwrap_or("");
         if role == "model" || role == "assistant" {
-            true
+            // 工具轮合法：末尾 model 轮含 functionCall 或 functionResponse 时不注入
+            let is_tool_turn = last_turn
+                .get("parts")
+                .and_then(|p| p.as_array())
+                .map(|parts| {
+                    parts.iter().any(|part| {
+                        part.get("functionCall").is_some() || part.get("functionResponse").is_some()
+                    })
+                })
+                .unwrap_or(false);
+            !is_tool_turn
         } else {
             if let Some(parts) = last_turn.get_mut("parts").and_then(|p| p.as_array_mut()) {
                 let has_substantive_part = parts.iter().any(|part| {
@@ -1809,6 +1939,45 @@ mod defense_tests {
         assert!(!ensure_gemini_payload_ends_with_user(&mut payload));
         let contents = payload["contents"].as_array().unwrap();
         assert_eq!(contents[0]["parts"][0]["text"], "valid message");
+    }
+
+    #[test]
+    fn test_ensure_gemini_payload_ends_with_user_tool_turn_not_injected() {
+        // 末尾 model 轮为工具轮（functionCall）→ 合法中间态，不注入假用户话术
+        let mut payload = json!({
+            "contents": [
+                { "role": "user", "parts": [{ "text": "run the tool" }] },
+                {
+                    "role": "model",
+                    "parts": [
+                        { "thought": true, "text": "I should call a tool." },
+                        {
+                            "functionCall": {
+                                "id": "call_1",
+                                "name": "run_command",
+                                "args": { "CommandLine": "echo hi" }
+                            },
+                            "thoughtSignature": "AABBCC"
+                        }
+                    ]
+                }
+            ]
+        });
+        assert!(!ensure_gemini_payload_ends_with_user(&mut payload));
+        let contents = payload["contents"].as_array().unwrap();
+        assert_eq!(contents.len(), 2);
+
+        // 末尾 model 轮为纯正文（非工具轮）→ 仍然注入（原语义保留）
+        let mut payload2 = json!({
+            "contents": [
+                { "role": "user", "parts": [{ "text": "hello" }] },
+                { "role": "model", "parts": [{ "text": "hi there" }] }
+            ]
+        });
+        assert!(ensure_gemini_payload_ends_with_user(&mut payload2));
+        let contents2 = payload2["contents"].as_array().unwrap();
+        assert_eq!(contents2.len(), 3);
+        assert_eq!(contents2[2]["role"], "user");
     }
 
     #[test]

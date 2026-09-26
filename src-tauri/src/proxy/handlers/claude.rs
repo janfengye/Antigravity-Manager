@@ -18,10 +18,11 @@ use crate::proxy::mappers::claude::{
     clean_cache_control_from_messages, create_claude_sse_stream,
     filter_invalid_thinking_blocks_with_family, merge_consecutive_messages,
     models::{Message, MessageContent},
-    transform_claude_request_in, transform_response, ClaudeRequest,
+    transform_response, ClaudeRequest,
 };
 use crate::proxy::mappers::context_manager::ContextManager;
 use crate::proxy::mappers::estimation_calibrator::get_calibrator;
+use crate::proxy::mappers::gemini::SUMMARY_REQUEST_TIMEOUT_SECS;
 use crate::proxy::model_specs;
 use crate::proxy::server::AppState;
 use crate::proxy::upstream::client::mask_email;
@@ -254,9 +255,7 @@ The structure MUST be as follows:
 
 // ===== 统一退避策略模块 =====
 // 移除本地重复定义，使用 common 中的统一实现
-use super::common::{
-    apply_retry_strategy, determine_retry_strategy, should_rotate_account, RetryStrategy,
-};
+use super::common::{apply_retry_strategy, should_rotate_account, RetryStrategy};
 
 // ===== 退避策略模块结束 =====
 
@@ -1136,6 +1135,7 @@ pub async fn handle_messages(
                     &request_with_mapped,
                     &trace_id,
                     &token_manager_clone,
+                    &state.upstream,
                 )
                 .await
                 {
@@ -2042,7 +2042,7 @@ pub async fn handle_messages(
             }
         }
 
-        let error_type = match last_status.as_u16() {
+        let _error_type = match last_status.as_u16() {
             400 => "invalid_request_error",
             401 => "authentication_error",
             403 => "permission_error",
@@ -2089,7 +2089,7 @@ pub async fn handle_messages(
             }
         }
 
-        let error_type = match last_status.as_u16() {
+        let _error_type = match last_status.as_u16() {
             400 => "invalid_request_error",
             401 => "authentication_error",
             403 => "permission_error",
@@ -2483,6 +2483,7 @@ async fn call_gemini_sync(
     model: &str,
     request: &ClaudeRequest,
     token_manager: &Arc<crate::proxy::TokenManager>,
+    upstream: &Arc<crate::proxy::upstream::client::UpstreamClient>,
     trace_id: &str,
 ) -> Result<String, String> {
     // Get token and transform request
@@ -2502,46 +2503,49 @@ async fn call_gemini_sync(
     )
     .map_err(|e| format!("Failed to transform request: {}", e))?;
 
-    // Call Gemini API
-    let upstream_url = format!(
-        "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
-        model
+    // 走共享的辅助调用通道：复用主请求路径的客户端（含按账号代理池）、
+    // 端点顺序（Daily → Sandbox → Prod）、URL 形状与回退判定。
+    //
+    // 历史实现把 `transform_claude_request_in` 产出的**已包装 cloudcode 信封**
+    // （内含 project / request / model / userAgent / requestId / requestType）
+    // POST 到 `https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent`
+    // —— host 与形状双双不符。实测该 host 对 Antigravity 账号恒返回
+    // 403 `ACCESS_TOKEN_SCOPE_INSUFFICIENT`（token 不具备公共 Generative Language API 权限），
+    // 因此该后台摘要从未成功过。
+    debug!(
+        "[{}] Calling {} via cloudcode v1internal for summary",
+        trace_id, model
     );
 
-    debug!("[{}] Calling Gemini API: {}", trace_id, model);
+    let gemini_response = upstream
+        .call_v1_internal_auxiliary(
+            "generateContent",
+            &access_token,
+            gemini_body,
+            Some(account_id.as_str()),
+            SUMMARY_REQUEST_TIMEOUT_SECS,
+        )
+        .await?;
 
-    let response = reqwest::Client::new()
-        .post(&upstream_url)
-        .header("Authorization", format!("Bearer {}", access_token))
-        .header("Content-Type", "application/json")
-        .json(&gemini_body)
-        .send()
-        .await
-        .map_err(|e| format!("API call failed: {}", e))?;
+    // 上游返回 `{"response": {...}}` 包装体，必须先解包。
+    let unwrapped = crate::proxy::mappers::gemini::unwrap_response(&gemini_response);
 
-    if !response.status().is_success() {
-        return Err(format!(
-            "API returned {}: {}",
-            response.status(),
-            response.text().await.unwrap_or_default()
-        ));
-    }
-
-    let gemini_response: Value = response
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse response: {}", e))?;
-
-    // Extract text from response
-    gemini_response
+    // 只拼接「非思考 part」的文本：前面可能存在 `{"thought": true, "text": ""}` 的空块，
+    // 直接取 `parts[0].text` 会拿到空串并把空摘要当成功。
+    unwrapped
         .get("candidates")
         .and_then(|c| c.get(0))
         .and_then(|c| c.get("content"))
         .and_then(|c| c.get("parts"))
-        .and_then(|p| p.get(0))
-        .and_then(|p| p.get("text"))
-        .and_then(|t| t.as_str())
-        .map(|s| s.to_string())
+        .and_then(|parts| parts.as_array())
+        .map(|parts| {
+            parts
+                .iter()
+                .filter(|part| !crate::proxy::thinking_store::is_thought_part(part))
+                .filter_map(|part| part.get("text").and_then(|t| t.as_str()))
+                .collect::<String>()
+        })
+        .filter(|text| !text.trim().is_empty())
         .ok_or_else(|| "Failed to extract text from response".to_string())
 }
 
@@ -2563,6 +2567,7 @@ async fn try_compress_with_summary(
     original_request: &ClaudeRequest,
     trace_id: &str,
     token_manager: &Arc<crate::proxy::TokenManager>,
+    upstream: &Arc<crate::proxy::upstream::client::UpstreamClient>,
 ) -> Result<ClaudeRequest, String> {
     info!(
         "[{}] [Layer-3] Starting context compression with XML summary",
@@ -2626,6 +2631,7 @@ async fn try_compress_with_summary(
         INTERNAL_BACKGROUND_TASK,
         &summary_request,
         token_manager,
+        upstream,
         trace_id,
     )
     .await?;

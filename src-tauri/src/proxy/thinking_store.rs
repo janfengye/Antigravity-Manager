@@ -878,7 +878,6 @@ impl ThinkingStore {
                 }
                 *parts = cleaned_parts;
             }
-            let has_function_call = parts.iter().any(|p| p.get("functionCall").is_some());
             let is_claude_target = target_model
                 .map(|m| m.to_lowercase().contains("claude"))
                 .unwrap_or_else(|| store_key.to_lowercase().contains("claude"));
@@ -906,34 +905,20 @@ impl ThinkingStore {
                         obj.remove("thought_signature");
                     }
                 }
-            } else if has_function_call {
-                // Gemini 原生模型：Google 官方强制要求签名挂在 functionCall 上！
-                // 1. 首位思考块保持纯净思考文本，不重复挂载签名，消除双倍膨胀
-                // 2. 首个 functionCall 承载真实大签名 (若有且合法) 或哨兵
-                // 3. 后续并行 functionCall 统一打上 32 字节哨兵占位，满足 Google 对每个 functionCall 的 AST 校验
-                let sig_val = if let Some(sig) = rec
-                    .signature
-                    .as_ref()
-                    .filter(|s| is_real_signature(s) && is_likely_gemini_signature(s))
-                {
-                    sig.clone()
-                } else {
-                    SENTINEL_SIGNATURE.to_string()
-                };
-
-                let mut first_fc_assigned = false;
-                for part in parts.iter_mut() {
-                    if part.get("functionCall").is_some() {
-                        if !first_fc_assigned {
-                            part["thoughtSignature"] = json!(sig_val);
-                            first_fc_assigned = true;
-                        } else {
-                            part["thoughtSignature"] = json!(SENTINEL_SIGNATURE);
-                        }
-                    }
-                }
             } else {
-                // Gemini 原生模型纯文本轮次：无 functionCall，纯文本思考块直接保持纯净文本，无需注入签名
+                // Gemini 原生：把本轮捕获到的真实签名归位到「该轮第一个非思考 part」。
+                //
+                // 首位思考块保持纯净思考文本（铁律 I4：思考块绝不携带签名），随后由
+                // `parts.insert(0, thought_part)` 插入 index 0 —— 锚点自然落到 index 1，
+                // 正好复现官方的「思考块 + 带签名正文」排列。
+                //
+                // 缺签名时留空：真机报文里哨兵出现 0 次，绝不发明。
+                // 因此 has_function_call 不再影响落位 —— 锚点规则对所有轮次一致。
+                let fallback = rec
+                    .signature
+                    .as_deref()
+                    .filter(|s| is_real_signature(s) && is_likely_gemini_signature(s));
+                place_turn_signature(&mut *parts, fallback);
             }
             parts.insert(0, thought_part);
             restored += 1;
@@ -1279,23 +1264,6 @@ impl TurnAccumulator {
                 if !self.tool_ids.iter().any(|x| x == real_id) {
                     self.tool_ids.push(real_id.clone());
                 }
-                if let Some(sig) = part
-                    .get("thoughtSignature")
-                    .or_else(|| part.get("thought_signature"))
-                    .and_then(|s| s.as_str())
-                {
-                    crate::proxy::SignatureCache::global()
-                        .cache_tool_signature(real_id, sig.to_string());
-                    crate::proxy::SignatureCache::global()
-                        .cache_tool_signature(&synthetic, sig.to_string());
-                }
-            } else if let Some(sig) = part
-                .get("thoughtSignature")
-                .or_else(|| part.get("thought_signature"))
-                .and_then(|s| s.as_str())
-            {
-                crate::proxy::SignatureCache::global()
-                    .cache_tool_signature(&synthetic, sig.to_string());
             }
 
             if !self.tool_names.iter().any(|x| x == &name) {
@@ -1488,7 +1456,7 @@ pub fn finalize_gemini_contents_thinking_with_model(
         .collect();
 
     for (msg_idx, msg) in contents.iter_mut().enumerate() {
-        let anchor = &anchors[msg_idx];
+        let _anchor = &anchors[msg_idx];
         let is_model = matches!(
             msg.get("role").and_then(|r| r.as_str()),
             Some("model") | Some("assistant")
@@ -1518,15 +1486,9 @@ pub fn finalize_gemini_contents_thinking_with_model(
                     // 统一清洗向 Google 发送的非标准蛇形字段
                     obj.remove("thought_signature");
                 }
-                // 严格排除工具调用/返回：functionCall 也会带 thoughtSignature，
-                // 绝不能仅凭签名就判定为思考块，否则会漏补首位 thought、关思考时误删工具。
-                let is_thought = part
-                    .get("thought")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false)
-                    || (part.get("thoughtSignature").is_some()
-                        && part.get("functionCall").is_none()
-                        && part.get("functionResponse").is_none());
+                // 铁律：只认 thought: true。functionCall 与纯正文都会携带 thoughtSignature，
+                // 绝不能仅凭签名判定为思考块，否则会漏补首位 thought、关思考时误删工具。
+                let is_thought = is_thought_part(&part);
                 if is_thought {
                     thinking_parts.push(part);
                 } else {
@@ -1538,34 +1500,17 @@ pub fn finalize_gemini_contents_thinking_with_model(
                 .map(|m| m.to_lowercase().contains("claude"))
                 .unwrap_or(false);
 
-            // 1. 提取当前轮次已有合法的真实工具签名 (若有，优先已有签名，其次查询全局 SignatureCache 兜底)
-            let mut fc_probe_counter = 0usize;
+            // 1. 提取当前轮次已有合法的真实签名 (纯检查当前轮部件自带签名)
+            // [DECOUPLE 2026-09-26] 不再假设「签名只在 functionCall 上」——官方新规：
+            // 任何轮的第一个非思考 part（正文 text 或 functionCall）都可能携带签名。
+            // 凡非思考 part 自带合法签名即为 turn_real_sig。
             let turn_real_sig: Option<String> = other_parts.iter().find_map(|p| {
-                if let Some(fc) = p.get("functionCall") {
-                    let sig_from_part = p
+                if p.get("functionCall").is_some() || p.get("text").is_some() {
+                    let sig = p
                         .get("thoughtSignature")
                         .and_then(|s| s.as_str())
                         .filter(|s| is_real_signature(s))
                         .map(str::to_string);
-                    let sig = sig_from_part.or_else(|| {
-                        let name = fc.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
-                        let synthetic =
-                            synthesize_tool_id(name, fc.get("args"), anchor, fc_probe_counter);
-                        fc_probe_counter += 1;
-
-                        crate::proxy::SignatureCache::global()
-                            .get_tool_signature(&synthetic)
-                            .or_else(|| {
-                                fc.get("id")
-                                    .and_then(|id| id.as_str())
-                                    .filter(|s| !s.trim().is_empty())
-                                    .and_then(|id| {
-                                        crate::proxy::SignatureCache::global()
-                                            .get_tool_signature(id)
-                                    })
-                            })
-                            .filter(|s| is_real_signature(s))
-                    });
                     sig.filter(|s| {
                         if is_claude_turn {
                             is_claude_signature(s)
@@ -1578,10 +1523,26 @@ pub fn finalize_gemini_contents_thinking_with_model(
                 }
             });
 
-            let has_function_call = other_parts.iter().any(|p| p.get("functionCall").is_some());
+            // 1.1 [FIX 2026-09-26] Gemini 目标下，纯 fc 轮（第一个非思考 part 是 functionCall）若自身
+            //     未携带签名，必须从签名缓存按 tool_id 回填——官方/上游规则：
+            //     「每轮第一个非思考 part 必须带 thought_signature，后续 part 可不带」。
+            //     现场 400 铁证：`Function call is missing a thought_signature... call default_api:grep, position 4`，
+            //     而该 tool_id 的签名其实已在 tool_signatures 缓存 (1384 B)，只是组装时从未按 id 回填。
+            let cached_tool_sig: Option<String> = if !is_claude_turn && turn_real_sig.is_none() {
+                other_parts.iter().find_map(|p| {
+                    let fc = p.get("functionCall")?;
+                    let id = fc.get("id").and_then(|v| v.as_str())?;
+                    crate::proxy::SignatureCache::global()
+                        .get_tool_signature(id)
+                        .filter(|s| is_likely_gemini_signature(s))
+                })
+            } else {
+                None
+            };
 
-            // 2. 规范化工具调用 (functionCall) 签名：
-            // 核心铁律：无论当前轮思考是开是关，发往 Gemini 原生模型的 functionCall 必须具备合法签名或哨兵！
+            // 2. 签名归位（终审出站门禁 Gatekeeper）：
+            // 核心铁律：签名只写在「该轮第一个非思考 part」上，其余 part 一律删除签名字段。
+            // 依据 3 份官方报文 / 23 处签名：每轮至多 1 个签名、必落锚点；哨兵出现 0 次。
             if is_claude_turn {
                 // Claude 模型：Anthropic 官方规范要求签名必须且只能在思考块上，工具调用绝不携带签名，更不塞假哨兵
                 for part in other_parts.iter_mut() {
@@ -1590,59 +1551,20 @@ pub fn finalize_gemini_contents_thinking_with_model(
                         obj.remove("thought_signature");
                     }
                 }
-            } else if has_function_call {
-                // Gemini 原生模型：Google 引擎强制要求每一个 functionCall 必须挂载 thoughtSignature！
-                // 无论思考开还是关：首个 functionCall 承载真实大签名 (若有且合法) 或哨兵，后续并行工具打上 32 字节哨兵
-                let mut first_fc_seen = false;
-                let mut fc_assign_counter = 0usize;
-                for part in other_parts.iter_mut() {
-                    if let Some(fc) = part.get("functionCall") {
-                        let name = fc.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
-                        let synthetic =
-                            synthesize_tool_id(name, fc.get("args"), anchor, fc_assign_counter);
-                        fc_assign_counter += 1;
-
-                        let cached_tool_sig = crate::proxy::SignatureCache::global()
-                            .get_tool_signature(&synthetic)
-                            .or_else(|| {
-                                fc.get("id")
-                                    .and_then(|id| id.as_str())
-                                    .filter(|s| !s.trim().is_empty())
-                                    .and_then(|id| {
-                                        crate::proxy::SignatureCache::global()
-                                            .get_tool_signature(id)
-                                    })
-                            })
-                            .filter(|s| is_likely_gemini_signature(s));
-
-                        if !first_fc_seen {
-                            first_fc_seen = true;
-                            if let Some(sig) = cached_tool_sig {
-                                part["thoughtSignature"] = json!(sig);
-                            } else if let Some(ref real_sig) = turn_real_sig {
-                                if is_likely_gemini_signature(real_sig) {
-                                    part["thoughtSignature"] = json!(real_sig);
-                                } else {
-                                    part["thoughtSignature"] = json!(SENTINEL_SIGNATURE);
-                                }
-                            } else if part.get("thoughtSignature").is_none() {
-                                part["thoughtSignature"] = json!(SENTINEL_SIGNATURE);
-                            } else if let Some(existing) =
-                                part.get("thoughtSignature").and_then(|s| s.as_str())
-                            {
-                                if !is_likely_gemini_signature(existing) {
-                                    part["thoughtSignature"] = json!(SENTINEL_SIGNATURE);
-                                }
-                            }
-                        } else {
-                            if let Some(sig) = cached_tool_sig {
-                                part["thoughtSignature"] = json!(sig);
-                            } else {
-                                part["thoughtSignature"] = json!(SENTINEL_SIGNATURE);
-                            }
-                        }
-                    }
-                }
+            } else {
+                // Gemini 原生：真签名优先原样保留，缺失才使用回填来源，都没有则留空。
+                // 回填来源优先级：当前轮自带 turn_real_sig → 按 tool_id 查签名缓存 cached_tool_sig。
+                // （客户端重传的历史 fc 轮不自带签名，但 tool_signatures 缓存里有，必须回填，
+                //   否则「第一个非思考 part=fc 且无签名」会被上游 400 拒绝。）
+                let fallback = turn_real_sig
+                    .as_deref()
+                    .filter(|s| is_likely_gemini_signature(s))
+                    .or_else(|| {
+                        cached_tool_sig
+                            .as_deref()
+                            .filter(|s| is_likely_gemini_signature(s))
+                    });
+                place_turn_signature(&mut other_parts, fallback);
             }
 
             // 3. 治理思考块 (thinking_parts)
@@ -1713,26 +1635,13 @@ pub fn finalize_gemini_contents_thinking_with_model(
                         }
                         thinking_parts = valid_thinking;
                     }
-                } else if has_function_call {
-                    // Gemini 原生模型：Google 引擎强制要求签名必须挂在 functionCall 上！
-                    // 首位思考块保持纯净思考文本，不重复挂载签名，消除双倍膨胀
-                    if thinking_parts.is_empty() {
-                        let thought_obj = json!({
-                            "text": "...",
-                            "thought": true,
-                        });
-                        thinking_parts.push(thought_obj);
-                    } else {
-                        for tp in thinking_parts.iter_mut() {
-                            if let Some(obj) = tp.as_object_mut() {
-                                obj.remove("thoughtSignature");
-                                obj.remove("thought_signature");
-                            }
-                        }
-                    }
                 } else {
-                    // 纯文本轮次（无 tool_call）：
-                    // Gemini 原生模型纯文本轮次：无 functionCall 工具调用，纯文本思考块天然无需签名
+                    // Gemini 原生：思考块绝不携带签名（铁律 I4），且**绝不凭空注入**占位思考块。
+                    //
+                    // 官方报文里 functionCall 轮是"纯净"的 —— 只有 functionCall，没有任何
+                    // thought part（33 个 model 轮里 thought × functionCall 共现 0 次）。
+                    // 注入 {text:"...", thought:true} 会制造出官方从不产生的排列，
+                    // 并把签名锚点从 parts[0] 挤到 parts[1]。
                     for tp in thinking_parts.iter_mut() {
                         if let Some(obj) = tp.as_object_mut() {
                             obj.remove("thoughtSignature");
@@ -2312,6 +2221,71 @@ pub fn signatures_match(a: &str, b: &str) -> bool {
     normalize_signature_for_comparison(a) == normalize_signature_for_comparison(b)
 }
 
+/// 判定某个 Part 是否为思考块。
+///
+/// **铁律：只认 `thought == true`。**
+///
+/// 绝不能退化为"带 `thoughtSignature` 且无 `functionCall`/`functionResponse`"——
+/// 真实 Antigravity 报文会把签名挂在**纯正文 part** 上（官方不变量见
+/// `.workbuddy/outputs/correct-assembly-spec.md`）。旧启发式会把可见回答误判为思考块，
+/// 进而在回填阶段把正文改写成"内部思考"，并丢掉该轮唯一的签名——这正是
+/// "签名剥离 → 跨请求死循环"事故的根因。
+#[inline]
+pub fn is_thought_part(part: &Value) -> bool {
+    part.get("thought")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+}
+
+/// 把签名归位到**该轮第一个非思考 part**，其余 part 一律删除签名字段。
+///
+/// 由官方报文归纳出的四条硬约束：
+///
+/// 1. 锚点 = 该轮第一个 `thought != true` 的 part，**不是**硬编码的 `parts[0]`
+///    （该轮有思考块时，官方签名落在 `parts[1]`）；
+/// 2. `thought: true` / `functionResponse` / 其余 part —— 字段必须**缺席**，而不是空串；
+/// 3. 锚点自带真实签名时**原样保留**（覆盖"纯正文轮"与"思考块 + 正文轮"两种排列）；
+/// 4. 锚点无签名且 `fallback_sig` 也为空时 —— **什么都不写**。官方在"在飞轮"上就是缺席的，
+///    缺失签名是被容忍的，**绝不发明哨兵**。
+///
+/// 本函数**绝不重排、绝不插入** part —— 顺序即锚点语义。
+///
+/// 返回最终写入锚点的签名（若有）。
+pub fn place_turn_signature(parts: &mut [Value], fallback_sig: Option<&str>) -> Option<String> {
+    // 1. 锚点 = 第一个非思考 part；整轮皆思考则本轮无锚点
+    let anchor = parts.iter().position(|p| !is_thought_part(p))?;
+
+    // 2. 必须在清空之前取出锚点自带的签名
+    let own_sig = parts[anchor]
+        .get("thoughtSignature")
+        .or_else(|| parts[anchor].get("thought_signature"))
+        .and_then(|s| s.as_str())
+        .filter(|s| is_real_signature(s))
+        .map(str::to_string);
+
+    // 3. 全量清空，保证非锚点 part 的签名字段确实"缺席"
+    for part in parts.iter_mut() {
+        if let Some(obj) = part.as_object_mut() {
+            obj.remove("thoughtSignature");
+            obj.remove("thought_signature");
+        }
+    }
+
+    // 4. functionResponse 永不携带签名
+    if parts[anchor].get("functionResponse").is_some() {
+        return None;
+    }
+
+    // 5. 锚点自带优先，缺失时才使用回填来源（跨协议路径）
+    let sig = own_sig.or_else(|| {
+        fallback_sig
+            .filter(|s| is_real_signature(s))
+            .map(str::to_string)
+    })?;
+    parts[anchor]["thoughtSignature"] = json!(sig);
+    Some(sig)
+}
+
 pub fn is_placeholder_thought(s: &str) -> bool {
     let t = s.trim();
     t.is_empty()
@@ -2377,9 +2351,11 @@ pub fn extract_think_tags(text: &str) -> Option<(String, String)> {
 }
 
 fn is_capturable_thought(thought: &str, signature: Option<&str>) -> bool {
-    // 占位符或纯空白思考绝对不可捕获为新的持久化思考记录！
+    // 占位符或纯空白思考绝不可捕获为新的持久化思考记录！
     if is_placeholder_thought(thought) || thought.trim().is_empty() {
-        return false;
+        // [DECOUPLE 2026-09-26] 官方新规：任何 model 轮都可能返回签名（正文轮 / 工具轮 / 纯思考轮）。
+        // 纯 fc 轮（无思考文本）只要携带真实签名，也必须入库——否则下一轮锚点回填时找不到签名。
+        return signature.is_some_and(is_real_signature);
     }
     if signature.is_some_and(is_real_signature) {
         return true;
@@ -2923,15 +2899,20 @@ mod tests {
         // Test Case 6: 有思考、有正文、有多工具并行出来
         let tool_ids = vec!["call_batch_1".to_string(), "call_batch_2".to_string()];
         let tool_names = vec!["read_file".to_string(), "grep_search".to_string()];
+        // 构造符合 Google 原生特征的假签名（Base64 解码后首字节 = protobuf tag 0x12）
+        let real_sig = {
+            use base64::Engine;
+            let mut raw = vec![0x12u8];
+            raw.extend_from_slice(&[b'A'; 60]);
+            base64::engine::general_purpose::STANDARD.encode(raw)
+        };
         let fp = fingerprint("I will read both files in parallel", &tool_ids, &tool_names);
         store.record(
             "t:s2",
             ThinkingRecord {
                 fingerprint: fp,
                 thought: "Parallel execution planned".to_string(),
-                signature: Some(
-                    "sig_parallel_12345678901234567890123456789012345678901234567890".to_string(),
-                ),
+                signature: Some(real_sig.clone()),
                 tool_ids: tool_ids.clone(),
                 tool_names: tool_names.clone(),
                 visible: "I will read both files in parallel".to_string(),
@@ -2951,24 +2932,23 @@ mod tests {
         assert_eq!(restored, 1);
 
         let parts = contents[0]["parts"].as_array().unwrap();
-        // Index 0: thought block (纯文本，不挂载冗余签名)
+        // Index 0: thought block —— 保持纯净文本，铁律 I4：思考块绝不携带签名
         assert_eq!(parts[0]["thought"], true);
         assert_eq!(parts[0]["text"], "Parallel execution planned");
         assert!(parts[0].get("thoughtSignature").is_none());
 
-        // Index 1: visible text preserved
+        // Index 1: 可见正文 = 该轮「第一个非思考 part」= 签名锚点
         assert_eq!(parts[1]["text"], "I will read both files in parallel");
-
-        // Index 2: tool 1 承载真实签名
-        assert_eq!(parts[2]["functionCall"]["id"], "call_batch_1");
         assert_eq!(
-            parts[2]["thoughtSignature"],
-            "sig_parallel_12345678901234567890123456789012345678901234567890"
+            parts[1]["thoughtSignature"], real_sig,
+            "Real signature must be restored onto the anchor (first non-thought part)"
         );
 
-        // Index 3: tool 2 承载哨兵签名 (满足 Google AST 校验且绝不复制 500KB)
+        // Index 2 / 3: 工具调用不再盖章 —— 签名字段必须「缺席」，而不是空串
+        assert_eq!(parts[2]["functionCall"]["id"], "call_batch_1");
+        assert!(parts[2].get("thoughtSignature").is_none());
         assert_eq!(parts[3]["functionCall"]["id"], "call_batch_2");
-        assert_eq!(parts[3]["thoughtSignature"], SENTINEL_SIGNATURE);
+        assert!(parts[3].get("thoughtSignature").is_none());
     }
 
     #[test]
@@ -2979,10 +2959,17 @@ mod tests {
             &["call_persisted_999".to_string()],
             &["bash".to_string()],
         );
+        // 构造符合 Google 原生特征的假签名（Base64 解码后首字节 = protobuf tag 0x12）
+        let real_sig = {
+            use base64::Engine;
+            let mut raw = vec![0x12u8];
+            raw.extend_from_slice(&[b'A'; 60]);
+            base64::engine::general_purpose::STANDARD.encode(raw)
+        };
         let rec = ThinkingRecord {
             fingerprint: fp,
             thought: "Thought restored from SQLite".to_string(),
-            signature: Some("sig_persisted_1234567890123456789012345678901234567890".to_string()),
+            signature: Some(real_sig.clone()),
             tool_ids: vec!["call_persisted_999".to_string()],
             tool_names: vec!["bash".to_string()],
             visible: "Persisted visible text".to_string(),
@@ -3018,14 +3005,10 @@ mod tests {
         let parts = contents[0]["parts"].as_array().unwrap();
         assert_eq!(parts[0]["thought"], true);
         assert_eq!(parts[0]["text"], "Thought restored from SQLite");
-        assert_eq!(
-            parts[0]["thoughtSignature"],
-            "sig_persisted_1234567890123456789012345678901234567890"
-        );
-        assert_eq!(
-            parts[2]["thoughtSignature"],
-            "sig_persisted_1234567890123456789012345678901234567890"
-        );
+        // 锚点 = 该轮第一个非思考 part（这里是可见正文）：真实签名归位到它上面，
+        // 工具调用不再被盖章。
+        assert_eq!(parts[1]["thoughtSignature"], real_sig);
+        assert!(parts[2].get("thoughtSignature").is_none());
     }
 
     #[test]
@@ -4212,7 +4195,7 @@ mod tests {
     }
 
     #[test]
-    fn test_finalize_thinking_disabled_attaches_sentinel_to_unsigned_function_call_for_gemini() {
+    fn test_finalize_thinking_disabled_keeps_unsigned_function_call_unsigned_for_gemini() {
         let mut contents = vec![json!({
             "role": "model",
             "parts": [
@@ -4233,21 +4216,20 @@ mod tests {
             Some("gemini-3.8-flash-tiered"),
         );
 
+        // 官方报文里哨兵出现 0 次；缺失签名被上游容忍（在飞轮即缺席）。
+        // 因此无签名的 functionCall 保持「字段缺席」，绝不发明占位符。
         let parts = contents[0]["parts"].as_array().unwrap();
         assert_eq!(parts.len(), 1);
-        assert_eq!(
-            parts[0]["thoughtSignature"], SENTINEL_SIGNATURE,
-            "Unsigned functionCall must be injected with sentinel signature when sent to Gemini, even if thinking is off"
+        assert!(
+            parts[0].get("thoughtSignature").is_none()
+                && parts[0].get("thought_signature").is_none(),
+            "Unsigned functionCall must stay unsigned when sent to Gemini — never invent a sentinel"
         );
     }
 
     #[test]
-    fn test_finalize_recovers_tool_signature_from_global_signature_cache() {
+    fn test_finalize_does_not_invent_signature_for_unsigned_function_call() {
         let tool_id = "call_finalize_cache_777";
-        let valid_gemini_sig = "EmIKYAFpFH0TDqviLY1vZ8EuHqBLLj5xxD+0hchYg2VaoyolUQRP+hSCsKRpSpj+yrQA2H27yVFnF7tlp5OHIUvTdZKKErAqILJzK5FG8RJg42jCaaI2/iwqoBuRd5BDVwBxaQ==";
-        crate::proxy::SignatureCache::global()
-            .cache_tool_signature(tool_id, valid_gemini_sig.to_string());
-
         let mut contents = vec![json!({
             "role": "model",
             "parts": [
@@ -4257,7 +4239,7 @@ mod tests {
                         "id": tool_id,
                         "args": { "cmd": "cargo test" }
                     }
-                    // 注意：未带 thoughtSignature（模拟从任何未带签名的协议转入）
+                    // 注意：未带 thoughtSignature（模拟未在进站流水线查到的工具调用）
                 }
             ]
         })];
@@ -4270,14 +4252,20 @@ mod tests {
         );
 
         let parts = contents[0]["parts"].as_array().unwrap();
-        // 验证：无论开思考还是关思考，只要 SignatureCache 中有该工具的真实签名，就必须恢复真实签名而非哨兵！
+        // 终审门禁：不查库、不发明签名。官方 functionCall 轮是"纯净"的
+        // （33 个 model 轮里 thought × functionCall 共现 0 次），因此不得注入占位思考块。
+        assert_eq!(
+            parts.len(),
+            1,
+            "finalize must NOT inject a placeholder thought block"
+        );
         let fc = parts
             .iter()
             .find(|p| p.get("functionCall").is_some())
             .unwrap();
-        assert_eq!(
-            fc["thoughtSignature"], valid_gemini_sig,
-            "Pipeline finalize must backfill real signature from SignatureCache for any protocol"
+        assert!(
+            fc.get("thoughtSignature").is_none(),
+            "Pipeline finalize must not invent a sentinel; absence is tolerated by upstream"
         );
     }
 
@@ -4462,7 +4450,7 @@ mod tests {
         let client_tool_id = "call_openai_native_456";
         let real_sig = "EmIKYAFpFH0TDqviLY1vZ8EuHqBLLj5xxD+0hchYg2VaoyolUQRP+hSCsKRpSpj+yrQA2H27yVFnF7tlp5OHIUvTdZKKErAqILJzK5FG8RJg42jCaaI2/iwqoBuRd5BDVwBxaQ==";
         let thought_text = "Analyzing directory and listing files.";
-        let visible_answer = "Running bash tool.";
+        let _visible_answer = "Running bash tool.";
 
         // 1. 模拟 OpenAI 协议下生成的工具调用（带有 client_tool_id）
         let mut acc = TurnAccumulator::with_anchor("user-root-anchor");
@@ -4528,10 +4516,13 @@ mod tests {
         assert_eq!(model_parts[0]["thought"], true);
         assert_eq!(model_parts[0]["text"], thought_text);
 
-        // 验证工具调用依靠内部确定性伪 ID 成功找回真实签名：
+        // 验证跨协议捕获到的真实签名被归位到锚点，而不是被替换成哨兵：
         let fc = &model_parts[1];
         assert_eq!(fc["functionCall"]["name"], "bash");
-        assert_eq!(fc["thoughtSignature"], real_sig);
+        assert_eq!(
+            fc["thoughtSignature"], real_sig,
+            "Captured real signature must be restored onto the anchor, not replaced by a sentinel"
+        );
         // 验证伪 ID 纯粹内部使用，绝不外泄给无 ID 协议：
         assert!(
             fc["functionCall"].get("id").is_none(),
@@ -4539,5 +4530,175 @@ mod tests {
         );
 
         let _ = crate::modules::proxy_db::delete_thinking_records_for_session(key);
+    }
+}
+
+/// 官方报文对齐回归测试：五种 part 排列下签名锚点必须与真机一致。
+///
+/// 依据 3 份官方 Antigravity 报文、23 处真实签名归纳出的不变量
+/// （见 `.workbuddy/outputs/correct-assembly-spec.md`）：
+///   1. 签名只出现在 model 轮，每轮至多 1 个；
+///   2. 锚点 = 该轮第一个 `thought != true` 的 part；
+///   3. `thought: true` / `functionResponse` / 非锚点 —— 字段必须「缺席」；
+///   4. 缺失签名被上游容忍，绝不发明哨兵。
+#[cfg(test)]
+mod signature_placement_tests {
+    use super::*;
+
+    /// 构造符合 Google 原生特征的假签名（Base64 解码后首字节 = protobuf tag 0x12）
+    fn gemini_sig(seed: u8) -> String {
+        use base64::Engine;
+        let mut raw = vec![0x12u8, seed];
+        raw.extend_from_slice(&[b'A'; 60]);
+        base64::engine::general_purpose::STANDARD.encode(raw)
+    }
+
+    #[test]
+    fn is_thought_part_only_accepts_explicit_flag() {
+        // 带签名但没有 thought 标志的正文 —— 绝不能判为思考块（旧启发式的核心错误）
+        assert!(!is_thought_part(
+            &json!({ "text": "answer", "thoughtSignature": "Eabc" })
+        ));
+        // 带 functionCall 也不算
+        assert!(!is_thought_part(
+            &json!({ "functionCall": { "name": "x" }, "thoughtSignature": "Eabc" })
+        ));
+        // 只有显式 thought: true 才算
+        assert!(is_thought_part(
+            &json!({ "text": "reasoning", "thought": true })
+        ));
+        // 显式 false 不算
+        assert!(!is_thought_part(&json!({ "text": "x", "thought": false })));
+    }
+
+    #[test]
+    fn arrangement_a_thought_plus_text_keeps_signature_on_text() {
+        // 官方 f81eae5c contents[1] 的排列
+        let sig = gemini_sig(1);
+        let mut parts = vec![
+            json!({ "text": "reasoning", "thought": true }),
+            json!({ "text": "visible answer", "thoughtSignature": sig }),
+        ];
+        let placed = place_turn_signature(&mut parts, None);
+
+        assert_eq!(placed.as_deref(), Some(sig.as_str()));
+        assert_eq!(parts.len(), 2, "绝不能重排或增删 part");
+        assert!(
+            parts[0].get("thoughtSignature").is_none(),
+            "思考块绝不带签名"
+        );
+        assert_eq!(parts[1]["thoughtSignature"], sig, "锚点 = parts[1]");
+    }
+
+    #[test]
+    fn arrangement_b_parallel_calls_signs_only_the_first() {
+        // 官方 f81eae5c contents[3]：3 个并发 functionCall，签名只在 parts[0]
+        let sig = gemini_sig(2);
+        let mut parts = vec![
+            json!({ "functionCall": { "id": "a", "name": "run_command" }, "thoughtSignature": sig }),
+            json!({ "functionCall": { "id": "b", "name": "view_file" } }),
+            json!({ "functionCall": { "id": "c", "name": "view_file" } }),
+        ];
+        place_turn_signature(&mut parts, None);
+
+        assert_eq!(parts.len(), 3, "绝不插入假思考块");
+        assert_eq!(parts[0]["thoughtSignature"], sig);
+        assert!(
+            parts[1].get("thoughtSignature").is_none(),
+            "字段必须缺席而非空串"
+        );
+        assert!(parts[2].get("thoughtSignature").is_none());
+    }
+
+    #[test]
+    fn arrangement_c_function_responses_never_signed() {
+        let sig = gemini_sig(3);
+        let mut parts = vec![
+            json!({ "functionResponse": { "id": "a", "name": "x" } }),
+            json!({ "functionResponse": { "id": "b", "name": "y" } }),
+        ];
+        // 即便提供回填来源，也绝不写入 functionResponse
+        let placed = place_turn_signature(&mut parts, Some(sig.as_str()));
+
+        assert!(placed.is_none());
+        assert!(parts[0].get("thoughtSignature").is_none());
+        assert!(parts[1].get("thoughtSignature").is_none());
+    }
+
+    #[test]
+    fn arrangement_d_pure_text_keeps_its_own_signature() {
+        let sig = gemini_sig(4);
+        let mut parts = vec![json!({ "text": "hello", "thoughtSignature": sig })];
+        let placed = place_turn_signature(&mut parts, None);
+
+        assert_eq!(placed.as_deref(), Some(sig.as_str()));
+        assert_eq!(parts[0]["thoughtSignature"], sig);
+    }
+
+    #[test]
+    fn unsigned_anchor_stays_absent_when_no_source_available() {
+        // 官方 baogao.txt contents[17]：在飞 functionCall 就是无签名的
+        let mut parts = vec![json!({ "functionCall": { "id": "call_x", "name": "bash" } })];
+        let placed = place_turn_signature(&mut parts, None);
+
+        assert!(placed.is_none());
+        assert!(
+            parts[0].get("thoughtSignature").is_none(),
+            "绝不发明哨兵，官方报文里哨兵出现 0 次"
+        );
+    }
+
+    #[test]
+    fn fallback_signature_is_placed_on_anchor() {
+        // 跨协议路径：锚点无签名，但库里有真实签名
+        let sig = gemini_sig(5);
+        let mut parts = vec![json!({ "functionCall": { "id": "call_x", "name": "bash" } })];
+        let placed = place_turn_signature(&mut parts, Some(sig.as_str()));
+
+        assert_eq!(placed.as_deref(), Some(sig.as_str()));
+        assert_eq!(parts[0]["thoughtSignature"], sig);
+    }
+
+    #[test]
+    fn sentinel_is_never_accepted_as_a_source() {
+        let mut parts = vec![json!({ "functionCall": { "id": "call_x", "name": "bash" } })];
+        let placed = place_turn_signature(&mut parts, Some(SENTINEL_SIGNATURE));
+
+        assert!(placed.is_none(), "哨兵不是合法回填来源");
+        assert!(parts[0].get("thoughtSignature").is_none());
+    }
+
+    #[test]
+    fn non_anchor_signatures_are_purged_to_absence() {
+        let sig_a = gemini_sig(6);
+        let sig_b = gemini_sig(7);
+        let mut parts = vec![
+            json!({ "functionCall": { "id": "a", "name": "x" }, "thoughtSignature": sig_a }),
+            json!({ "functionCall": { "id": "b", "name": "y" }, "thoughtSignature": sig_b }),
+            json!({ "text": "trailing", "thought_signature": sig_b }),
+        ];
+        place_turn_signature(&mut parts, None);
+
+        assert_eq!(parts[0]["thoughtSignature"], sig_a, "锚点保留自己的真签名");
+        assert!(parts[1].get("thoughtSignature").is_none());
+        assert!(parts[2].get("thoughtSignature").is_none());
+        assert!(
+            parts[2].get("thought_signature").is_none(),
+            "蛇形字段必须被清除"
+        );
+    }
+
+    #[test]
+    fn all_thought_turn_has_no_anchor() {
+        let sig = gemini_sig(8);
+        let mut parts = vec![
+            json!({ "text": "r1", "thought": true }),
+            json!({ "text": "r2", "thought": true }),
+        ];
+        let placed = place_turn_signature(&mut parts, Some(sig.as_str()));
+
+        assert!(placed.is_none(), "整轮皆思考则本轮无锚点");
+        assert!(parts[0].get("thoughtSignature").is_none());
+        assert!(parts[1].get("thoughtSignature").is_none());
     }
 }

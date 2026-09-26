@@ -1,22 +1,16 @@
 use serde_json::{json, Value};
 
 const MAX_RECURSION_DEPTH: usize = 10;
-pub const MAX_DESCRIPTION_LENGTH: usize = 2048;
+pub const MAX_DESCRIPTION_LENGTH: usize = 8192;
 
-/// 规范化工具或参数的描述文本（借鉴 JeikCode & OpenCode）：
-/// 1. 折叠换行符、回车与连续空白字符为单空格；
-/// 2. 截断超长描述至安全预算（默认 2048 字符），防止上游解析溢出或拒收。
+/// 规范化工具或参数的描述文本：
+/// 1. 保持客户端原始换行与排版格式不变，避免折叠导致指令可读性下降；
+/// 2. 仅对超过安全预算（8192 字符）的极端超长描述进行截断，防止上游解析溢出或拒收。
 pub fn sanitize_description(s: &str) -> String {
-    let collapsed = s
-        .split(['\n', '\r'])
-        .flat_map(|line| line.split_whitespace())
-        .collect::<Vec<_>>()
-        .join(" ");
-
-    if collapsed.chars().count() <= MAX_DESCRIPTION_LENGTH {
-        collapsed
+    if s.chars().count() <= MAX_DESCRIPTION_LENGTH {
+        s.to_string()
     } else {
-        let truncated: String = collapsed
+        let truncated: String = s
             .chars()
             .take(MAX_DESCRIPTION_LENGTH.saturating_sub(15))
             .collect();

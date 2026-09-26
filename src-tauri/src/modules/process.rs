@@ -674,6 +674,8 @@ pub fn wait_for_language_server_respawn(target_ide: Option<&str>, timeout_secs: 
 }
 
 /// Close Antigravity processes
+// timeout_secs 仅用于 macos/Linux 分支（graceful_timeout），Windows 分支不使用参数
+#[cfg_attr(target_os = "windows", allow(unused_variables))]
 pub fn close_antigravity(timeout_secs: u64, target_ide: Option<&str>) -> Result<(), String> {
     crate::modules::logger::log_info(&format!("Closing Antigravity ({:?})...", target_ide));
 

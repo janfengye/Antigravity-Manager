@@ -1074,7 +1074,7 @@ impl ContextManager {
                         _tool_indices: Vec::new(),
                         indices: vec![i],
                     });
-                } else if role == "user" && has_function_response {
+                } else if (role == "user" || role == "model") && has_function_response {
                     if let Some(ref mut round) = current_round {
                         round._tool_indices.push(i);
                         round.indices.push(i);

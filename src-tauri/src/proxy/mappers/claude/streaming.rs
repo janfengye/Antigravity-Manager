@@ -232,17 +232,17 @@ impl StreamingState {
 
         let mut chunks = Vec::new();
 
-        // Thinking 块结束时发送暂存的签名 (若上游未下发签名则回退到会话签名或哨兵签名)
+        // Thinking 块结束时发送暂存的签名（上游未下发时回退到会话签名）。
+        // **绝不发明哨兵** —— 哨兵是"跳过校验"开关而非假合法签名，
+        // 下发给客户端只会污染其历史；且官方流量里出现 0/23 次，不属于 Antigravity 协议。
+        // 真签名的恢复由网关侧 SQL 状态机（`hydrate`）与终审 `place_turn_signature` 承担。
         if self.block_type == BlockType::Thinking {
             let signature = if self.signatures.has_pending() {
                 self.signatures.consume()
             } else {
-                self.session_id
-                    .as_deref()
-                    .and_then(|sid| {
-                        crate::proxy::SignatureCache::global().get_session_signature(sid)
-                    })
-                    .or_else(|| Some("skip_thought_signature_validator".to_string()))
+                self.session_id.as_deref().and_then(|sid| {
+                    crate::proxy::SignatureCache::global().get_session_signature(sid)
+                })
             };
 
             if let Some(sig) = signature {

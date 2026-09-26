@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> Professional Account Management & Protocol Proxy System for AI Services (v4.8.1)
+> Professional Account Management & Protocol Proxy System for AI Services (v4.8.3)
 
 <div align="center">
   <img src="public/icon.png" width="100" height="100" alt="Antigravity Tools Logo">
@@ -11,7 +11,7 @@
       <img src="https://img.shields.io/github/v/release/lbjlaq/Antigravity-Manager?color=blue&style=flat-square" alt="GitHub release">
     </a>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.8.1-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.8.3-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -448,7 +448,7 @@ In clients that support OpenAI protocol (e.g., Cherry Studio), you can configure
 
 ## 📝 Changelog
 
-> Latest version **v4.8.1** (2026-09-25): Completely reconstructed egress message serialization across all 4 protocols with deterministic key ordering and canonical structure alignment, ensuring 100% byte consistency across protocol switching and universal Prefix Caching invariance; resolved thought signature drift during Claude <-> Gemini migration with bi-directional `<think>` embedding and causal signature recovery; discarded client tool IDs in favor of context-causal deterministic pseudo-hash IDs for unified bidirectional lookup; bridged agent tool multimodal vision loop with native conversion of Base64 tool images into Gemini visual payloads; eliminated legacy adapter-level `web_search` tool filtering and hardcoded dead code, unifying all tool handling into the inbound pipeline; fixed client budget mode thinking disable failures; introduced one-click CLI synchronization cards and modern edge-to-edge square app avatars for JeikCode, Hermes, OpenClaw, and Grok Build; added multilingual adaptive thinking cache cleanup prompt on major updates.
+> Latest version **v4.8.3** (2026-09-27): Re-reversed the 9.25-night Antigravity upstream payload restructuring (functionResponse moved to model turns; any-turn first non-thinking part may carry a signature), fixed the signature swing algorithm by decoupling capture/backfill from tool_id, and eliminated thinking-chain break dead loops; stopped injecting a fabricated user turn on trailing tool turns, stopping agent tool loops; removed contradictory toolConfig duplicate writes and system-prompt/tool-description injections for a field-for-field official envelope; routed Layer-3 summaries through the auxiliary client with proxy hot-reload and aligned quota/project endpoints to official Daily->Sandbox->Prod; added configurable account pool priority and official reset_time weekly stats, dual-channel in-app updates, vendor identity normalization, and 100% verbatim tool passthrough.
 
 👉 **[View Full Changelog → CHANGELOG_EN.md](CHANGELOG_EN.md)**
 

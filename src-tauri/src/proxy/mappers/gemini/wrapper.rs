@@ -11,6 +11,10 @@ pub fn wrap_request_v2(
     session_id: Option<&str>,
     token: Option<&crate::proxy::token_manager::ProxyToken>, // [NEW] 动态规格注入
     token_manager: Option<&std::sync::Arc<crate::proxy::TokenManager>>,
+    // [NEW] Layer-3 后台摘要专用的上游客户端。
+    // 必须由 handler 传入 `&state.upstream`，它才能按账号解析代理池（`client_cache`）
+    // 并随上游代理热更新生效；传 `None` 时 Layer-3 不触发。
+    upstream: Option<&std::sync::Arc<crate::proxy::upstream::client::UpstreamClient>>,
 ) -> Value {
     // 优先使用传入的 mapped_model，其次尝试从 body 获取
     let original_model = body
@@ -26,7 +30,7 @@ pub fn wrap_request_v2(
     };
 
     // [ADDED v4.1.24] 计算 message_count 供 requestId 使用
-    let message_count = body
+    let _message_count = body
         .get("contents")
         .and_then(|c| c.as_array())
         .map(|a| a.len())
@@ -147,18 +151,22 @@ pub fn wrap_request_v2(
             );
 
             let tm_opt = tm.cloned();
+            let upstream_opt = upstream.cloned();
             let sid_str = session_id.unwrap_or_default().to_string();
             let body_clone = inner_request.clone();
             let trace_id_clone = trace_id.clone();
             let proj_clone = project_id.to_string();
             let acc_clone = account_id.unwrap_or_default().to_string();
 
-            if let Some(tm_arc) = tm_opt {
+            // 两个依赖缺一不可：token_manager 取凭据，upstream 选对代理
+            // （否则账号绑定专属代理时摘要会从真实 IP 出去）。
+            if let (Some(tm_arc), Some(upstream_arc)) = (tm_opt, upstream_opt) {
                 tokio::spawn(async move {
                     match try_compress_gemini_with_summary(
                         &body_clone,
                         &trace_id_clone,
                         &tm_arc,
+                        &upstream_arc,
                         &sid_str,
                         &proj_clone,
                         &acc_clone,
@@ -293,14 +301,7 @@ pub fn wrap_request_v2(
         .get_mut("contents")
         .and_then(|c| c.as_array_mut())
     {
-        let is_google_cloud = final_model_name.starts_with("projects/");
-        let can_use_sentinel = !is_google_cloud
-            && (should_inject
-                || crate::proxy::mappers::common_utils::model_keeps_thinking_without_signature(
-                    final_model_name,
-                ));
-
-        for (i, content) in contents.iter_mut().enumerate() {
+        for (_i, content) in contents.iter_mut().enumerate() {
             let role = content.get("role").and_then(|r| r.as_str()).unwrap_or("");
             let is_assistant = role == "model" || role == "assistant";
 
@@ -313,13 +314,8 @@ pub fn wrap_request_v2(
                 if is_assistant {
                     for part in parts.iter() {
                         if let Some(obj) = part.as_object() {
-                            let is_thought = obj
-                                .get("thought")
-                                .and_then(|v| v.as_bool())
-                                .unwrap_or(false)
-                                || (obj.get("thoughtSignature").is_some()
-                                    && !obj.contains_key("functionCall")
-                                    && !obj.contains_key("functionResponse"));
+                            // 铁律：只认 thought: true（详见 thinking_store::is_thought_part）
+                            let is_thought = crate::proxy::thinking_store::is_thought_part(part);
                             if is_thought {
                                 if let Some(s) = obj
                                     .get("thoughtSignature")
@@ -333,40 +329,6 @@ pub fn wrap_request_v2(
                                         break;
                                     }
                                 }
-                            } else if let Some(fc) = obj.get("functionCall") {
-                                if let Some(s) = obj
-                                    .get("thoughtSignature")
-                                    .or(obj.get("thought_signature"))
-                                    .and_then(|s| s.as_str())
-                                {
-                                    if s == crate::proxy::thinking_store::SENTINEL_SIGNATURE
-                                        || s.len() >= 50
-                                    {
-                                        turn_signature = Some(s.to_string());
-                                        break;
-                                    }
-                                }
-                                if let Some(call_id) = fc.get("id").and_then(|v| v.as_str()) {
-                                    if let Some(s) = crate::proxy::SignatureCache::global()
-                                        .get_tool_signature(call_id)
-                                    {
-                                        turn_signature = Some(s);
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    if turn_signature.is_none() {
-                        if let Some(s_id) = session_id {
-                            if let Some(s) = crate::proxy::SignatureCache::global()
-                                .get_session_signature_at(s_id, i)
-                            {
-                                turn_signature = Some(s);
-                            } else if let Some(s) =
-                                crate::proxy::SignatureCache::global().get_session_signature(s_id)
-                            {
-                                turn_signature = Some(s);
                             }
                         }
                     }
@@ -376,13 +338,8 @@ pub fn wrap_request_v2(
                 let mut saw_non_thinking = false;
 
                 for mut part in parts.drain(..) {
-                    let is_thought = part
-                        .get("thought")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false)
-                        || (part.get("thoughtSignature").is_some()
-                            && part.get("functionCall").is_none()
-                            && part.get("functionResponse").is_none());
+                    // 铁律：只认 thought: true（详见 thinking_store::is_thought_part）
+                    let is_thought = crate::proxy::thinking_store::is_thought_part(&part);
 
                     if is_assistant && is_thought {
                         let text = part.get("text").and_then(|v| v.as_str()).unwrap_or("");
@@ -450,17 +407,10 @@ pub fn wrap_request_v2(
                         if effective_sig.is_none() {
                             effective_sig = turn_signature.clone();
                         }
-                        if effective_sig.is_none() {
-                            if let Some(s_id) = session_id {
-                                effective_sig = crate::proxy::SignatureCache::global()
-                                    .get_session_signature(s_id);
-                            }
-                        }
-                        if effective_sig.is_none() && can_use_sentinel {
-                            effective_sig =
-                                Some(crate::proxy::thinking_store::SENTINEL_SIGNATURE.to_string());
-                        }
 
+                        // 无签名时**绝不发明哨兵**：官方流量里哨兵出现 0/23 次，
+                        // 它不属于 Antigravity 协议。Gemini 目标的思考块本就不应携带签名
+                        // （铁律 I4），故保留 `thought: true` 结构、仅省略签名字段。
                         if let Some(sig) = effective_sig {
                             new_parts.push(json!({
                                 "text": final_thought_text,
@@ -468,8 +418,10 @@ pub fn wrap_request_v2(
                                 "thoughtSignature": sig,
                             }));
                         } else {
-                            new_parts.push(json!({ "text": final_thought_text }));
-                            saw_non_thinking = true;
+                            new_parts.push(json!({
+                                "text": final_thought_text,
+                                "thought": true,
+                            }));
                         }
                     } else {
                         // 处理普通部件及 functionCall / functionResponse
@@ -492,7 +444,7 @@ pub fn wrap_request_v2(
                                 }
 
                                 // 处理签名校验与兼容性 (对齐 Anthropic)
-                                let call_id =
+                                let _call_id =
                                     fc.get("id").and_then(|v| v.as_str()).map(str::to_string);
                                 let incoming_fc_sig = obj
                                     .get("thoughtSignature")
@@ -500,7 +452,7 @@ pub fn wrap_request_v2(
                                     .and_then(|s| s.as_str())
                                     .map(str::to_string);
 
-                                // 纯净线缆透传：客户端若自带签名则保持；缺失签名全权委托进站流水线统一对齐与回填
+                                // 纯净线缆透传：客户端若自带签名则保持原样，缺失签名全权委托进站流水线统一对齐与回填
                                 if let Some(ref sig) = incoming_fc_sig {
                                     obj.insert("thoughtSignature".to_string(), json!(sig));
                                 }
@@ -1015,34 +967,8 @@ pub fn wrap_request_v2(
         }
     }
 
-    // [ADDED v4.1.24] 扩展 toolConfig 到 VALIDATED 模式并开启 includeServerSideToolInvocations (同时支持 camelCase 与 snake_case)
-    if inner_request.get("tools").is_some() {
-        // 1. camelCase
-        if let Some(tool_config) = inner_request.get_mut("toolConfig") {
-            if let Some(obj) = tool_config.as_object_mut() {
-                obj.insert("includeServerSideToolInvocations".to_string(), json!(true));
-            }
-        } else {
-            inner_request["toolConfig"] = json!({
-                "functionCallingConfig": { "mode": "VALIDATED" },
-                "includeServerSideToolInvocations": true
-            });
-        }
-        // 2. snake_case
-        if let Some(tool_config_snake) = inner_request.get_mut("tool_config") {
-            if let Some(obj) = tool_config_snake.as_object_mut() {
-                obj.insert(
-                    "include_server_side_tool_invocations".to_string(),
-                    json!(true),
-                );
-            }
-        } else {
-            inner_request["tool_config"] = json!({
-                "function_calling_config": { "mode": "VALIDATED" },
-                "include_server_side_tool_invocations": true
-            });
-        }
-    }
+    // [REMOVED v4.8.2] toolConfig / tool_config 双写已移除：官方 Antigravity 报文不带该字段，
+    // 且 camelCase 与 snake_case 双份会写出一对矛盾配置 (VALIDATED)。已在协议无关节点统一移除。
 
     // [ADDED v4.1.24] 注入基于账号的稳定 sessionId
     // [FIX session-1M] 混入对话指纹与代数,不同对话隔离服务端会话,1M 累计报错后 bump 自愈
@@ -1058,31 +984,21 @@ pub fn wrap_request_v2(
 
     let sid = session_id.unwrap_or("default");
 
-    // [NEW] 1. 深度对齐 requestId 格式 (官方格式: agent/{timestamp_ms}/{random_hex_8bytes})
-    // 每次请求生成完全唯一的 ID，避免重试时的幂等性冲突导致 Google 返回旧缓存
-    let timestamp_ms = chrono::Utc::now().timestamp_millis();
-    let random_hex = &uuid::Uuid::new_v4().simple().to_string()[..8]; // 移除对外部 hex crate 的依赖
-    let official_request_id = format!("agent/{}/{}", timestamp_ms, random_hex);
+    // [NEW] 1. requestId：官方 5 段形态，三适配器共用。
+    // 含 unixMs 保证幂等隔离（避免重试命中上一次的 429 / 旧缓存），形态也与其他入口一致。
+    let step = inner_request
+        .get("contents")
+        .and_then(|c| c.as_array())
+        .map(|a| a.len() as u64)
+        .unwrap_or(0);
+    let official_request_id =
+        crate::proxy::mappers::common_utils::build_official_request_id(sid, step);
 
     // [NEW] 2. 动态 userAgent 仿真 (支持 jetski)
-    // 根据账号属性或域名判断。Go Worker 中企业/GCP 账号通常使用 jetski 指纹。
-    let is_enterprise = if let Some(t) = token {
-        !t.email.ends_with("@gmail.com") && !t.email.ends_with("@googlemail.com")
-    } else {
-        false
-    };
-
-    // [NEW] 阶段 7.2: 动态 IDEType 指纹对齐
-    let official_ide_type = if is_enterprise {
-        "JETSKI"
-    } else {
-        "ANTIGRAVITY"
-    };
-    let official_user_agent = if is_enterprise {
-        "jetski"
-    } else {
-        "antigravity"
-    };
+    // 企业 / GCP 账号（非 gmail 邮箱）在官方 Go Worker 中使用 jetski 指纹。
+    // 判定由 common_utils 统一提供 —— 三适配器必须共用，否则同一账号指纹漂移。
+    let (official_user_agent, official_ide_type) =
+        crate::proxy::mappers::common_utils::resolve_official_fingerprint(token);
 
     // [NEW] 如果是 loadCodeAssist 请求，注入 metadata 字段对齐官方
     if final_model_name == "loadCodeAssist" || inner_request.get("metadata").is_some() {
@@ -1254,6 +1170,12 @@ pub fn inject_ids_to_response(response: &mut Value, model_name: &str) {
 }
 
 const INTERNAL_BACKGROUND_TASK: &str = "gemini-2.5-flash-lite";
+
+/// Layer-3 后台摘要请求的超时（秒）。
+///
+/// 上游客户端的默认超时是 600s，对"摘要整段对话"这种辅助任务过长 ——
+/// 一旦上游卡住，会长时间占住一个后台任务与连接。这里显式收紧到有界值。
+pub const SUMMARY_REQUEST_TIMEOUT_SECS: u64 = 180;
 const CONTEXT_SUMMARY_PROMPT: &str = r#"You are a context compression specialist. Your task is to create a structured XML snapshot of the conversation history.
 
 This snapshot will become the Agent's ONLY memory of the past. All key details, plans, errors, and user instructions MUST be preserved.
@@ -1315,6 +1237,7 @@ async fn try_compress_gemini_with_summary(
     original_request: &Value,
     trace_id: &str,
     token_manager: &std::sync::Arc<crate::proxy::TokenManager>,
+    upstream: &std::sync::Arc<crate::proxy::upstream::client::UpstreamClient>,
     session_id_str: &str,
     project_id: &str,
     account_id: &str,
@@ -1375,42 +1298,47 @@ async fn try_compress_gemini_with_summary(
         token_obj.as_ref(),
     );
 
-    let upstream_url = format!(
-        "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal/projects/{}/locations/global/models/{}:generateContent",
-        project_id, INTERNAL_BACKGROUND_TASK
-    );
+    // 走共享的辅助调用通道：复用主请求路径的客户端（含按账号代理池）、
+    // 端点顺序（Daily → Sandbox → Prod）、URL 形状与回退判定。
+    //
+    // 历史实现手写了
+    // `{host}/v1internal/projects/{p}/locations/global/models/{m}:generateContent`
+    // 并把 host 硬编码为 sandbox —— 该形状在 daily / sandbox / prod 三个 host 上
+    // 一律返回 HTML 404，因此本函数从未成功过（后台 spawn，失败只打日志，表现为静默空转）。
+    let gemini_response = upstream
+        .call_v1_internal_auxiliary(
+            "generateContent",
+            &access_token,
+            wrapped_summary_body,
+            Some(account_id),
+            SUMMARY_REQUEST_TIMEOUT_SECS,
+        )
+        .await?;
 
-    let response = reqwest::Client::new()
-        .post(&upstream_url)
-        .header("Authorization", format!("Bearer {}", access_token))
-        .header("Content-Type", "application/json")
-        .json(&wrapped_summary_body)
-        .send()
-        .await
-        .map_err(|e| format!("API call failed: {}", e))?;
+    // 上游返回的是 `{"response": {...}}` 包装体，必须先解包才能取到 candidates。
+    let unwrapped_summary = unwrap_response(&gemini_response);
 
-    if !response.status().is_success() {
-        return Err(format!(
-            "API returned {}: {}",
-            response.status(),
-            response.text().await.unwrap_or_default()
-        ));
-    }
-
-    let gemini_response: Value = response
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse response: {}", e))?;
-
-    let xml_summary = gemini_response
+    // 只拼接「非思考 part」的文本。
+    //
+    // 实测（gemini-2.5-flash-lite，3/3）响应形如：
+    //   parts[0] = { "thought": true, "text": "" }   ← 空思考块，排在最前
+    //   parts[1] = { "text": "```xml\n<summary>…" }  ← 真正的摘要
+    // 因此不能取 `parts[0].text`（会得到空串，把空摘要当成功静默写回），
+    // 也不能只用 `parts[0]` —— 必须按 `thought` 标志过滤后拼接全部可见文本。
+    let xml_summary = unwrapped_summary
         .get("candidates")
         .and_then(|c| c.get(0))
         .and_then(|c| c.get("content"))
         .and_then(|c| c.get("parts"))
-        .and_then(|p| p.get(0))
-        .and_then(|p| p.get("text"))
-        .and_then(|t| t.as_str())
-        .map(|s| s.to_string())
+        .and_then(|parts| parts.as_array())
+        .map(|parts| {
+            parts
+                .iter()
+                .filter(|part| !crate::proxy::thinking_store::is_thought_part(part))
+                .filter_map(|part| part.get("text").and_then(|t| t.as_str()))
+                .collect::<String>()
+        })
+        .filter(|text| !text.trim().is_empty())
         .ok_or_else(|| "Failed to extract text from response".to_string())?;
 
     info!(
@@ -1466,7 +1394,6 @@ async fn try_compress_gemini_with_summary(
     Ok(forked_request)
 }
 
-#[allow(dead_code)]
 pub fn wrap_request(
     body: &Value,
     project_id: &str,
@@ -1482,7 +1409,8 @@ pub fn wrap_request(
         account_id,
         session_id,
         token,
-        None,
+        None, // token_manager：不带 → Layer-3 本就不会触发
+        None, // upstream：同上，无需客户端
     )
 }
 static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());

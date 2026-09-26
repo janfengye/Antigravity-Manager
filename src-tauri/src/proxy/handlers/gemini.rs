@@ -7,7 +7,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde_json::{json, Value};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::proxy::common::client_adapter::CLIENT_ADAPTERS;
 use crate::proxy::debug_logger;
@@ -15,7 +15,7 @@ use crate::proxy::handlers::common::{
     apply_retry_strategy, build_token_error_headers, next_rotation_attempt, should_rotate_account,
     FailureStatusTracker, RequestRetryState, RetryStrategy,
 };
-use crate::proxy::mappers::gemini::{unwrap_response, wrap_request, wrap_request_v2};
+use crate::proxy::mappers::gemini::{unwrap_response, wrap_request_v2};
 use crate::proxy::server::AppState;
 use crate::proxy::session_manager::SessionManager;
 use crate::proxy::upstream::client::mask_email;
@@ -304,6 +304,7 @@ pub async fn handle_generate(
             Some(&session_id),
             token_obj.as_ref(),
             Some(&token_manager),
+            Some(&state.upstream),
         );
         let tf_micros = tf_start.elapsed().as_micros() as u64;
         let norm_total_micros = norm_start.elapsed().as_micros() as u64;
@@ -624,10 +625,7 @@ pub async fn handle_generate(
                                                                 if let Some(sig) = part.get("thoughtSignature").and_then(|s| s.as_str()) {
                                                                     crate::proxy::SignatureCache::global()
                                                                         .cache_session_signature(&s_id_for_stream, sig.to_string(), 1);
-                                                                    if let Some(call_id) = part.get("functionCall").and_then(|f| f.get("id")).and_then(|id| id.as_str()) {
-                                                                        crate::proxy::SignatureCache::global().cache_tool_signature(call_id, sig.to_string());
-                                                                    }
-                                                                    debug!("[Gemini-SSE] Cached signature (len: {}) for session: {}", sig.len(), s_id_for_stream);
+                                                                    debug!("[Gemini-SSE] Cached session signature (len: {}) for session: {}", sig.len(), s_id_for_stream);
                                                                 }
                                                             }
                                                         }
@@ -664,7 +662,13 @@ pub async fn handle_generate(
                         }
                     }
 
-                    thinking_acc.commit(&s_id_for_stream);
+                    // 仅在流式完整传输、没有发生网络中断或异常失败时，才原子提交思维链到持久化存储
+                    // 防止因 connection reset by peer / unexpected EOF 导致半截残废思维块污染历史记忆
+                    if !stream_failed {
+                        thinking_acc.commit(&s_id_for_stream);
+                    } else {
+                        warn!("[Gemini-SSE] Stream terminated prematurely or failed, discarding partial thinking block to prevent context poisoning: session={}", s_id_for_stream);
+                    }
                     if track_image_success && saw_image_data && !stream_failed {
                         image_success_manager.mark_account_success(&image_success_account);
                         image_success_manager
@@ -772,15 +776,7 @@ pub async fn handle_generate(
                                         sig.to_string(),
                                         1,
                                     );
-                                    if let Some(call_id) = part
-                                        .get("functionCall")
-                                        .and_then(|f| f.get("id"))
-                                        .and_then(|id| id.as_str())
-                                    {
-                                        crate::proxy::SignatureCache::global()
-                                            .cache_tool_signature(call_id, sig.to_string());
-                                    }
-                                    debug!("[Gemini-Response] Cached signature (len: {}) for session: {}", sig.len(), session_id);
+                                    debug!("[Gemini-Response] Cached session signature (len: {}) for session: {}", sig.len(), session_id);
                                 }
                             }
                         }
@@ -903,7 +899,7 @@ pub async fn handle_generate(
         }
 
         let scheduling_mode = token_manager.get_scheduling_mode().await;
-        let allow_grace = match scheduling_mode {
+        let _allow_grace = match scheduling_mode {
             crate::proxy::sticky_config::SchedulingMode::Balance => {
                 token_manager.tokens_count() <= 1
             }
