@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> 专业级 AI 账号管理与协议代理系统 (v4.8.3)
+> 专业级 AI 账号管理与协议代理系统 (v4.8.4)
 
 <div align="center">
   <img src="public/icon.png" width="100" height="100" alt="Antigravity Tools Logo">
@@ -11,7 +11,7 @@
       <img src="https://img.shields.io/github/v/release/lbjlaq/Antigravity-Manager?color=blue&style=flat-square" alt="GitHub release">
     </a>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.8.3-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.8.4-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Frontend-React-61DAFB?style=flat-square" alt="React">
     <img src="https://img.shields.io/badge/License-CC--BY--NC--SA--4.0-lightgrey?style=flat-square" alt="License">
@@ -493,7 +493,7 @@ response = client.chat.completions.create(
 
 ## 📝 更新日志
 
-> 最新版本 **v4.8.3**（2026-09-27）：重新逆向 9.25 晚 Antigravity 上游报文结构变动（`functionResponse` 迁移至 `model` 轮、任意轮首非思考 part 均可能携带签名），彻底修正签名摆动算法，捕获与回填不再绑定 tool_id，根除思维断链死循环；修复防御节点对末尾工具轮的误判注入，杜绝 Agent 工具链无限循环；移除矛盾 `toolConfig` 双写与系统提示词/工具描述注入改写，信封形状与官方逐字段对齐（四协议多轮实测 200 通过）；Layer-3 摘要统一走 auxiliary 客户端并支持代理热更新，配额/Project 端点对齐官方 Daily→Sandbox→Prod 顺序；新增账号池优先级与按官方 reset_time 的周统计、正式版/预览版双通道应用内更新、厂商归属声明归一化、全协议工具 100% 纯透传。
+> 最新版本 **v4.8.4**（2026-09-27）：全链路规范化 Tool Call ID（入站清洗、缓存索引与持久化双向兼容），彻底根治多轮思考工具调用 400 签名缺失报错（Fixes #3529, #3531，感谢 @Mortalit、@ddmixi）；彻底铲除 Claude 适配层破坏性 Base64 解码，支持原生 Protobuf 签名与全链路数据库在位反向自愈写回（In-Place Self-Healing Write-Back）；全面剔除合成的占位思考块，确保每轮首个非思考 Part（正文或工具）作为权威锚点稳定承载签名；新增原生更新检查指令 `check_native_update`、支持动态更新源与外链下载兜底；完善独立 Beta Docker 镜像拉取与 JeikCode 快速接入指南。
 
 👉 **[查看完整更新日志 CHANGELOG.md →](CHANGELOG.md)**
 

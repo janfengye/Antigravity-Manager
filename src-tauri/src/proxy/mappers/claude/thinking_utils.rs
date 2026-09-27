@@ -2,7 +2,7 @@ use super::models::{ContentBlock, Message, MessageContent};
 use crate::proxy::SignatureCache;
 use tracing::{debug, info, warn};
 
-pub const MIN_SIGNATURE_LENGTH: usize = 50;
+pub const MIN_SIGNATURE_LENGTH: usize = 32;
 pub const SENTINEL_SIGNATURE: &str = crate::proxy::thinking_store::SENTINEL_SIGNATURE;
 
 #[derive(Debug, Default)]

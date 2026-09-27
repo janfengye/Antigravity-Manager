@@ -444,36 +444,27 @@ pub fn transform_openai_request_with_session(
                 .filter(|s| !s.is_empty());
 
             if role == "model" {
+                // [2026-09-27] 占位/缺失 reasoning 不再写 "..." 思考块。
+                // 官方样本 9/24 轮是「无思考块 + 锚点带签名」，空/占位思考不出站；
+                // 签名归位由流水线终审 place_turn_signature 按锚点规则处理。
                 if actual_include_thinking {
-                    // 对齐 Anthropic 规范化思考内容 (保留非占位符真实思考)
-                    let thought_text = if let Some(rc) = client_reasoning {
-                        if crate::proxy::thinking_store::is_placeholder_thought(rc) {
-                            "..."
-                        } else {
-                            rc
+                    if let Some(rc) = client_reasoning {
+                        if !crate::proxy::thinking_store::is_placeholder_thought(rc) {
+                            // 纯净线缆透传：客户端若自带签名则无损透传；缺失签名全权委托流水线统一对齐与回填
+                            let mut thought_part = json!({
+                                "text": rc,
+                                "thought": true,
+                            });
+                            if let Some(ref sig) = msg.signature {
+                                thought_part["thoughtSignature"] = json!(sig);
+                            }
+                            parts.push(thought_part);
                         }
-                    } else {
-                        "..."
-                    };
-
-                    // 纯净线缆透传：客户端若自带签名则无损透传；缺失签名全权委托流水线统一对齐与回填
-                    let mut thought_part = json!({
-                        "text": thought_text,
-                        "thought": true,
-                    });
-                    if let Some(ref sig) = msg.signature {
-                        thought_part["thoughtSignature"] = json!(sig);
                     }
-                    parts.push(thought_part);
                 } else if let Some(rc) = client_reasoning {
-                    // 思考关闭时，将客户端传来的思考文本降级为普通文本 (对齐 Anthropic)
-                    let text = if crate::proxy::thinking_store::is_placeholder_thought(rc) {
-                        "..."
-                    } else {
-                        rc
-                    };
-                    if !text.is_empty() {
-                        parts.push(json!({ "text": text }));
+                    // 思考关闭时，非占位思考降级为普通文本；占位/空直接跳过
+                    if !crate::proxy::thinking_store::is_placeholder_thought(rc) {
+                        parts.push(json!({ "text": rc }));
                     }
                 }
             }
@@ -2477,14 +2468,13 @@ mod tests {
             .find(|m| m["role"] == "model")
             .expect("Should have model message");
         let parts = assistant_msg["parts"].as_array().unwrap();
-        let thought = parts
-            .iter()
-            .find(|p| p.get("thought") == Some(&serde_json::json!(true)))
-            .expect("Should ensure thinking block is present in assistant message for Claude");
-        assert_eq!(thought["text"], "...");
-        assert_eq!(
-            thought["thoughtSignature"].as_str(),
-            Some(crate::proxy::thinking_store::SENTINEL_SIGNATURE)
+        // 【2026-09-27】客户端无 reasoning 时不再填充 "..." 占位思考块；
+        // 无思考块是官方标准形态（锚点签名由流水线终审回填）。
+        assert!(
+            !parts
+                .iter()
+                .any(|p| p.get("thought") == Some(&serde_json::json!(true))),
+            "No placeholder thinking block should be injected when client reasoning is absent"
         );
     }
 

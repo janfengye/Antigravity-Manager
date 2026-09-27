@@ -784,7 +784,6 @@ pub async fn handle_messages(
     let experimental = state.experimental.read().await;
     let scaling_enabled = experimental.enable_usage_scaling;
     let threshold_l1 = experimental.context_compression_threshold_l1;
-    let threshold_l2 = experimental.context_compression_threshold_l2;
     let threshold_l3 = experimental.context_compression_threshold_l3;
 
     // 获取最新一条“有意义”的消息内容（用于日志记录和后台任务检测）
@@ -1024,7 +1023,6 @@ pub async fn handle_messages(
         // Layer 1 (60%): Tool message trimming - Does NOT break cache
         // Layer 2 (75%): Thinking purification - Breaks cache but preserves signatures
         // Layer 3 (90%): Fork conversation + XML summary - Ultimate optimization
-        let mut is_purified = false;
         let mut compression_applied = false;
 
         if !retried_without_thinking && compression_level == "high" {
@@ -1086,39 +1084,6 @@ pub async fn handle_messages(
                 }
             }
 
-            // ===== Layer 2: Thinking Content Compression (L2 threshold) =====
-            // NEW: Preserve signatures while compressing thinking text
-            // This prevents signature chain breakage (Issue #902)
-            if usage_ratio > threshold_l2 && !compression_applied {
-                info!(
-                    "[{}] [Layer-2] Thinking compression triggered (usage: {:.1}%, threshold: {:.1}%)",
-                    trace_id, usage_ratio * 100.0, threshold_l2 * 100.0
-                );
-
-                // Use new signature-preserving compression
-                if ContextManager::compress_thinking_preserve_signature(
-                    &mut request_with_mapped.messages,
-                    4, // Protect last 4 messages (~2 turns)
-                ) {
-                    is_purified = true; // Still breaks cache, but preserves signatures
-                    compression_applied = true;
-
-                    let new_raw = ContextManager::estimate_token_usage(&request_with_mapped);
-                    let new_usage = calibrator.calibrate(new_raw);
-                    let new_ratio = new_usage as f32 / context_limit as f32;
-
-                    info!(
-                        "[{}] [Layer-2] Compression result: {:.1}% → {:.1}% (saved {} tokens)",
-                        trace_id,
-                        usage_ratio * 100.0,
-                        new_ratio * 100.0,
-                        estimated_usage - new_usage
-                    );
-
-                    usage_ratio = new_ratio;
-                }
-            }
-
             // ===== Layer 3: Fork Conversation + XML Summary (L3 threshold) =====
             // Ultimate optimization: Generate structured summary and start fresh conversation
             // Advantage: Completely cache-friendly (append-only), extreme compression ratio
@@ -1148,8 +1113,6 @@ pub async fn handle_messages(
                         );
 
                         request_with_mapped = forked_request;
-                        is_purified = false; // Fork doesn't break cache!
-
                         // Re-estimate after fork (with calibration)
                         let new_raw = ContextManager::estimate_token_usage(&request_with_mapped);
                         let new_usage = calibrator.calibrate(new_raw);
@@ -1187,12 +1150,7 @@ pub async fn handle_messages(
         }
 
         // [FIX] Estimate AFTER purification to get accurate token count for calibrator learning
-        // Only estimate for calibrator when content was not purified, to avoid skewed learning
-        let raw_estimated = if !is_purified {
-            ContextManager::estimate_token_usage(&request_with_mapped)
-        } else {
-            0 // Don't record calibration data when content was purified
-        };
+        let raw_estimated = ContextManager::estimate_token_usage(&request_with_mapped);
 
         request_with_mapped.model = mapped_model.clone();
 
@@ -1554,10 +1512,7 @@ pub async fn handle_messages(
                                 .header("X-Mapped-Model", &request_with_mapped.model)
                                 .header("X-Session-Id", &client_session_id)
                                 .header("X-Antigravity-Session-Id", &client_session_id)
-                                .header(
-                                    "X-Context-Purified",
-                                    if is_purified { "true" } else { "false" },
-                                )
+                                .header("X-Context-Purified", "false")
                                 .header("X-Timing-Clean-Ms", format!("{:.3}", clean_ms))
                                 .header("X-Timing-Norm-Ms", format!("{:.3}", norm_ms))
                                 .header("X-Timing-Thinking-Ms", format!("{:.3}", think_fill_ms))
@@ -1581,10 +1536,7 @@ pub async fn handle_messages(
                                         .header("X-Mapped-Model", &request_with_mapped.model)
                                         .header("X-Session-Id", &client_session_id)
                                         .header("X-Antigravity-Session-Id", &client_session_id)
-                                        .header(
-                                            "X-Context-Purified",
-                                            if is_purified { "true" } else { "false" },
-                                        )
+                                        .header("X-Context-Purified", "false")
                                         .header("X-Timing-Clean-Ms", format!("{:.3}", clean_ms))
                                         .header("X-Timing-Norm-Ms", format!("{:.3}", norm_ms))
                                         .header(

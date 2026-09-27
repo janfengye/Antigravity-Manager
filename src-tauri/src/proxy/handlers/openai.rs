@@ -3871,7 +3871,6 @@ pub async fn handle_completions(
         let mut usage_ratio = estimated_usage as f32 / context_limit as f32;
 
         let threshold_l1 = experimental_cfg.context_compression_threshold_l1;
-        let threshold_l2 = experimental_cfg.context_compression_threshold_l2;
         let threshold_l3 = experimental_cfg.context_compression_threshold_l3;
 
         tracing::info!(
@@ -3910,33 +3909,6 @@ pub async fn handle_completions(
                     usage_ratio = new_ratio;
                     compression_applied = false;
                 }
-            }
-        }
-
-        // ===== Layer 2: Thinking Content Compression =====
-        if usage_ratio > threshold_l2 && !compression_applied {
-            tracing::info!(
-                "[{}] [Layer-2] [OpenAI] Thinking compression triggered (usage: {:.1}%, threshold: {:.1}%)",
-                trace_id, usage_ratio * 100.0, threshold_l2 * 100.0
-            );
-
-            if crate::proxy::mappers::context_manager::ContextManager::compress_openai_thinking_preserve_signature(
-                &mut openai_req.messages,
-                4,
-            ) {
-                is_purified = true;
-                compression_applied = true;
-
-                let new_raw = crate::proxy::mappers::context_manager::ContextManager::estimate_openai_token_usage(&openai_req);
-                let new_usage = calibrator.calibrate(new_raw);
-                let new_ratio = new_usage as f32 / context_limit as f32;
-
-                tracing::info!(
-                    "[{}] [Layer-2] [OpenAI] Compression result: {:.1}% → {:.1}% (saved {} tokens)",
-                    trace_id, usage_ratio * 100.0, new_ratio * 100.0, estimated_usage - new_usage
-                );
-
-                usage_ratio = new_ratio;
             }
         }
 

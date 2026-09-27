@@ -92,9 +92,9 @@ struct GitHubReleaseAsset {
     browser_download_url: String,
 }
 
-const STABLE_UPDATER_JSON_URL: &str =
+pub const STABLE_UPDATER_JSON_URL: &str =
     "https://github.com/lbjlaq/Antigravity-Manager/releases/latest/download/updater.json";
-const PREVIEW_UPDATER_JSON_URL: &str =
+pub const PREVIEW_UPDATER_JSON_URL: &str =
     "https://github.com/lbjlaq/Antigravity-Manager/releases/download/preview/updater.json";
 
 pub fn get_upstream_proxy_url() -> Option<String> {
@@ -236,18 +236,18 @@ async fn check_updater_json_channel(channel: UpdateChannel) -> Result<UpdateInfo
 
     let response = client.get(target_url).send().await;
 
-    // 如果 preview updater.json 未找到（例如尚未发布 preview tag），且是 Beta 模式，尝试从 GitHub API 获取最新 prerelease 的 updater.json asset
-    let response = match response {
-        Ok(res) if res.status().is_success() => res,
+    let (response, actual_url) = match response {
+        Ok(res) if res.status().is_success() => (res, target_url.to_string()),
         other => {
             if channel == UpdateChannel::Beta {
                 logger::log_info("Preview updater.json endpoint unavailable, checking latest prerelease assets from GitHub API...");
                 if let Ok(asset_url) = fetch_prerelease_updater_json_url(&client).await {
-                    client
+                    let res = client
                         .get(&asset_url)
                         .send()
                         .await
-                        .map_err(|e| format!("Request failed: {}", e))?
+                        .map_err(|e| format!("Request failed: {}", e))?;
+                    (res, asset_url)
                 } else {
                     let err_msg = match other {
                         Ok(res) => format!("status {}", res.status()),
@@ -305,7 +305,7 @@ async fn check_updater_json_channel(channel: UpdateChannel) -> Result<UpdateInfo
         source: Some(format!("{:?} updater.json", channel)),
         proxy_url: None,
         channel: Some(channel),
-        updater_json_url: Some(target_url.to_string()),
+        updater_json_url: Some(actual_url),
     })
 }
 
@@ -421,7 +421,10 @@ async fn check_github_api_channel(channel: UpdateChannel) -> Result<UpdateInfo, 
         source: Some(format!("GitHub API ({:?})", channel)),
         proxy_url: None,
         channel: Some(channel),
-        updater_json_url: None,
+        updater_json_url: match channel {
+            UpdateChannel::Beta => Some(PREVIEW_UPDATER_JSON_URL.to_string()),
+            UpdateChannel::Stable => Some(STABLE_UPDATER_JSON_URL.to_string()),
+        },
     })
 }
 
@@ -487,12 +490,12 @@ async fn check_static_url(url: &str, source_name: &str) -> Result<UpdateInfo, St
         source: Some(source_name.to_string()),
         proxy_url: None,
         channel: Some(UpdateChannel::Stable),
-        updater_json_url: None,
+        updater_json_url: Some(STABLE_UPDATER_JSON_URL.to_string()),
     })
 }
 
 /// Compare two semantic versions (supports pre-release tags like "4.8.1-beta.2" vs "4.8.1-beta.1")
-fn compare_versions(latest: &str, current: &str) -> bool {
+pub fn compare_versions(latest: &str, current: &str) -> bool {
     let parse_semver = |v: &str| -> (Vec<u32>, Option<(String, u32)>) {
         let clean = v.trim().trim_start_matches('v');
         if let Some((main_part, pre_part)) = clean.split_once('-') {

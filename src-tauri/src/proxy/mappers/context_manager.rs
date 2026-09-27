@@ -390,82 +390,6 @@ impl ContextManager {
         total
     }
 
-    // ===== [Layer 2] Thinking Content Compression + Signature Preservation =====
-    // Borrowed from learn-claude-code's "append-only log" principle
-    // This layer compresses thinking text but PRESERVES signatures
-    // Advantage: Signature chain remains intact, tool calls won't break
-    // Disadvantage: Still breaks Prompt Cache (modifies content)
-
-    /// Compress thinking content while preserving signatures
-    ///
-    /// This function:
-    /// 1. Keeps signatures intact (critical for tool call chain)
-    /// 2. Compresses thinking text to "..." placeholder
-    /// 3. Protects the last N messages from compression
-    ///
-    /// Returns true if any thinking blocks were compressed
-    pub fn compress_thinking_preserve_signature(
-        messages: &mut Vec<Message>,
-        protected_last_n: usize,
-    ) -> bool {
-        let total_msgs = messages.len();
-        if total_msgs == 0 {
-            return false;
-        }
-
-        let start_protection_idx = total_msgs.saturating_sub(protected_last_n);
-        let mut compressed_count = 0;
-        let mut total_chars_saved = 0;
-
-        for (i, msg) in messages.iter_mut().enumerate() {
-            // Skip protected messages
-            if i >= start_protection_idx {
-                continue;
-            }
-
-            // Only process assistant messages
-            if msg.role == "assistant" {
-                if let MessageContent::Array(blocks) = &mut msg.content {
-                    for block in blocks.iter_mut() {
-                        if let ContentBlock::Thinking {
-                            thinking,
-                            signature,
-                            ..
-                        } = block
-                        {
-                            // [FIX] When compressing thinking, clear signature to avoid Invalid signature errors
-                            // Signature is computed over original thinking content; keeping it with "..." causes
-                            // 400 INVALID_ARGUMENT: Invalid thought signature (Gemini) / Invalid signature (Claude).
-                            if thinking.len() > 10 {
-                                let original_len = thinking.len();
-                                *thinking = "...".to_string();
-                                // Clear signature when content is compressed
-                                *signature = None;
-                                compressed_count += 1;
-                                total_chars_saved += original_len - 3;
-
-                                debug!(
-                                    "[ContextManager] [Layer-2] Compressed thinking: {} → 3 chars (signature cleared)",
-                                    original_len
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if compressed_count > 0 {
-            let estimated_tokens_saved = (total_chars_saved as f32 / 3.5).ceil() as u32;
-            info!(
-                "[ContextManager] [Layer-2] Compressed {} thinking blocks (saved ~{} tokens, signatures preserved)",
-                compressed_count, estimated_tokens_saved
-            );
-        }
-
-        compressed_count > 0
-    }
-
     // ===== [Layer 3 Helper] Extract Last Valid Signature =====
     // Used by Layer 3 to preserve signature when generating XML summary
 
@@ -627,19 +551,8 @@ impl ContextManager {
                     );
                     msg.reasoning_content = None;
                     modified = true;
-                } else if let Some(ref mut reasoning) = msg.reasoning_content {
-                    // [FIX #3382] For messages with tool calls, compress reasoning_content to "..."
-                    // instead of keeping full text, preserving structure while releasing token burden.
-                    if reasoning.len() > 10 {
-                        tracing::debug!(
-                            "[ContextManager] Purifying (compressing) reasoning_content of message {} with tool_calls (len: {})",
-                            i,
-                            reasoning.len()
-                        );
-                        *reasoning = "...".to_string();
-                        modified = true;
-                    }
                 }
+                // [REMOVED 2026-09-27] 带 tool_calls 的 reasoning 不再压缩为 "..."，保持原样透传。
             }
             if msg.role == "user" || msg.role == "assistant" {
                 if let Some(ref mut content) = msg.content {
@@ -923,39 +836,6 @@ impl ContextManager {
         }
 
         total
-    }
-
-    /// Compress thinking content in OpenAI request while keeping it in a lightweight representation
-    pub fn compress_openai_thinking_preserve_signature(
-        messages: &mut Vec<OpenAIMessage>,
-        protected_last_n: usize,
-    ) -> bool {
-        let total_msgs = messages.len();
-        if total_msgs == 0 {
-            return false;
-        }
-
-        let start_protection_idx = total_msgs.saturating_sub(protected_last_n);
-        let mut compressed_count = 0;
-
-        for (i, msg) in messages.iter_mut().enumerate() {
-            if i >= start_protection_idx {
-                continue;
-            }
-
-            if msg.role == "assistant" {
-                if let Some(ref mut reasoning) = msg.reasoning_content {
-                    // [FIX #3382] Even if the assistant message contains tool calls, compress reasoning_content
-                    // to "..." if it is long. Tool calls and their thoughtSignature remain intact on msg.tool_calls.
-                    if reasoning.len() > 10 {
-                        *reasoning = "...".to_string();
-                        compressed_count += 1;
-                    }
-                }
-            }
-        }
-
-        compressed_count > 0
     }
 
     /// Estimate token usage for a Gemini Request represented as serde_json::Value
@@ -1362,54 +1242,5 @@ mod tests {
             assert_eq!(blocks.len(), 1);
             assert!(matches!(blocks[0], ContentBlock::Text { .. }));
         }
-    }
-
-    #[test]
-    fn test_compress_openai_thinking_with_tool_calls() {
-        use crate::proxy::mappers::openai::models::{OpenAIContent, ToolCall, ToolFunction};
-        let mut messages = vec![
-            OpenAIMessage {
-                role: "assistant".into(),
-                refusal: None,
-                content: Some(OpenAIContent::String("read file".into())),
-                reasoning_content: Some(
-                    "a very very long chain of reasoning thoughts that exceeds 10 characters"
-                        .into(),
-                ),
-                signature: None,
-                tool_calls: Some(vec![ToolCall {
-                    id: "call_1".into(),
-                    r#type: "function".into(),
-                    function: Some(ToolFunction {
-                        name: "read_file".into(),
-                        arguments: "{}".into(),
-                    }),
-                    signature: None,
-                    status: None,
-                    call_id: None,
-                    operation: None,
-                }]),
-                tool_call_id: None,
-                name: None,
-            },
-            OpenAIMessage {
-                role: "user".into(),
-                refusal: None,
-                content: Some(OpenAIContent::String("latest user message".into())),
-                reasoning_content: None,
-                signature: None,
-                tool_calls: None,
-                tool_call_id: None,
-                name: None,
-            },
-        ];
-
-        // protected_last_n = 1 (protects the last user message, leaves index 0 eligible)
-        let modified =
-            ContextManager::compress_openai_thinking_preserve_signature(&mut messages, 1);
-        assert!(modified);
-        assert_eq!(messages[0].reasoning_content.as_deref(), Some("..."));
-        assert!(messages[0].tool_calls.is_some());
-        assert_eq!(messages[0].tool_calls.as_ref().unwrap().len(), 1);
     }
 }

@@ -13,7 +13,7 @@ import { showToast } from './ToastContainer';
 // 1. SUGGESTION_DELETE_THINKING_STORE:
 //    - true:  开启本版本建议（若检测到老用户升级且有旧缓存，会弹窗提醒一次）
 //    - false: 关闭建议（任何用户升级都不会弹窗打扰）
-export const SUGGESTION_DELETE_THINKING_STORE = true;
+export const SUGGESTION_DELETE_THINKING_STORE = false;
 
 // 2. SUGGESTION_TARGET_VERSION:
 //    - 建议清理的目标版本号 / 批次号（例如 "4.8.2"）。

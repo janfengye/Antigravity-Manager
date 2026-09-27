@@ -349,13 +349,19 @@ pub fn wrap_request_v2(
                             .and_then(|s| s.as_str())
                             .map(str::to_string);
 
-                        // 空思考块处理
-                        let text = if text.is_empty() { "..." } else { text };
-
-                        // 占位思考规整 (对齐 Anthropic)
+                        // [2026-09-27] 占位思考块直接丢弃（不写思考块）。
+                        // 官方样本（baogao.txt）9/24 轮是「无思考块 + 锚点带签名」，
+                        // 空 / "." / "..." / 空格 / "·" 等占位思考无信息量，不出站。
                         let is_placeholder =
                             crate::proxy::thinking_store::is_placeholder_thought(text);
-                        let final_thought_text = if is_placeholder { "..." } else { text.trim() };
+                        if is_placeholder || text.trim().is_empty() {
+                            tracing::debug!(
+                                "[Gemini-Wrap] Placeholder thinking part dropped (text={:?}).",
+                                &text[..text.len().min(20)],
+                            );
+                            continue;
+                        }
+                        let final_thought_text = text.trim();
 
                         // 位置检查：思考块必须是首位部件，若之前已有非思考内容则降级为文本
                         if saw_non_thinking || !new_parts.is_empty() {
@@ -2030,23 +2036,16 @@ mod tests {
         let model_msg = &contents[0];
         let parts = model_msg["parts"].as_array().unwrap();
 
-        // Part 0 should be normalized from "·" to "..."
+        // 【2026-09-27】占位思考块（"·"）直接丢弃，不再归一为 "..."
+        // Part 0 should be the second (meaningful) thinking block, now promoted to the head
         assert_eq!(parts[0]["thought"], true);
-        assert_eq!(parts[0]["text"], "...");
-        // Part 0 signature should be preserved because it's valid length and compatible
-        assert_eq!(parts[0]["thoughtSignature"], valid_sig);
-
-        // Part 1 should be downgraded to text without thought: true
-        assert!(parts[1].get("thought").is_none());
         assert_eq!(
-            parts[1]["text"],
+            parts[0]["text"],
             "second thought block that should be downgraded"
         );
-        // Downgraded part should not carry thoughtSignature
-        assert!(parts[1].get("thoughtSignature").is_none());
 
-        // Part 2 remains regular text
-        assert_eq!(parts[2]["text"], "Regular model response");
+        // Part 1 remains regular text
+        assert_eq!(parts[1]["text"], "Regular model response");
     }
 
     #[test]

@@ -90,7 +90,12 @@ impl InboundThinkingPipeline {
         let trusts_signature = protocol.trusts_client_signature();
         let is_claude = target_model.to_lowercase().contains("claude");
 
-        // 0. 统一上下文结构对齐（Pipeline First 统一治理）：
+        // 0. 工具调用 ID 统一归一化治理（Pipeline First）：
+        // 彻底解决不同客户端在 tool call ID 格式上不一致（如缺少下划线 `call573077` vs `call_573077`）的问题，
+        // 将 `functionCall.id` 与 `functionResponse.id` 统一对齐为带 `_` 的标准形态 (`call_...`)。
+        Self::normalize_tool_call_ids(contents);
+
+        // 0.1 统一上下文结构对齐（Pipeline First 统一治理）：
         // 将连续的 user 消息直到下一个 model，统一合并为一个 user 轮次的多个 block (parts)，保持严格顺序。
         // 这彻底消除了 Adapter 层各自为政导致的轮次错位，使得四大协议进入流水线后结构 100% 同构！
         // 连续 user 轮**保持独立**（对齐官方形态）。
@@ -126,6 +131,9 @@ impl InboundThinkingPipeline {
                     let mut thinking_part = None;
                     let mut extra_thinking_parts = Vec::new();
                     let mut other_parts = Vec::new();
+                    // [2026-09-27] 占位思考块被丢弃时，若其携带真实签名则暂存于此，
+                    // 组装阶段转挂到该轮第一个非思考 part（锚点）。
+                    let mut placeholder_sig: Option<String> = None;
 
                     for mut part in parts.drain(..) {
                         // 铁律：只认 thought: true。真机报文的正文 part 同样携带签名，
@@ -197,14 +205,35 @@ impl InboundThinkingPipeline {
                                 }
                             }
 
-                            // 保留真实原始思考文本的尾部换行与空白，绝不进行破坏性 trim，保证与上一轮流式输出字节级严格一致
-                            let final_thought_text = if (is_placeholder || text.trim().is_empty())
-                                && effective_sig.is_none()
-                            {
-                                "..."
-                            } else {
-                                text
-                            };
+                            // [2026-09-27] 占位思考块直接丢弃（不写思考块），签名照常落锚点。
+                            //
+                            // 官方样本（baogao.txt 24 轮）：9 轮无思考块但首非思考 part 带签名，
+                            // 「无思考块 + 锚点带签名」是官方标准形态。占位思考块（空 /
+                            // "." / "..." / 空格 / "·" 等）无信息量，不该出现在出站报文中：
+                            // 它曾是网关"防御性占位"的产物（FIX #3382 / Layer-2 压缩已移除）。
+                            //
+                            // 若占位块本身携带真实签名（客户端把签名误挂在思考块上），
+                            // 签名不随思考块丢弃 —— 摘出后挂到第一个非思考 part（锚点），
+                            // finalize 的 place_turn_signature 会按锚点规则最终归位。
+                            let text_trimmed = text.trim();
+                            if is_placeholder || text_trimmed.is_empty() {
+                                if let Some(ref sig) = effective_sig {
+                                    // 占位思考块携带的签名：转移给该轮锚点（首个非思考 part）
+                                    placeholder_sig = Some(sig.clone());
+                                    tracing::debug!(
+                                        "[InboundPipeline] Placeholder thought block dropped; its signature (len: {}) kept for anchor backfill.",
+                                        sig.len(),
+                                    );
+                                } else {
+                                    tracing::debug!(
+                                        "[InboundPipeline] Placeholder thought block dropped (text={:?}).",
+                                        text_trimmed,
+                                    );
+                                }
+                                continue;
+                            }
+
+                            let final_thought_text = text;
 
                             let mut thought_obj = json!({
                                 "text": final_thought_text,
@@ -222,11 +251,6 @@ impl InboundThinkingPipeline {
                                 // 也不因此关闭思考：那会反向改写历史轮语义。
                                 if is_claude {
                                     thought_obj["thoughtSignature"] = json!(sig);
-                                } else if is_placeholder {
-                                    tracing::warn!(
-                                        "[InboundPipeline] Placeholder thought block carried a signature (len: {}) — stripped as client-side pollution. I4: thought parts never carry signatures.",
-                                        sig.len(),
-                                    );
                                 } else {
                                     tracing::debug!(
                                         "[InboundPipeline] Stripped signature from thought block for Gemini target (len: {}). I4: thought parts never carry signatures.",
@@ -239,7 +263,7 @@ impl InboundThinkingPipeline {
                                 thinking_part = Some(thought_obj);
                             } else {
                                 // 多个思考块时，非首位的多余思考块降级为普通文本
-                                if !final_thought_text.is_empty() && final_thought_text != "..." {
+                                if !final_thought_text.is_empty() {
                                     extra_thinking_parts
                                         .push(json!({ "text": final_thought_text }));
                                 }
@@ -277,18 +301,17 @@ impl InboundThinkingPipeline {
                                     crate::proxy::thinking_store::extract_think_tags(raw_text)
                                 {
                                     if thinking_part.is_none() && is_thinking_enabled {
-                                        let final_thought = if extracted_thought.is_empty() {
-                                            "..."
-                                        } else {
-                                            extracted_thought.as_str()
-                                        };
-                                        // 铁律 I4：思考块绝不携带签名
-                                        // （官方报文里 thought:true 的 part 没有 thoughtSignature）
-                                        let t_obj = json!({
-                                            "text": final_thought,
-                                            "thought": true,
-                                        });
-                                        thinking_part = Some(t_obj);
+                                        if crate::proxy::thinking_store::is_meaningful_thought(
+                                            &extracted_thought,
+                                        ) {
+                                            // 铁律 I4：思考块绝不携带签名
+                                            // （官方报文里 thought:true 的 part 没有 thoughtSignature）
+                                            let t_obj = json!({
+                                                "text": extracted_thought.as_str(),
+                                                "thought": true,
+                                            });
+                                            thinking_part = Some(t_obj);
+                                        }
                                     }
                                     if !clean_visible.is_empty() {
                                         other_parts.push(json!({ "text": clean_visible }));
@@ -299,19 +322,17 @@ impl InboundThinkingPipeline {
                                 // 协议无关自愈：检查是否夹带旧版遗留思考前缀 (如 **Thinking**)
                                 if raw_text.trim_start().starts_with("**Thinking**") {
                                     let clean_thought = Self::strip_thinking_prefix(raw_text);
-                                    if thinking_part.is_none() {
-                                        // 历史无原生思考块时，将遗留思考文字提炼为合法的首位思考块
-                                        let final_thought = if clean_thought.trim().is_empty() {
-                                            "..."
-                                        } else {
-                                            &clean_thought
-                                        };
-                                        // 铁律 I4：思考块绝不携带签名
-                                        let t_obj = json!({
-                                            "text": final_thought,
-                                            "thought": true,
-                                        });
-                                        thinking_part = Some(t_obj);
+                                    if thinking_part.is_none() && is_thinking_enabled {
+                                        if crate::proxy::thinking_store::is_meaningful_thought(
+                                            &clean_thought,
+                                        ) {
+                                            // 铁律 I4：思考块绝不携带签名
+                                            let t_obj = json!({
+                                                "text": clean_thought,
+                                                "thought": true,
+                                            });
+                                            thinking_part = Some(t_obj);
+                                        }
                                     }
                                     // 若已有思考块，该遗留思考块作为陈旧副本剥离，防止二次污染正文
                                     continue;
@@ -331,6 +352,27 @@ impl InboundThinkingPipeline {
                     }
                     new_parts.extend(extra_thinking_parts);
                     new_parts.extend(other_parts);
+
+                    // [2026-09-27] 占位思考块被丢弃时的签名转移：
+                    // 若该轮思考块全部为占位/空（无 thinking_part），或占位块带真实签名，
+                    // 把签名挂到第一个非思考 part（锚点）——该锚点可能是正文 text 也可能
+                    // 是 functionCall。finalize 的 place_turn_signature 会按「锚点=首个
+                    // 非思考 part」规则最终归位；若此处已挂，place 也会摘用。
+                    //
+                    // ⚠️ 必须在 other_parts 合并之后查找锚点：占位思考丢弃后，若该轮
+                    // 首个非思考 part 是正文 text（含 extra_thinking 无、thinking_part 无时），
+                    // 锚点只存在于 other_parts —— 过早查找会漏挂签名。
+                    if let Some(sig) = placeholder_sig.take() {
+                        if let Some(anchor) = new_parts
+                            .iter_mut()
+                            .find(|p| !crate::proxy::thinking_store::is_thought_part(p))
+                        {
+                            if let Some(obj) = anchor.as_object_mut() {
+                                obj["thoughtSignature"] = json!(sig);
+                            }
+                        }
+                    }
+
                     *parts = new_parts;
                 } else {
                     // role == "user" 的通用进站治理：多模态工具响应 (functionResponse) 深度解构
@@ -387,6 +429,46 @@ impl InboundThinkingPipeline {
         //    必须放在**末位**：若前置，回执轮会进入上面的 `is_model` 分支，
         //    从而跳过 `role == "user"` 分支里的多模态解构（图片提升为 inlineData）。
         Self::normalize_function_response_roles(contents);
+    }
+
+    /// 工具调用 ID 统一规范化治理（Pipeline First）：
+    /// 规范化 contents 中所有的 `functionCall` 与 `functionResponse` 的 `id`，
+    /// 统一对齐为带下划线的标准形态 (`call_...`)，杜绝客户端格式漂移导致的签名与思考回填脱落。
+    ///
+    /// 返回被规范化的 ID 数量。
+    pub fn normalize_tool_call_ids(contents: &mut [Value]) -> usize {
+        let mut normalized_count = 0usize;
+        for content in contents.iter_mut() {
+            if let Some(parts) = content.get_mut("parts").and_then(|p| p.as_array_mut()) {
+                for part in parts.iter_mut() {
+                    if let Some(fc) = part.get_mut("functionCall") {
+                        if let Some(id_val) = fc.get("id").and_then(|v| v.as_str()) {
+                            let norm = crate::proxy::common::utils::normalize_tool_id(id_val);
+                            if norm.as_ref() != id_val {
+                                fc["id"] = serde_json::json!(norm.as_ref());
+                                normalized_count += 1;
+                            }
+                        }
+                    }
+                    if let Some(fr) = part.get_mut("functionResponse") {
+                        if let Some(id_val) = fr.get("id").and_then(|v| v.as_str()) {
+                            let norm = crate::proxy::common::utils::normalize_tool_id(id_val);
+                            if norm.as_ref() != id_val {
+                                fr["id"] = serde_json::json!(norm.as_ref());
+                                normalized_count += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if normalized_count > 0 {
+            tracing::debug!(
+                "[InboundPipeline] Normalized {} tool call/response ID(s) to canonical 'call_...' format",
+                normalized_count
+            );
+        }
+        normalized_count
     }
 
     /// 把工具回执（`functionResponse`）轮的 role 归一化为官方 Antigravity 形态。
@@ -1548,5 +1630,65 @@ mod tests {
         let n = InboundThinkingPipeline::normalize_function_response_roles(&mut contents);
         assert_eq!(n, 0);
         assert_eq!(contents[0]["role"], "user");
+    }
+
+    /// 测试工具调用与回执 ID 统一归一化为 call_ 规范形态
+    #[test]
+    fn test_normalize_tool_call_ids() {
+        let mut contents = vec![
+            json!({"role": "user", "parts": [{"text": "read file"}]}),
+            json!({
+                "role": "model",
+                "parts": [
+                    {
+                        "functionCall": {
+                            "name": "read",
+                            "id": "call573077",
+                            "args": {"path": "USER.md"}
+                        }
+                    }
+                ]
+            }),
+            json!({
+                "role": "user",
+                "parts": [
+                    {
+                        "functionResponse": {
+                            "name": "read",
+                            "id": "call573077",
+                            "response": {"result": "hello"}
+                        }
+                    }
+                ]
+            }),
+            json!({
+                "role": "model",
+                "parts": [
+                    {
+                        "functionCall": {
+                            "name": "exec",
+                            "id": "call_1542346", // 已带下划线，保持原样
+                            "args": {"command": "ls"}
+                        }
+                    }
+                ]
+            }),
+        ];
+
+        let count = InboundThinkingPipeline::normalize_tool_call_ids(&mut contents);
+        assert_eq!(count, 2, "应归一化 2 个丢失下划线的 tool call/response ID");
+
+        // functionCall 验证
+        assert_eq!(contents[1]["parts"][0]["functionCall"]["id"], "call_573077");
+        // functionResponse 验证
+        assert_eq!(
+            contents[2]["parts"][0]["functionResponse"]["id"],
+            "call_573077"
+        );
+        // 原生已带下划线不受影响
+        assert_eq!(
+            contents[3]["parts"][0]["functionCall"]["id"],
+            "call_1542346"
+        );
     }
 }

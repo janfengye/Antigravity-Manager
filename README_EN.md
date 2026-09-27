@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> Professional Account Management & Protocol Proxy System for AI Services (v4.8.3)
+> Professional Account Management & Protocol Proxy System for AI Services (v4.8.4)
 
 <div align="center">
   <img src="public/icon.png" width="100" height="100" alt="Antigravity Tools Logo">
@@ -11,7 +11,7 @@
       <img src="https://img.shields.io/github/v/release/lbjlaq/Antigravity-Manager?color=blue&style=flat-square" alt="GitHub release">
     </a>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.8.3-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.8.4-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -483,7 +483,7 @@ In clients that support OpenAI protocol (e.g., Cherry Studio), you can configure
 
 ## 📝 Changelog
 
-> Latest version **v4.8.3** (2026-09-27): Re-reversed the 9.25-night Antigravity upstream payload restructuring (functionResponse moved to model turns; any-turn first non-thinking part may carry a signature), fixed the signature swing algorithm by decoupling capture/backfill from tool_id, and eliminated thinking-chain break dead loops; stopped injecting a fabricated user turn on trailing tool turns, stopping agent tool loops; removed contradictory toolConfig duplicate writes and system-prompt/tool-description injections for a field-for-field official envelope; routed Layer-3 summaries through the auxiliary client with proxy hot-reload and aligned quota/project endpoints to official Daily->Sandbox->Prod; added configurable account pool priority and official reset_time weekly stats, dual-channel in-app updates, vendor identity normalization, and 100% verbatim tool passthrough.
+> Latest version **v4.8.4** (2026-09-27): Universal Tool Call ID canonicalization across pipeline, cache, and DB to eliminate multi-turn tool call 400 'missing thought_signature' errors (Fixes #3529, #3531, thanks to @Mortalit, @ddmixi); completely eliminated destructive Base64 decoding in Claude adapter, added native Protobuf signature support and full-pipeline in-place database write-back self-healing; dropped synthesized placeholder thinking blocks and ensured the first non-thought part in every turn carries the authoritative signature; added `check_native_update` native updater command with dynamic updater endpoints and browser download fallback; added Beta Docker pull instructions and JeikCode integration guide.
 
 👉 **[View Full Changelog → CHANGELOG_EN.md](CHANGELOG_EN.md)**
 
