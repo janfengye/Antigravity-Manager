@@ -186,10 +186,11 @@ brew install --cask antigravity-tools
 ### 选项 C: Docker 部署 (推荐用于 NAS/服务器)
 如果您希望在容器化环境中运行，我们提供了原生的 Docker 镜像。该镜像内置了对 v4.0.2 原生 Headless 架构的支持，可自动托管前端静态资源，并通过浏览器直接进行管理。
 
+#### 方式 1: 直接运行 (推荐)
+- **API_KEY**: 必填。用于所有协议的 AI 请求鉴权。
+- **WEB_PASSWORD**: 可选。用于管理后台登录。若不设置则默认使用 API_KEY。
+
 ```bash
-# 方式 1: 直接运行 (推荐)
-# - API_KEY: 必填。用于所有协议的 AI 请求鉴定。
-# - WEB_PASSWORD: 可选。用于管理后台登录。若不设置则默认使用 API_KEY。
 docker run -d --name antigravity-manager \
   -p 8045:8045 \
   -e API_KEY=sk-your-api-key \
@@ -199,6 +200,25 @@ docker run -d --name antigravity-manager \
   lbjlaq/antigravity-manager:latest
 
 # 忘记密钥？执行 docker logs antigravity-manager 或 grep -E '"api_key"|"admin_password"' ~/.antigravity_tools/gui_config.json
+```
+
+> [!TIP]
+> **🧪 Beta / 预览版镜像拉取**：
+> 若需使用最新的 Beta 预发布特性，请直接指定对应的 Beta 版本 Tag（预发布版本独立发布，不会覆盖 `latest` 稳定版标签）：
+> ```bash
+> # 拉取指定 Beta 预发布版本 (可在 Docker Hub 查看所有可用版本)
+> docker pull lbjlaq/antigravity-manager:v4.8.2-beta.0
+> 
+> # 运行 Beta 容器
+> docker run -d --name antigravity-manager-beta \
+>   -p 8045:8045 \
+>   -e API_KEY=sk-your-api-key \
+>   -e WEB_PASSWORD=your-login-password \
+>   -e ABV_MAX_BODY_SIZE=104857600 \
+>   -v ~/.antigravity_tools:/root/.antigravity_tools \
+>   lbjlaq/antigravity-manager:v4.8.2-beta.0
+> ```
+> 查看所有已发布的 Beta 镜像：[Docker Hub Tags](https://hub.docker.com/r/lbjlaq/antigravity-manager/tags)；若需直接运行未发版 Tag 的最新 `beta` 分支源码，可在本地直接构建：`docker build -t lbjlaq/antigravity-manager:beta -f docker/Dockerfile .`。
 
 #### 🔐 鉴权逻辑说明
 *   **场景 A：仅设置了 `API_KEY`**
@@ -221,10 +241,10 @@ docker run -d --name antigravity-manager \
 > - **第二优先级 (配置文件)**: `gui_config.json` 中的 `admin_password` 字段。UI 的“保存”操作会更新此值。
 > - **保底回退 (向后兼容)**: 若上述均未设置，则回退使用 `API_KEY` 作为登录密码。
 
-# 方式 2: 使用 Docker Compose
-# 1. 进入项目的 docker 目录
+#### 方式 2: 使用 Docker Compose
+1. 进入项目的 `docker` 目录并启动服务：
+```bash
 cd docker
-# 2. 启动服务
 docker compose up -d
 ```
 > **日志轮转**: Compose 默认将 JSON 日志限制为单文件 `100m`、保留 `3` 个文件，避免日志无限增长。
@@ -275,6 +295,21 @@ env WEBKIT_DISABLE_DMABUF_RENDERER=1 ANTIGRAVITY_FORCE_WAYLAND=1 antigravity-too
 4. 应用会自动继续完成授权并保存账号；如未自动完成，可点击“我已授权，继续”手动完成。
 
 > 提示：授权链接包含一次性回调端口，请始终使用弹窗里生成的最新链接；如果授权时应用未运行或弹窗已关闭，浏览器可能会提示 `localhost refused connection`。
+
+### 如何接入 JeikCode? (推荐)
+[JeikCode](https://github.com/jeikl/JeikCode) 是由本项目核心维护者深度打造的现代终端 AI Coding Agent 工具，原生深度兼容本网关，实现 **95%+ 的超高 KV-Cache 缓存命中率**与深度思维链支持。
+1. **界面一键同步（最推荐）**：
+   - 打开 Antigravity-Manager 并开启 **API 反代** 服务。
+   - 切换至 **`>_ Agent工具一键配置`** 标签页。
+   - 在首个 **JeikCode** 卡片选择默认模型（如 `gemini-3.8-flash-high`），点击 **`🔄 立即同步配置`**。
+   - 终端直接运行 `jeikcode` 即可运行 TUI，**强烈推荐在终端输入 `/webui` 即可打开精美的网页端，开箱即用，享受更棒的可视化编程体验！**
+2. **环境变量临时接入**：
+```bash
+export ANTHROPIC_BASE_URL="http://127.0.0.1:8045"
+export ANTHROPIC_API_KEY="sk-antigravity"
+jeikcode --model claude-sonnet-4-6-thinking
+```
+> 更多高级配置与排查指南参见：[JeikCode 接入 Antigravity-Manager 指南](./docs/jeikcode_integration.md)
 
 ### 如何接入 Claude Code CLI?
 1.  启动 Antigravity，并在“API 反代”页面开启服务。

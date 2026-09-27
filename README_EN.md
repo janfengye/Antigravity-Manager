@@ -185,10 +185,11 @@ Download from [GitHub Releases](https://github.com/lbjlaq/Antigravity-Manager/re
 ### Option C: Docker Deployment (Recommended for NAS/Servers)
 If you prefer running in a containerized environment, we provide a native Docker image. This image supports the v4.0.3 Native Headless architecture, automatically hosts frontend static resources, and allows for direct browser-based management.
 
+#### Option 1: Direct Run (Recommended)
+- **API_KEY**: Required. Used for AI request authentication.
+- **WEB_PASSWORD**: Optional. Used for Web UI login. Defaults to API_KEY if NOT set.
+
 ```bash
-# Option 1: Direct Run (Recommended)
-# - API_KEY: Required. Used for AI request authentication.
-# - WEB_PASSWORD: Optional. Used for Web UI login. Defaults to API_KEY if NOT set.
 docker run -d --name antigravity-manager \
   -p 8045:8045 \
   -e API_KEY=sk-your-api-key \
@@ -198,6 +199,25 @@ docker run -d --name antigravity-manager \
   lbjlaq/antigravity-manager:latest
 
 # Forgot keys? Run `docker logs antigravity-manager` or `grep -E '"api_key"|"admin_password"' ~/.antigravity_tools/gui_config.json`
+```
+
+> [!TIP]
+> **🧪 Pulling Beta / Preview Images**:
+> To test the latest Beta pre-release features, specify the corresponding Beta version tag (pre-releases are published independently and will never overwrite the `latest` stable tag):
+> ```bash
+> # Pull a specific Beta pre-release version (check Docker Hub for all tags)
+> docker pull lbjlaq/antigravity-manager:v4.8.2-beta.0
+> 
+> # Run Beta container
+> docker run -d --name antigravity-manager-beta \
+>   -p 8045:8045 \
+>   -e API_KEY=sk-your-api-key \
+>   -e WEB_PASSWORD=your-login-password \
+>   -e ABV_MAX_BODY_SIZE=104857600 \
+>   -v ~/.antigravity_tools:/root/.antigravity_tools \
+>   lbjlaq/antigravity-manager:v4.8.2-beta.0
+> ```
+> View all published Beta tags on [Docker Hub Tags](https://hub.docker.com/r/lbjlaq/antigravity-manager/tags). If you wish to run the unreleased bleeding-edge `beta` branch directly, build locally: `docker build -t lbjlaq/antigravity-manager:beta -f docker/Dockerfile .`.
 
 #### 🔐 Authentication Scenarios
 *   **Scenario A: Only `API_KEY` is set**
@@ -220,10 +240,10 @@ If you are upgrading from v4.0.1 or earlier, your installation won't have a `WEB
 > - **Configuration File** (`gui_config.json`) is used for persistent storage. When you change the password via Web UI and save, it is written here.
 > - **Fallback**: If neither is set, it falls back to `API_KEY`; if even `API_KEY` is missing, a random one is generated.
 
-# Option 2: Use Docker Compose
-# 1. Enter the Docker directory
+#### Option 2: Use Docker Compose
+1. Enter the `docker` directory and start the service:
+```bash
 cd docker
-# 2. Start the service
 docker compose up -d
 ```
 > **Log rotation**: Compose limits JSON logs to `100m` per file and keeps `3` files by default to prevent unbounded growth.
@@ -265,6 +285,21 @@ env WEBKIT_DISABLE_DMABUF_RENDERER=1 ANTIGRAVITY_FORCE_WAYLAND=1 antigravity-too
 4. The app automatically continues the flow and saves the account; if it doesn’t, click “I already authorized, continue” to finish manually.
 
 > Note: the auth URL contains a one-time local callback port. Always use the latest URL shown in the dialog. If the app isn’t running or the dialog is closed during auth, the browser may show `localhost refused connection`.
+
+### How to use with JeikCode? (Recommended)
+[JeikCode](https://github.com/jeikl/JeikCode) is a modern terminal AI Coding Agent crafted by the core maintainer of this project, featuring native deep integration with Antigravity-Manager, delivering **95%+ KV-Cache hit rate** and seamless reasoning level control.
+1. **One-Click Sync via GUI (Recommended)**:
+   - Launch Antigravity-Manager and ensure the **API Proxy** service is running.
+   - Switch to the **`>_ Agent Tools One-Click Configuration`** tab.
+   - Locate the **JeikCode** card, choose your desired default model (e.g. `gemini-3.8-flash-high`), and click **`🔄 Sync Now`**.
+   - Simply run `jeikcode` in your terminal for the TUI, **and type `/webui` to instantly launch the modern WebUI in your browser for a richer visual coding experience out of the box!**
+2. **Temporary Environment Variables**:
+```bash
+export ANTHROPIC_BASE_URL="http://127.0.0.1:8045"
+export ANTHROPIC_API_KEY="sk-antigravity"
+jeikcode --model claude-sonnet-4-6-thinking
+```
+> For complete manual configuration and tuning, see the [JeikCode Integration Guide](./docs/jeikcode_integration.md).
 
 ### How to use with Claude Code CLI?
 1. Start Antigravity service in the "API Proxy" tab.
