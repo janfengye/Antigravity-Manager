@@ -39,7 +39,15 @@ where
 
     // 1. 收集所有 SSE 事件
     while let Some(chunk_result) = stream.next().await {
-        let chunk = chunk_result.map_err(|e| format!("Stream error: {}", e))?;
+        let chunk = chunk_result.map_err(|e| {
+            crate::proxy::mappers::error_classifier::report_stream_error(
+                "claude-collector",
+                "collect_stream_to_json",
+                &e,
+                "protocol=claude",
+            )
+            .client_message()
+        })?;
         let text = String::from_utf8_lossy(&chunk);
 
         for line in text.lines() {

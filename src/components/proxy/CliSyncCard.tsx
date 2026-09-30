@@ -87,11 +87,11 @@ export const CliSyncCard = ({ proxyUrl, apiKey, className }: CliSyncCardProps) =
     const [hermesSyncModal, setHermesSyncModal] = useState(false);
     const [openClawSyncModal, setOpenClawSyncModal] = useState(false);
     const [selectedModels, setSelectedModels] = useState<Record<CliAppType, string>>({
-        Claude: 'claude-3-5-sonnet-latest',
-        Codex: 'gpt-4o',
+        Claude: 'claude-sonnet-4-6',
+        Codex: 'gpt-oss-120b-medium',
         JeikCode: 'gemini-3.8-flash-high',
-        GrokBuild: 'gemini-3.8-flash',
-        Gemini: 'gemini-1.5-pro',
+        GrokBuild: 'gemini-3.8-flash-high',
+        Gemini: 'gemini-3.1-pro-high',
         OpenCode: '',
         Droid: '',
         Hermes: '',

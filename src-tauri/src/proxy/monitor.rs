@@ -286,6 +286,10 @@ impl ProxyMonitor {
                     tracing::error!("Failed to cleanup thinking records: {}", e);
                 }
             }
+            crate::modules::logger::sync_internal_error_log_budget_from_config();
+            if let Err(e) = crate::modules::logger::apply_internal_error_log_retention() {
+                tracing::error!("Failed to apply internal error log retention: {}", e);
+            }
         });
 
         tokio::spawn(async {
@@ -301,11 +305,14 @@ impl ProxyMonitor {
                     let retention_res = crate::modules::proxy_db::apply_retention(&retention);
                     let thinking_res =
                         crate::modules::proxy_db::cleanup_old_thinking_records(thinking_days);
-                    (retention_res, thinking_res)
+                    crate::modules::logger::sync_internal_error_log_budget_from_config();
+                    let error_log_res =
+                        crate::modules::logger::apply_internal_error_log_retention();
+                    (retention_res, thinking_res, error_log_res)
                 })
                 .await;
                 match result {
-                    Ok((retention_res, thinking_res)) => {
+                    Ok((retention_res, thinking_res, error_log_res)) => {
                         match retention_res {
                             Ok((cleared, deleted)) => {
                                 if cleared > 0 || deleted > 0 {
@@ -329,6 +336,9 @@ impl ProxyMonitor {
                             }
                         } else if let Err(e) = thinking_res {
                             tracing::error!("Failed to cleanup thinking records: {}", e);
+                        }
+                        if let Err(e) = error_log_res {
+                            tracing::error!("Failed to apply internal error log retention: {}", e);
                         }
                     }
                     Err(error) => tracing::error!("Proxy log retention task failed: {}", error),

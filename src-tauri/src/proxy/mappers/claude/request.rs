@@ -384,7 +384,7 @@ pub fn transform_claude_request_in(
     token: Option<&crate::proxy::token_manager::ProxyToken>,
 ) -> Result<Value, String> {
     transform_claude_request_in_timed(
-        claude_req, project_id, is_retry, account_id, session_id, token,
+        claude_req, project_id, is_retry, account_id, session_id, session_id, token,
     )
     .map(|(body, _)| body)
 }
@@ -394,7 +394,8 @@ pub fn transform_claude_request_in_timed(
     project_id: &str,
     is_retry: bool,
     account_id: Option<&str>,
-    _session_id: &str,
+    thinking_session_id: &str,
+    _upstream_session_id: &str,
     token: Option<&crate::proxy::token_manager::ProxyToken>, // [NEW] 支持动态规格
 ) -> Result<(Value, TransformTiming), String> {
     let mut timing = TransformTiming::default();
@@ -461,8 +462,8 @@ pub fn transform_claude_request_in_timed(
     }
     cleaned_req.messages = filtered_messages;
 
-    // [FIX #813] 合并连续的同角色消息 (Consecutive User Messages)
-    // 确保请求符合 Anthropic 和 Gemini 的角色交替协议
+    // [FIX #813] Anthropic / z.ai 要求角色交替。这里只做源协议的相邻同角色归一。
+    // 转成 Gemini contents 之后，相邻 user / model / functionResponse 的合并由进站流水线负责。
     merge_consecutive_messages(&mut cleaned_req.messages);
 
     clean_cache_control_from_messages(&mut cleaned_req.messages);
@@ -491,9 +492,9 @@ pub fn transform_claude_request_in_timed(
 
     let claude_req = &cleaned_req; // 后续使用清理后的请求
 
-    // Prefer the handler-resolved session id (tenant + X-Session-Id) when provided.
-    let session_id = if !_session_id.is_empty() {
-        _session_id.to_string()
+    // 思维库和上游 sessionId 都用带锚点的 store key。账号粘性不经过这里。
+    let session_id = if !thinking_session_id.is_empty() {
+        thinking_session_id.to_string()
     } else {
         SessionManager::extract_session_id(claude_req)
     };
@@ -678,8 +679,16 @@ pub fn transform_claude_request_in_timed(
 
     if let Some(tools_val) = tools {
         inner_request["tools"] = tools_val;
-        // [REMOVED v4.8.2] toolConfig / tool_config 双写已移除：官方 Antigravity 报文不带该字段，
-        // 且 camelCase 与 snake_case 双份会写出一对矛盾配置 (VALIDATED)。已在协议无关节点统一移除。
+    }
+
+    // [tool_choice] 客户端有就传，没有就不传：
+    // 若客户端显式指定了 tool_choice，将其规范化映射为标准的 Gemini toolConfig
+    if let Some(tool_choice) = &claude_req.tool_choice {
+        if let Some(gemini_tc) =
+            crate::proxy::mappers::common_utils::map_claude_tool_choice_to_gemini(tool_choice)
+        {
+            inner_request["toolConfig"] = gemini_tc;
+        }
     }
 
     // [PIPELINE] 统一清洗提示词与风控伪 Header（含 [undefined] 深度清理，见 PromptSanitizer）
@@ -731,12 +740,11 @@ pub fn transform_claude_request_in_timed(
     // [ADDED v4.1.24] 注入稳定 sessionId 对齐官方规范
     // [FIX session-1M] 混入对话指纹与代数,不同对话隔离服务端会话,1M 累计报错后 bump 自愈
     if let Some(account_id) = account_id {
-        let generation = crate::proxy::common::session::current_bump(account_id, &session_id);
-        inner_request["sessionId"] = json!(crate::proxy::common::session::derive_session_scoped(
+        crate::proxy::common::session::apply_upstream_session(
+            &mut inner_request,
             account_id,
             &session_id,
-            generation
-        ));
+        );
     }
 
     // 生成 requestId —— 官方 5 段形态，三适配器共用。
@@ -750,8 +758,10 @@ pub fn transform_claude_request_in_timed(
         super::super::common_utils::resolve_official_fingerprint(token);
 
     // [CACHE] 统一委托进站流水线进行前缀拓扑规范化与对齐（Pipeline First 核心归一）
-    crate::proxy::pipeline::InboundThinkingPipeline::align_google_request_prefix_topology(
+    crate::proxy::pipeline::InboundThinkingPipeline::align_google_request_prefix_topology_with_model(
         &mut inner_request,
+        &config.final_model,
+        Some(&request_id),
     );
     let reordered_inner = inner_request;
 
@@ -768,23 +778,22 @@ pub fn transform_claude_request_in_timed(
     let is_agent_request =
         config.request_type != "image_gen" && (has_tools || has_tool_interactions);
 
-    // 构建最终请求体 (顶层键序稳定: project -> request -> model -> userAgent -> requestId)
+    // 构建最终请求体 (顶层键序对齐官方: project -> requestId -> request -> model -> userAgent -> requestType)
     let mut body = json!({
         "project": project_id,
+        "requestId": request_id,
         "request": reordered_inner,
         "model": config.final_model,
         "userAgent": official_user_agent,
-        "requestId": request_id,
     });
 
     if config.request_type == "image_gen" {
         body["requestType"] = json!("image_gen");
     } else if is_agent_request {
         body["requestType"] = json!("agent");
-        if let Some(obj) = body.as_object_mut() {
-            obj.insert("enabledCreditTypes".to_string(), json!(["GOOGLE_ONE_AI"]));
-        }
     }
+
+    crate::proxy::pipeline::InboundThinkingPipeline::align_official_envelope(&mut body);
 
     // [FIX #593] 最后一道防线: 递归深度清理所有 cache_control 字段
     // 确保发送给 Antigravity 的请求中不包含任何 cache_control
@@ -1026,10 +1035,27 @@ fn build_contents(
             }
         }
         MessageContent::Array(blocks) => {
+            let mut turn_tool_media_parts = Vec::new();
             for item in blocks {
                 match item {
                     ContentBlock::Text { text } => {
                         if text != "(no content)" && !text.trim().is_empty() {
+                            // [2026-09-27] 如果 assistant 消息同时包含 tool_use，且该文本仅为占位符（如 "..."、"·" 等），
+                            // 丢弃无实质意义的占位文本，避免在 Gemini 格式转换中被误选为签名锚点，
+                            // 导致上游 400 'Function call is missing a thought_signature in functionCall parts'
+                            if is_assistant
+                                && crate::proxy::thinking_store::is_placeholder_thought(text)
+                                && blocks
+                                    .iter()
+                                    .any(|b| matches!(b, ContentBlock::ToolUse { .. }))
+                            {
+                                tracing::debug!(
+                                    "[Claude-Request] Dropping placeholder text accompanying tool_use (text={:?})",
+                                    text
+                                );
+                                continue;
+                            }
+
                             // [NEW] 任务去重逻辑: 如果当前是 User 消息，且紧跟在 ToolResult 之后，
                             // 检查该文本是否与上一轮任务描述完全一致。
                             if !is_assistant && *previous_was_tool_result {
@@ -1339,24 +1365,9 @@ fn build_contents(
                                 }
                                 texts.join("\n")
                             }
+                            serde_json::Value::Null => String::new(),
                             _ => content.to_string(),
                         };
-
-                        // Smart Truncation: max chars limit
-                        const MAX_TOOL_RESULT_CHARS: usize = 200_000;
-                        if merged_content.len() > MAX_TOOL_RESULT_CHARS {
-                            tracing::warn!(
-                                "Truncating tool result from {} chars to {}",
-                                merged_content.len(),
-                                MAX_TOOL_RESULT_CHARS
-                            );
-                            let mut truncated = merged_content
-                                .chars()
-                                .take(MAX_TOOL_RESULT_CHARS)
-                                .collect::<String>();
-                            truncated.push_str("\n...[truncated output]");
-                            merged_content = truncated;
-                        }
 
                         // [优化] 如果结果为空，注入显式确认信号，防止模型幻觉
                         if merged_content.trim().is_empty() {
@@ -1371,7 +1382,7 @@ fn build_contents(
                         let part = json!({
                             "functionResponse": {
                                 "name": func_name,
-                                "response": {"result": merged_content},
+                                "response": {"output": merged_content},
                                 "id": tool_use_id
                             }
                         });
@@ -1379,10 +1390,8 @@ fn build_contents(
                         // 危险测试分支法则：ToolResult (functionResponse) 绝不携带签名
                         parts.push(part);
 
-                        // 追加图片 parts
-                        for extra in extra_parts {
-                            parts.push(extra);
-                        }
+                        // 暂存随行媒体 parts，确保同一轮中所有 functionResponse 置顶连续，多模态媒体统一延后追加
+                        turn_tool_media_parts.extend(extra_parts);
 
                         // 标记状态，用于下一条 User 消息的去重判断
                         *previous_was_tool_result = true;
@@ -1395,6 +1404,7 @@ fn build_contents(
                     }
                 }
             }
+            parts.extend(turn_tool_media_parts);
         }
     }
 
@@ -1415,7 +1425,7 @@ fn build_contents(
                     "functionResponse": {
                         "name": name,
                         "response": {
-                            "result": "Tool execution interrupted. No result provided."
+                            "output": "Tool execution interrupted. No result provided."
                         },
                         "id": id
                     }
@@ -1496,7 +1506,7 @@ fn build_google_content(
                     "functionResponse": {
                         "name": name,
                         "response": {
-                            "result": "Tool execution interrupted. No result provided."
+                            "output": "Tool execution interrupted. No result provided."
                         },
                         "id": id
                     }
@@ -1630,7 +1640,6 @@ fn build_google_contents(
     let think_start = std::time::Instant::now();
     crate::proxy::pipeline::InboundThinkingPipeline::process_contents(
         &mut contents,
-        crate::proxy::pipeline::ProxyProtocol::AnthropicClaude,
         mapped_model,
         should_finalize_thinking,
         Some(session_id),
@@ -1686,7 +1695,21 @@ fn build_tools(
         let mut function_declarations: Vec<Value> = Vec::new();
         let has_google_search = has_web_search;
 
+        let is_search_tool = |tool: &Tool| {
+            tool.is_web_search()
+                || tool.name.as_deref() == Some("google_search")
+                || tool.name.as_deref() == Some("builtin_web_search")
+                || tool.type_.as_deref() == Some("builtin_web_search")
+        };
+        // 只有搜索工具时，改映射为上游 googleSearch，不进客户端函数列表。
+        // 旁边还有 Bash/Read 等函数工具时，web_search 与其他协议一样留在 functionDeclarations。
+        let search_only =
+            !tools_list.is_empty() && tools_list.iter().all(|tool| is_search_tool(tool));
+
         for tool in tools_list {
+            if search_only && is_search_tool(tool) {
+                continue;
+            }
             let name = tool
                 .name
                 .as_deref()
@@ -1715,12 +1738,7 @@ fn build_tools(
         let supports_mixed_tools = false;
 
         if !function_declarations.is_empty() {
-            // [CACHE] 按 function name 稳定字典序排序，确保全协议 tool schema 字节完全一致
-            function_declarations.sort_by(|a, b| {
-                let name_a = a.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                let name_b = b.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                name_a.cmp(name_b)
-            });
+            // 保持客户端工具声明原序，不按 name 重排。
             let mut func_obj = serde_json::Map::new();
             func_obj.insert(
                 "functionDeclarations".to_string(),
@@ -1816,96 +1834,28 @@ fn build_generation_config(
             token,
         );
     } else if is_thinking_enabled && !crate::proxy::model_specs::is_gemini_under_v3(mapped_model) {
-        let mut thinking_config = json!({"includeThoughts": true});
-
-        let global_mode_is_adaptive = matches!(
-            tb_config.mode,
-            crate::proxy::config::ThinkingBudgetMode::Adaptive
+        crate::proxy::pipeline::InboundThinkingPipeline::configure_inbound_thinking(
+            mapped_model,
+            &mut config,
+            client_switch,
+            client_effort,
+            client_budget,
+            token,
         );
-        let user_is_adaptive = claude_req
-            .thinking
-            .as_ref()
-            .map(|t| t.type_ == "adaptive")
-            .unwrap_or(false);
-        let should_use_adaptive = (user_is_adaptive || global_mode_is_adaptive)
-            && mapped_model.to_lowercase().contains("claude");
-
-        if should_use_adaptive {
-            let mapped_level = match effort.map(|e| e.to_lowercase()).as_deref() {
-                Some("low") => "LOW",
-                Some("medium") => "MEDIUM",
-                Some("high") | Some("max") | Some("xhigh") => "HIGH",
-                _ => "HIGH",
-            };
-            tracing::debug!(
-                "[Claude-Request] Mapping adaptive mode to thinkingLevel: {} for Claude model",
-                mapped_level
-            );
-            thinking_config["thinkingLevel"] = json!(mapped_level);
-            config["thinkingConfig"] = thinking_config;
-        } else {
-            // 协议无关：思考预算与 thinkingConfig 统一由进站流水线节点治理
-            crate::proxy::pipeline::InboundThinkingPipeline::configure_inbound_thinking(
-                mapped_model,
-                &mut config,
-                client_switch,
-                client_effort,
-                client_budget,
-                token,
-            );
-        }
     }
 
-    // 其他参数
     if let Some(temp) = claude_req.temperature {
         config["temperature"] = json!(temp);
     }
     if let Some(top_p) = claude_req.top_p {
         config["topP"] = json!(top_p);
-    } else {
-        config["topP"] = json!(1.0); // [CHANGED v4.1.24] Default topP=1.0 to match official client
     }
     if let Some(top_k) = claude_req.top_k {
         config["topK"] = json!(top_k);
-    } else {
-        config["topK"] = json!(40); // [ADDED v4.1.24] Default topK=40 to match official client
     }
 
-    // web_search 强制 candidateCount=1
-    /*if has_web_search {
-        config["candidateCount"] = json!(1);
-    }*/
-
-    // max_tokens 映射为 maxOutputTokens
-    // [FIX] 不再默认设置 81920，防止非思维模型 (如 claude-sonnet-4-6) 报 400 Invalid Argument
+    // max_tokens 映射为 maxOutputTokens。客户端没传时留给流水线按官方模型结构体补齐。
     let mut final_max_tokens: Option<i64> = claude_req.max_tokens.map(|t| t as i64);
-
-    // [NEW] 确保 maxOutputTokens 大于 thinkingBudget (API 强约束)
-    // [NEW] 确保 maxOutputTokens 大于 thinkingBudget (API 强约束)
-    let model_lower = mapped_model.to_lowercase();
-    // 重新计算 should_use_adaptive (因为上面定义的作用域仅在其 if 块内有效，或者我们可以假设在这里也需要同样的逻辑)
-    // 但为了简洁和解耦，我们这里重新从 config 读取
-    let tb_config_chk = crate::proxy::config::get_thinking_budget_config();
-    let global_adaptive = matches!(
-        tb_config_chk.mode,
-        crate::proxy::config::ThinkingBudgetMode::Adaptive
-    );
-    let req_adaptive = claude_req
-        .thinking
-        .as_ref()
-        .map(|t| t.type_ == "adaptive")
-        .unwrap_or(false);
-
-    let is_adaptive_effective = (req_adaptive || global_adaptive) && model_lower.contains("claude");
-    // [FIX] Lower default overhead to keep total under 65536
-    let final_overhead = if is_adaptive_effective { 64000 } else { 32768 };
-
-    // [FIX #2007] Opus 4.6 Thinking Alignment
-    // OpenAI logs show maxOutputTokens = 57344 (24576 + 32768)
-    if model_lower.contains("claude-opus-4-6-thinking") && is_thinking_enabled {
-        final_max_tokens = Some(57344);
-        tracing::debug!("[Opus-Alignment] Enforcing maxOutputTokens 57344 for Opus 4.6");
-    }
 
     if let Some(thinking_config) = config.get("thinkingConfig") {
         if let Some(budget) = thinking_config
@@ -1914,29 +1864,18 @@ fn build_generation_config(
         {
             let current = final_max_tokens.unwrap_or(0);
             if current <= budget as i64 {
-                // [FIX #1675] 针对图像模型使用更小的增量 (2048)
                 let overhead = if mapped_model.contains("-image") {
                     2048
                 } else {
                     8192
                 };
-                let boosted = (budget + overhead).min(65536); // [FIX] Never exceed hard limit
-                final_max_tokens = Some(boosted as i64);
+                let boosted = (budget as i64 + overhead).min(65536);
+                final_max_tokens = Some(boosted);
                 tracing::info!(
-                    "[Generation-Config] Bumping maxOutputTokens to {} due to thinking budget of {}", 
+                    "[Generation-Config] Bumping maxOutputTokens to {} due to thinking budget of {}",
                     boosted, budget
                 );
             }
-        } else if is_adaptive_effective {
-            // [FIX] Adaptive mode (no budget set in thinkingConfig), apply default maxOutputTokens
-            if final_max_tokens.is_none() {
-                final_max_tokens = Some(final_overhead as i64);
-            }
-        }
-    } else {
-        // No thinkingConfig
-        if final_max_tokens.is_none() && is_adaptive_effective {
-            final_max_tokens = Some(final_overhead as i64);
         }
     }
 
@@ -2111,6 +2050,7 @@ mod tests {
             output_config: None,
             size: None,
             quality: None,
+            tool_choice: None,
         };
 
         let result =
@@ -2209,6 +2149,7 @@ mod tests {
             output_config: None,
             size: None,
             quality: None,
+            tool_choice: None,
         };
 
         let result =
@@ -2227,7 +2168,7 @@ mod tests {
         assert_eq!(func_resp["id"], "call_1");
 
         // Verify merged content
-        let resp_text = func_resp["response"]["result"].as_str().unwrap();
+        let resp_text = func_resp["response"]["output"].as_str().unwrap();
         assert!(resp_text.contains("file1.txt"));
         assert!(resp_text.contains("file2.txt"));
         assert!(resp_text.contains("\n"));
@@ -2280,6 +2221,7 @@ mod tests {
             output_config: None,
             size: None,
             quality: None,
+            tool_choice: None,
         };
 
         let result =
@@ -2353,6 +2295,7 @@ mod tests {
             output_config: None,
             size: None,
             quality: None,
+            tool_choice: None,
         };
 
         let result =
@@ -2371,13 +2314,13 @@ mod tests {
             "thinkingConfig must be preserved per server-side thinking persistence policy"
         );
 
-        // 验证: 历史 Assistant 消息中补齐了思考块，避免上游 400
+        // 验证: 遵循纯净线缆原则，不凭空伪造虚假思考块，同时保持 thinkingConfig 开启
         let contents = request["contents"].as_array().expect("Contents array");
         let assistant_msg = &contents[1];
         let parts = assistant_msg["parts"].as_array().expect("Parts array");
         assert!(
-            parts.iter().any(|p| p.get("thought") == Some(&json!(true))),
-            "Assistant message must contain a thinking block"
+            parts.iter().all(|p| p.get("thought") != Some(&json!(true))),
+            "Assistant message without thinking should not have fake thinking injected"
         );
     }
 
@@ -2413,6 +2356,7 @@ mod tests {
             output_config: None,
             size: None,
             quality: None,
+            tool_choice: None,
         };
 
         let result = transform_claude_request_in(
@@ -2476,6 +2420,7 @@ mod tests {
             output_config: None,
             size: None,
             quality: None,
+            tool_choice: None,
         };
 
         let result =
@@ -2528,6 +2473,7 @@ mod tests {
             output_config: None,
             size: None,
             quality: None,
+            tool_choice: None,
         };
 
         let result =
@@ -2729,17 +2675,15 @@ mod tests {
             output_config: None,
             size: None,
             quality: None,
+            tool_choice: None,
         };
 
         let result =
             transform_claude_request_in(&req, "test-v", false, None, "test_session", None).unwrap();
-        // [FIX] Since we removed the default 81920, maxOutputTokens should NOT be present
-        // when max_tokens is None and thinking is disabled
+        // Official pipeline topology populates official default maxOutputTokens (65536)
         let gen_config = &result["request"]["generationConfig"];
-        assert!(
-            gen_config.get("maxOutputTokens").is_none(),
-            "maxOutputTokens should not be set when max_tokens is None"
-        );
+        let max_output = gen_config.get("maxOutputTokens").and_then(Value::as_i64);
+        assert_eq!(max_output, Some(65536));
     }
     #[test]
     fn test_claude_flash_thinking_budget_capping() {
@@ -2770,6 +2714,7 @@ mod tests {
             output_config: None,
             size: None,
             quality: None,
+            tool_choice: None,
         };
 
         let result =
@@ -2799,6 +2744,7 @@ mod tests {
             output_config: None,
             size: None,
             quality: None,
+            tool_choice: None,
         };
 
         // Should cap
@@ -2839,6 +2785,7 @@ mod tests {
             output_config: None,
             size: None,
             quality: None,
+            tool_choice: None,
         };
 
         // Transform
@@ -2883,6 +2830,7 @@ mod tests {
             output_config: None,
             size: None,
             quality: None,
+            tool_choice: None,
         };
 
         // Transform
@@ -2931,6 +2879,7 @@ mod tests {
             output_config: None,
             size: Some("1024x1024".to_string()),
             quality: Some("hd".to_string()),
+            tool_choice: None,
         };
 
         // 3. Transform request
@@ -2990,6 +2939,7 @@ mod tests {
             output_config: None,
             size: None,
             quality: None,
+            tool_choice: None,
         };
 
         // Transform
@@ -3000,16 +2950,15 @@ mod tests {
         let gen_config = result["request"]["generationConfig"].as_object().unwrap();
         let thinking_config = gen_config["thinkingConfig"].as_object().unwrap();
 
-        // Check injection: Claude models use thinkingLevel in adaptive mode
+        // 网关模式下 Claude 模型走流水线：effort=high 对应 claude_high，不再按协议写 thinkingLevel
         assert_eq!(thinking_config["includeThoughts"], true);
-        assert_eq!(thinking_config["thinkingLevel"], "HIGH");
-        assert!(thinking_config.get("thinkingBudget").is_none());
-        assert!(thinking_config.get("thinkingType").is_none());
-        assert!(thinking_config.get("effort").is_none());
+        assert_eq!(thinking_config["thinkingBudget"], 16384);
+        assert!(thinking_config.get("thinkingLevel").is_none());
+        assert!(gen_config.get("topP").is_none());
+        assert!(gen_config.get("topK").is_none());
 
-        // Check maxOutputTokens default for adaptive
         let max_output_tokens = gen_config["maxOutputTokens"].as_i64().unwrap();
-        assert_eq!(max_output_tokens, 64000);
+        assert_eq!(max_output_tokens, 24576);
     }
 
     #[test]
@@ -3044,6 +2993,7 @@ mod tests {
             output_config: None,
             size: None,
             quality: None,
+            tool_choice: None,
         };
 
         // 模拟映射到 Gemini 2.0
@@ -3102,6 +3052,7 @@ mod tests {
             output_config: None,
             size: None,
             quality: None,
+            tool_choice: None,
         };
 
         // 模拟映射到 Gemini 1.5
@@ -3124,6 +3075,70 @@ mod tests {
             "Older Gemini models should NOT have mixed tools"
         );
         assert!(has_functions);
+    }
+
+    #[test]
+    fn web_search_only_injects_google_search() {
+        let tools = Some(vec![Tool {
+            type_: Some("web_search_20250305".to_string()),
+            name: Some("web_search".to_string()),
+            description: None,
+            input_schema: None,
+        }]);
+        let tools_val = build_tools(&tools, true, "gemini-3.8-flash-high")
+            .unwrap()
+            .expect("search-only request should still carry a tool");
+        let tools_arr = tools_val.as_array().expect("tools array");
+        assert!(
+            tools_arr.iter().any(|t| t.get("googleSearch").is_some()),
+            "web_search alone must inject googleSearch"
+        );
+        assert!(
+            tools_arr
+                .iter()
+                .all(|t| t.get("functionDeclarations").is_none()),
+            "web_search must not be declared as a client function"
+        );
+    }
+
+    #[test]
+    fn web_search_alongside_client_tools_stays_in_function_declarations() {
+        let tools = Some(vec![
+            Tool {
+                type_: Some("web_search_20250305".to_string()),
+                name: Some("web_search".to_string()),
+                description: Some("Search".to_string()),
+                input_schema: Some(serde_json::json!({
+                    "type": "object",
+                    "properties": { "query": { "type": "string" } }
+                })),
+            },
+            Tool {
+                type_: None,
+                name: Some("Bash".to_string()),
+                description: Some("Run a command".to_string()),
+                input_schema: Some(serde_json::json!({
+                    "type": "object",
+                    "properties": { "command": { "type": "string" } }
+                })),
+            },
+        ]);
+        let tools_val = build_tools(&tools, true, "gemini-3.8-flash-high")
+            .unwrap()
+            .expect("mixed tools");
+        let tools_arr = tools_val.as_array().expect("tools array");
+        assert!(
+            tools_arr.iter().all(|t| t.get("googleSearch").is_none()),
+            "function tools and googleSearch must not be mixed"
+        );
+        let names: Vec<&str> = tools_arr
+            .iter()
+            .filter_map(|t| t.get("functionDeclarations")?.as_array())
+            .flatten()
+            .filter_map(|decl| decl.get("name")?.as_str())
+            .collect();
+        assert!(names.contains(&"web_search"));
+        assert!(names.contains(&"Bash"));
     }
 
     #[test]
@@ -3202,6 +3217,7 @@ mod tests {
             output_config: None,
             size: None,
             quality: None,
+            tool_choice: None,
         };
 
         let result =
@@ -3214,9 +3230,10 @@ mod tests {
         let assistant_parts = contents[1]["parts"].as_array().expect("Assistant parts");
         assert_eq!(assistant_parts.len(), 2);
         assert_eq!(assistant_parts[0]["thought"], true);
-        assert_eq!(
-            assistant_parts[0]["thoughtSignature"],
-            "skip_thought_signature_validator"
+        assert!(
+            assistant_parts[0].get("thoughtSignature").is_none()
+                || assistant_parts[0]["thoughtSignature"].is_null(),
+            "Sentinel elimination: thoughtSignature must be absent when unsigned"
         );
         assert_eq!(
             assistant_parts[0]["text"],
@@ -3297,6 +3314,7 @@ mod tests {
             output_config: None,
             size: None,
             quality: None,
+            tool_choice: None,
         };
 
         let result =
@@ -3309,11 +3327,14 @@ mod tests {
         let assistant_parts = contents[1]["parts"].as_array().expect("Assistant parts");
         assert_eq!(assistant_parts.len(), 2);
         assert_eq!(assistant_parts[0]["thought"], true);
-        assert_eq!(assistant_parts[0]["thoughtSignature"], real_sig);
-        assert_eq!(assistant_parts[1]["functionCall"]["name"], "list_directory");
         assert!(
-            assistant_parts[1].get("thoughtSignature").is_none(),
-            "Claude model functionCall must NOT carry thoughtSignature!"
+            assistant_parts[0].get("thoughtSignature").is_none(),
+            "I4 rule: Gemini target thought block must NOT carry signature"
+        );
+        assert_eq!(assistant_parts[1]["functionCall"]["name"], "list_directory");
+        assert_eq!(
+            assistant_parts[1]["thoughtSignature"], real_sig,
+            "Gemini model functionCall must inherit the real signature from the thinking block"
         );
     }
 
@@ -3385,6 +3406,7 @@ mod tests {
             output_config: None,
             size: None,
             quality: None,
+            tool_choice: None,
         };
 
         let result = transform_claude_request_in(
@@ -3466,6 +3488,7 @@ mod tests {
             output_config: None,
             size: None,
             quality: None,
+            tool_choice: None,
         };
 
         let result =
@@ -3510,6 +3533,7 @@ mod tests {
             output_config: None,
             size: None,
             quality: None,
+            tool_choice: None,
         };
 
         let result =
@@ -3548,6 +3572,7 @@ mod tests {
             output_config: None,
             size: None,
             quality: None,
+            tool_choice: None,
         };
 
         let result =
@@ -3561,8 +3586,8 @@ mod tests {
 
         assert_eq!(thinking_config["includeThoughts"], true);
         assert_eq!(
-            thinking_config["thinkingBudget"], 16384,
-            "Client budget (99999) must be ignored in favor of tier dictionary budget (16384)"
+            thinking_config["thinkingBudget"], -1,
+            "Client budget (99999) must be ignored in favor of tier dictionary budget (-1)"
         );
     }
 
@@ -3692,7 +3717,7 @@ mod tests {
         assert_eq!(inline_data["mimeType"], "image/png");
         assert_eq!(inline_data["data"], fake_b64);
 
-        let res_str = tool_parts[0]["functionResponse"]["response"]["result"]
+        let res_str = tool_parts[0]["functionResponse"]["response"]["output"]
             .as_str()
             .unwrap();
         assert!(!res_str.contains(fake_b64));

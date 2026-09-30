@@ -367,9 +367,9 @@ fn build_canonical_consolidated_response(
         for tc in &tool_calls {
             if let Some(call_id) = tc.get("id").and_then(|v| v.as_str()) {
                 if !call_id.is_empty() {
-                    if let Some(sig) =
-                        crate::proxy::SignatureCache::global().get_tool_signature(call_id)
-                    {
+                    if let Some(sig) = session_id.and_then(|sid| {
+                        crate::proxy::SignatureCache::global().get_tool_signature(sid, call_id)
+                    }) {
                         thinking_signature = sig;
                         break;
                     }
@@ -774,6 +774,27 @@ pub async fn monitor_middleware(
         uri.split("/v1beta/models/")
             .nth(1)
             .and_then(|s| s.split(':').next())
+            .and_then(|s| s.split('?').next())
+            .map(|s| s.to_string())
+    } else if uri.contains("/v1/models/claude/") {
+        uri.split("/v1/models/claude/")
+            .nth(1)
+            .and_then(|s| s.split('?').next())
+            .map(|s| s.to_string())
+    } else if uri.contains("/v1/models/") {
+        uri.split("/v1/models/")
+            .nth(1)
+            .and_then(|s| s.split('?').next())
+            .map(|s| s.to_string())
+    } else if uri.contains("/v1/model/") {
+        uri.split("/v1/model/")
+            .nth(1)
+            .and_then(|s| s.split('?').next())
+            .map(|s| s.to_string())
+    } else if uri.contains("/responses/models/") {
+        uri.split("/responses/models/")
+            .nth(1)
+            .and_then(|s| s.split('?').next())
             .map(|s| s.to_string())
     } else {
         None
@@ -878,10 +899,12 @@ pub async fn monitor_middleware(
         .map(|s| s.to_string());
 
     // Determine protocol from URL path
-    let protocol = if uri.contains("/v1/messages") {
+    let protocol = if uri.contains("/v1/messages") || uri.contains("/v1/models/claude") {
         Some("anthropic".to_string())
     } else if uri.contains("/v1beta/models") {
         Some("gemini".to_string())
+    } else if uri.contains("/responses") {
+        Some("responses".to_string())
     } else if uri.starts_with("/v1/") {
         Some("openai".to_string())
     } else {

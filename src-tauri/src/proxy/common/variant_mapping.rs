@@ -225,14 +225,6 @@ pub fn resolve_with_tier(
     let is_gemini_3_family =
         is_v3 && (lower.contains("flash") || lower.contains("pro") || lower.contains("agent"));
     if is_gemini_3_family {
-        // [NEW] 如果是 >= 3.6 的无后缀 Flash 衍生模型，统一预设路由为 tiered 真实模型 ID，彻底杜绝上游 429
-        let resolved_id = if crate::proxy::model_specs::is_bare_gemini_v36_or_above_flash(canonical)
-        {
-            format!("{}-tiered", canonical)
-        } else {
-            canonical.to_string()
-        };
-
         let dynamic_tier = if let Some(nt) = name_tier {
             nt
         } else if let Some(et) = explicit_tier {
@@ -241,10 +233,27 @@ pub fn resolve_with_tier(
             VariantTier::High
         } else if lower.contains("low") {
             VariantTier::Low
-        } else {
-            // medium 或者不带档位后缀，统一赋予 4000 (Medium 内置逆向规范)
+        } else if lower.contains("medium") {
             VariantTier::Medium
+        } else {
+            // [USER RULE] 裸模型未显式传档位时，默认按 high 档位路由
+            VariantTier::High
         };
+
+        // [NEW] 3.x Flash 裸模型依据思考档位路由为 {base}-high / -low / -medium，
+        // 而显式指定的 *-tiered 模型原样保留模型名！
+        let resolved_id = if crate::proxy::model_specs::is_bare_gemini_v3_flash(canonical) {
+            let eff_str = match dynamic_tier {
+                VariantTier::High => Some("high"),
+                VariantTier::Low => Some("low"),
+                VariantTier::Medium => Some("medium"),
+            };
+            crate::proxy::model_specs::resolve_bare_flash_route(canonical, eff_str)
+                .unwrap_or_else(|| canonical.to_string())
+        } else {
+            canonical.to_string()
+        };
+
         let budget = match dynamic_tier {
             VariantTier::High => {
                 if lower.contains("pro") {
@@ -285,6 +294,18 @@ pub fn resolve_with_tier(
 /// Top-level compatibility resolver using the client thinking budget.
 pub fn resolve(canonical: &str, budget_tokens: Option<u32>) -> Option<RealModelSpec> {
     resolve_with_tier(canonical, None, budget_tokens)
+}
+
+/// 已经是 Variant 解析出的上游真实模型 id。
+/// 请求路由不能再把它映回客户端公开名，否则上游会收到无法生成的别名。
+pub fn is_physical_upstream_id(model: &str) -> bool {
+    let key = model.trim();
+    GEMINI_FAMILIES.iter().any(|family| {
+        family
+            .tiers
+            .iter()
+            .any(|(_, spec)| spec.id.eq_ignore_ascii_case(key))
+    })
 }
 
 // ── verified real model specs (from upstream spec) ──
@@ -472,10 +493,10 @@ mod tests {
 
     #[test]
     fn test_resolve_37_flash_variants() {
-        // 无后缀的 >= 3.6 Flash 模型统一预设路由为 tiered 真实模型 ID
+        // 无后缀的 3.x Flash 裸模型依据思考档位路由（未指定档位默认 High）
         let s = resolve("gemini-3.7-flash", None).unwrap();
-        assert_eq!(s.id, "gemini-3.7-flash-tiered");
-        assert_eq!(s.thinking_budget, 4000);
+        assert_eq!(s.id, "gemini-3.7-flash-high");
+        assert_eq!(s.thinking_budget, 10000);
         assert_eq!(s.max_output_tokens, 65536);
 
         // High
@@ -505,11 +526,15 @@ mod tests {
 
     #[test]
     fn test_resolve_38_flash_variants() {
-        // 无后缀的 >= 3.6 Flash 模型统一预设路由为 tiered 真实模型 ID
+        // 无后缀的 3.x Flash 裸模型依据思考档位路由（未指定档位默认 High）
         let s = resolve("gemini-3.8-flash", None).unwrap();
-        assert_eq!(s.id, "gemini-3.8-flash-tiered");
-        assert_eq!(s.thinking_budget, 4000);
+        assert_eq!(s.id, "gemini-3.8-flash-high");
+        assert_eq!(s.thinking_budget, 10000);
         assert_eq!(s.max_output_tokens, 65536);
+
+        // Tiered 模型原样保留模型名
+        let s_tiered = resolve("gemini-3.8-flash-tiered", None).unwrap();
+        assert_eq!(s_tiered.id, "gemini-3.8-flash-tiered");
 
         // High
         let s_high = resolve("gemini-3.8-flash-high", None).unwrap();
@@ -537,10 +562,10 @@ mod tests {
     #[test]
     fn test_dynamic_unregistered_gemini_3_family() {
         // Any unregistered Gemini >= 3 model resolves dynamically without hardcoded registry
-        // 无后缀的 Flash 模型统一预设路由为 tiered 真实模型 ID
+        // 裸模型依据思考档位路由（未指定默认 High）
         let s = resolve("gemini-3.9-flash", None).unwrap();
-        assert_eq!(s.id, "gemini-3.9-flash-tiered");
-        assert_eq!(s.thinking_budget, 4000);
+        assert_eq!(s.id, "gemini-3.9-flash-high");
+        assert_eq!(s.thinking_budget, 10000);
         assert_eq!(s.max_output_tokens, 65536);
 
         // Explicit tier in name

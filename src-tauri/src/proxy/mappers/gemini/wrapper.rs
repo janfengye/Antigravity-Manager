@@ -10,11 +10,10 @@ pub fn wrap_request_v2(
     account_id: Option<&str>,
     session_id: Option<&str>,
     token: Option<&crate::proxy::token_manager::ProxyToken>, // [NEW] 动态规格注入
-    token_manager: Option<&std::sync::Arc<crate::proxy::TokenManager>>,
-    // [NEW] Layer-3 后台摘要专用的上游客户端。
-    // 必须由 handler 传入 `&state.upstream`，它才能按账号解析代理池（`client_cache`）
-    // 并随上游代理热更新生效；传 `None` 时 Layer-3 不触发。
-    upstream: Option<&std::sync::Arc<crate::proxy::upstream::client::UpstreamClient>>,
+    _token_manager: Option<&std::sync::Arc<crate::proxy::TokenManager>>,
+    // 内容压缩已不再在网关执行。参数保留，避免改动各协议调用点。
+    _upstream: Option<&std::sync::Arc<crate::proxy::upstream::client::UpstreamClient>>,
+    upstream_session_id: Option<&str>,
 ) -> Value {
     // 优先使用传入的 mapped_model，其次尝试从 body 获取
     let original_model = body
@@ -36,8 +35,21 @@ pub fn wrap_request_v2(
         .map(|a| a.len())
         .unwrap_or(1);
 
-    // 复制 body 以便修改
-    let mut inner_request = body.clone();
+    // 复制 body 以便修改；若客户端发送的是已带有 request 包装的报文（如 JeikCode 或直接透传信封），解包出内部 request
+    let (mut inner_request, incoming_req_id) = if let Some(req) = body.get("request") {
+        if req.is_object() {
+            let req_id = body
+                .get("requestId")
+                .or_else(|| body.get("_session_thinking_id"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+            (req.clone(), req_id)
+        } else {
+            (body.clone(), None)
+        }
+    } else {
+        (body.clone(), None)
+    };
 
     // 深度清理 [undefined] 字符串 (Cherry Studio 等客户端常见注入)
     crate::proxy::mappers::common_utils::deep_clean_undefined(&mut inner_request, 0);
@@ -49,194 +61,6 @@ pub fn wrap_request_v2(
 
     // [FIX #1522] Inject dummy IDs for Claude models in Gemini protocol
     let is_target_claude = final_model_name.to_lowercase().contains("claude");
-
-    let compression_level = crate::proxy::config::get_global_compression_level();
-
-    let mut compression_applied = false;
-    if compression_level == "high" {
-        let tm = token_manager;
-        let context_limit = if final_model_name.contains("flash") {
-            1_000_000
-        } else {
-            2_000_000
-        };
-
-        let raw_estimated =
-            crate::proxy::mappers::context_manager::ContextManager::estimate_gemini_token_usage(
-                &inner_request,
-            );
-        let calibrator = crate::proxy::mappers::estimation_calibrator::get_calibrator();
-        let mut estimated_usage = calibrator.calibrate(raw_estimated);
-        let mut usage_ratio = estimated_usage as f32 / context_limit as f32;
-
-        let threshold_l1 = crate::proxy::config::get_global_threshold_l1();
-        let threshold_l2 = crate::proxy::config::get_global_threshold_l2();
-        let threshold_l3 = crate::proxy::config::get_global_threshold_l3();
-
-        let trace_id = format!(
-            "gemini_req_{}",
-            chrono::Utc::now().timestamp_subsec_millis()
-        );
-
-        tracing::info!(
-            "[{}] [ContextManager] [Gemini] Context pressure: {:.1}% (raw: {}, calibrated: {} / {}), Calibration factor: {:.2}",
-            trace_id, usage_ratio * 100.0, raw_estimated, estimated_usage, context_limit, calibrator.get_factor()
-        );
-
-        // ===== Layer 1: Tool Message Trimming =====
-        if usage_ratio > threshold_l1 && !compression_applied {
-            if crate::proxy::mappers::context_manager::ContextManager::trim_gemini_tool_messages(
-                &mut inner_request,
-                5,
-            ) {
-                tracing::info!(
-                    "[{}] [Layer-1] [Gemini] Tool trimming triggered (usage: {:.1}%, threshold: {:.1}%)",
-                    trace_id, usage_ratio * 100.0, threshold_l1 * 100.0
-                );
-                compression_applied = true;
-
-                let new_raw = crate::proxy::mappers::context_manager::ContextManager::estimate_gemini_token_usage(&inner_request);
-                let new_usage = calibrator.calibrate(new_raw);
-                let new_ratio = new_usage as f32 / context_limit as f32;
-
-                tracing::info!(
-                    "[{}] [Layer-1] [Gemini] Compression result: {:.1}% → {:.1}% (saved {} tokens)",
-                    trace_id,
-                    usage_ratio * 100.0,
-                    new_ratio * 100.0,
-                    estimated_usage - new_usage
-                );
-
-                if new_ratio < 0.7 {
-                    estimated_usage = new_usage;
-                    usage_ratio = new_ratio;
-                } else {
-                    usage_ratio = new_ratio;
-                    compression_applied = false;
-                }
-            }
-        }
-
-        // ===== Layer 2: Thinking Content Compression =====
-        if usage_ratio > threshold_l2 && !compression_applied {
-            tracing::info!(
-                "[{}] [Layer-2] [Gemini] Thinking compression triggered (usage: {:.1}%, threshold: {:.1}%)",
-                trace_id, usage_ratio * 100.0, threshold_l2 * 100.0
-            );
-
-            if crate::proxy::mappers::context_manager::ContextManager::compress_gemini_thinking_preserve_signature(
-                &mut inner_request,
-                4,
-            ) {
-                compression_applied = true;
-
-                let new_raw = crate::proxy::mappers::context_manager::ContextManager::estimate_gemini_token_usage(&inner_request);
-                let new_usage = calibrator.calibrate(new_raw);
-                let new_ratio = new_usage as f32 / context_limit as f32;
-
-                tracing::info!(
-                    "[{}] [Layer-2] [Gemini] Compression result: {:.1}% → {:.1}% (saved {} tokens)",
-                    trace_id, usage_ratio * 100.0, new_ratio * 100.0, estimated_usage - new_usage
-                );
-
-                usage_ratio = new_ratio;
-            }
-        }
-
-        // ===== Layer 3: Fork Conversation + XML Summary =====
-        if usage_ratio > threshold_l3 && !compression_applied {
-            tracing::info!(
-                "[{}] [Layer-3] [Gemini] Context pressure ({:.1}%) exceeded threshold ({:.1}%), spawning Fork+Summary in background",
-                trace_id, usage_ratio * 100.0, threshold_l3 * 100.0
-            );
-
-            let tm_opt = tm.cloned();
-            let upstream_opt = upstream.cloned();
-            let sid_str = session_id.unwrap_or_default().to_string();
-            let body_clone = inner_request.clone();
-            let trace_id_clone = trace_id.clone();
-            let proj_clone = project_id.to_string();
-            let acc_clone = account_id.unwrap_or_default().to_string();
-
-            // 两个依赖缺一不可：token_manager 取凭据，upstream 选对代理
-            // （否则账号绑定专属代理时摘要会从真实 IP 出去）。
-            if let (Some(tm_arc), Some(upstream_arc)) = (tm_opt, upstream_opt) {
-                tokio::spawn(async move {
-                    match try_compress_gemini_with_summary(
-                        &body_clone,
-                        &trace_id_clone,
-                        &tm_arc,
-                        &upstream_arc,
-                        &sid_str,
-                        &proj_clone,
-                        &acc_clone,
-                    )
-                    .await
-                    {
-                        Ok(_) => {
-                            tracing::info!(
-                                "[{}] [Layer-3] [Gemini] Background Fork+Summary completed successfully",
-                                trace_id_clone
-                            );
-                        }
-                        Err(e) => {
-                            tracing::error!(
-                                "[{}] [Layer-3] [Gemini] Background Fork+Summary failed: {}",
-                                trace_id_clone,
-                                e
-                            );
-                        }
-                    }
-                });
-            }
-        }
-    }
-
-    if compression_level != "disabled" {
-        if let Some(contents) = inner_request
-            .get_mut("contents")
-            .and_then(|c| c.as_array_mut())
-        {
-            let total_turns = contents.len();
-            let protected_last_n = 4;
-            let start_protection_idx = total_turns.saturating_sub(protected_last_n);
-
-            for (i, content) in contents.iter_mut().enumerate() {
-                if let Some(parts) = content.get_mut("parts").and_then(|p| p.as_array_mut()) {
-                    for part in parts {
-                        if let Some(obj) = part.as_object_mut() {
-                            if compression_level == "medium" || compression_level == "high" {
-                                if i < start_protection_idx {
-                                    if let Some(text_val) =
-                                        obj.get_mut("text").and_then(|t| t.as_str())
-                                    {
-                                        let cleaned = crate::proxy::mappers::caveman_cleaner::CavemanCleaner::clean(text_val);
-                                        if cleaned != text_val {
-                                            obj.insert("text".to_string(), json!(cleaned));
-                                        }
-                                    }
-                                }
-                            }
-                            if let Some(fr) = obj.get_mut("functionResponse") {
-                                if let Some(resp_obj) =
-                                    fr.get_mut("response").and_then(|r| r.as_object_mut())
-                                {
-                                    for (_key, val) in resp_obj.iter_mut() {
-                                        if let Some(s) = val.as_str() {
-                                            let cleaned = crate::proxy::mappers::rtk_cleaner::RtkCleaner::clean(s, 48);
-                                            if cleaned != s {
-                                                *val = json!(cleaned);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
 
     let lower_model = final_model_name.to_lowercase();
     let tb_config = crate::proxy::config::get_thinking_budget_config();
@@ -496,7 +320,6 @@ pub fn wrap_request_v2(
         }
         crate::proxy::pipeline::InboundThinkingPipeline::process_contents(
             contents,
-            crate::proxy::pipeline::ProxyProtocol::GeminiNative,
             &final_model_name,
             should_inject,
             session_id,
@@ -587,14 +410,6 @@ pub fn wrap_request_v2(
 
         if is_under_v3 {
             gen_config.remove("thinkingConfig");
-        }
-
-        // [ADDED v4.1.24] Inject topK=40 and topP=1.0 if not present to match official client
-        if !gen_config.contains_key("topK") {
-            gen_config.insert("topK".to_string(), json!(40));
-        }
-        if !gen_config.contains_key("topP") {
-            gen_config.insert("topP".to_string(), json!(1.0));
         }
 
         if force_server_thinking {
@@ -818,12 +633,7 @@ pub fn wrap_request_v2(
                                 }
                             }
                         }
-                        // [CACHE] 按 function name 稳定字典序排序，确保全协议 tool schema 字节完全一致
-                        decls_arr.sort_by(|a, b| {
-                            let name_a = a.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                            let name_b = b.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                            name_a.cmp(name_b)
-                        });
+                        // 保持客户端工具声明原序，不按 name 重排。
                     }
                 }
             }
@@ -978,17 +788,14 @@ pub fn wrap_request_v2(
 
     // [ADDED v4.1.24] 注入基于账号的稳定 sessionId
     // [FIX session-1M] 混入对话指纹与代数,不同对话隔离服务端会话,1M 累计报错后 bump 自愈
+    let sid = session_id.or(upstream_session_id).unwrap_or("default");
     if let Some(account_id_str) = account_id {
-        let fingerprint = session_id.unwrap_or("default");
-        let generation = crate::proxy::common::session::current_bump(account_id_str, fingerprint);
-        inner_request["sessionId"] = json!(crate::proxy::common::session::derive_session_scoped(
+        crate::proxy::common::session::apply_upstream_session(
+            &mut inner_request,
             account_id_str,
-            fingerprint,
-            generation
-        ));
+            sid,
+        );
     }
-
-    let sid = session_id.unwrap_or("default");
 
     // [NEW] 1. requestId：官方 5 段形态，三适配器共用。
     // 含 unixMs 保证幂等隔离（避免重试命中上一次的 429 / 旧缓存），形态也与其他入口一致。
@@ -997,8 +804,9 @@ pub fn wrap_request_v2(
         .and_then(|c| c.as_array())
         .map(|a| a.len() as u64)
         .unwrap_or(0);
-    let official_request_id =
-        crate::proxy::mappers::common_utils::build_official_request_id(sid, step);
+    let official_request_id = incoming_req_id.unwrap_or_else(|| {
+        crate::proxy::mappers::common_utils::build_official_request_id(sid, step)
+    });
 
     // [NEW] 2. 动态 userAgent 仿真 (支持 jetski)
     // 企业 / GCP 账号（非 gmail 邮箱）在官方 Go Worker 中使用 jetski 指纹。
@@ -1020,7 +828,7 @@ pub fn wrap_request_v2(
         }
     }
 
-    // [NEW] 3. 动态判断是否需要 agent requestType 与 enabledCreditTypes
+    // [NEW] 3. 动态判断是否需要 agent requestType
     // 对齐官方语言服务原生设计：只有存在工具定义 (tools) 或包含工具调用上下文时才进入 agent 模式。
     // 普通问答、纯文本补全不注入 requestType: "agent"，避开 Google 后端针对 Agent 资源池的过载限流。
     let has_tools = inner_request
@@ -1037,29 +845,30 @@ pub fn wrap_request_v2(
         config.request_type != "image_gen" && (has_tools || has_tool_interactions);
 
     // [CACHE] 统一委托进站流水线进行前缀拓扑规范化与对齐（Pipeline First 核心归一）
-    crate::proxy::pipeline::InboundThinkingPipeline::align_google_request_prefix_topology(
+    crate::proxy::pipeline::InboundThinkingPipeline::align_google_request_prefix_topology_with_model(
         &mut inner_request,
+        &config.final_model,
+        Some(&official_request_id),
     );
     let reordered_inner = inner_request;
 
     let mut final_request_obj = json!({
         "project": project_id,
+        "requestId": official_request_id,
         "request": reordered_inner,
         "model": config.final_model,
         "userAgent": official_user_agent,
-        // [CACHE] requestId 移到末尾避免动态值破坏前缀字节一致性
-        "requestId": official_request_id,
     });
 
     if config.request_type == "image_gen" {
         final_request_obj["requestType"] = json!("image_gen");
     } else if is_agent_request {
         final_request_obj["requestType"] = json!("agent");
-        if let Some(obj) = final_request_obj.as_object_mut() {
-            // 强制注入 Google One AI 信用额度支持标号
-            obj.insert("enabledCreditTypes".to_string(), json!(["GOOGLE_ONE_AI"]));
-        }
     }
+
+    crate::proxy::pipeline::InboundThinkingPipeline::align_official_envelope(
+        &mut final_request_obj,
+    );
 
     final_request_obj
 }
@@ -1417,6 +1226,7 @@ pub fn wrap_request(
         token,
         None, // token_manager：不带 → Layer-3 本就不会触发
         None, // upstream：同上，无需客户端
+        None,
     )
 }
 static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -1932,72 +1742,6 @@ mod tests {
             !has_google_search,
             "Should NOT contain googleSearch due to functionDeclarations presence (preventing client tool dispatch conflicts)"
         );
-    }
-
-    #[test]
-    fn test_gemini_wrapper_context_compression() {
-        crate::proxy::config::update_global_compression_level("high".to_string(), true);
-        let body = json!({
-            "contents": [
-                {
-                    "role": "user",
-                    "parts": [{"text": "Hello there! Could you please tell me how to fix this?"}]
-                },
-                {
-                    "role": "model",
-                    "parts": [{"text": "Basically, it appears to be a bug."}]
-                },
-                {
-                    "role": "user",
-                    "parts": [{"text": "Old message 3. I was wondering if you could help."}]
-                },
-                {
-                    "role": "user",
-                    "parts": [
-                        {
-                            "functionResponse": {
-                                "name": "run_test",
-                                "response": {
-                                    "output": "Progress: 10%\nProgress: 20%\nProgress: 30%\nProgress: 40%\nProgress: 50%\nError: compilation failed"
-                                }
-                            }
-                        }
-                    ]
-                },
-                {
-                    "role": "user",
-                    "parts": [{"text": "Latest message 1. Please keep this."}]
-                },
-                {
-                    "role": "model",
-                    "parts": [{"text": "Latest message 2. Of course!"}]
-                }
-            ],
-            "model": "gemini-2.5-pro"
-        });
-
-        let wrapped = wrap_request(&body, "test-proj", "gemini-2.5-pro", None, None, None);
-        println!(
-            "DEBUG: wrapped = {}",
-            serde_json::to_string_pretty(&wrapped).unwrap()
-        );
-        let contents = wrapped["request"]["contents"].as_array().unwrap();
-
-        let text_1 = contents[0]["parts"][0]["text"].as_str().unwrap();
-        assert!(!text_1.contains("please"));
-        assert!(!text_1.contains("Could you please"));
-
-        let text_2 = contents[1]["parts"][0]["text"].as_str().unwrap();
-        assert!(!text_2.contains("Basically"));
-
-        let tool_resp = contents[3]["parts"][0]["functionResponse"]["response"]["output"]
-            .as_str()
-            .unwrap();
-        assert!(tool_resp.contains("Collapsed"));
-        assert!(tool_resp.contains("Error: compilation failed"));
-
-        let text_5 = contents[4]["parts"][0]["text"].as_str().unwrap();
-        assert!(text_5.contains("Please"));
     }
 
     #[test]

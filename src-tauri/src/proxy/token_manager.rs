@@ -1574,9 +1574,6 @@ impl TokenManager {
 
         // [NEW] 1. 动态能力过滤 (Capability Filter)
 
-        // 定义常量
-        const RESET_TIME_THRESHOLD_SECS: i64 = 600; // 10 分钟阈值
-
         // 归一化目标模型名为标准 ID
         let normalized_target =
             crate::proxy::common::model_mapping::normalize_to_standard_id(target_model)
@@ -1646,14 +1643,16 @@ impl TokenManager {
                 return health_cmp;
             }
 
-            // Priority 3: Reset time (earlier is better, but only if diff > 10 min)
+            // Priority 3: Reset time (earlier is better) [Fix #3570]
             let reset_a = a.reset_time.unwrap_or(i64::MAX);
             let reset_b = b.reset_time.unwrap_or(i64::MAX);
-            if (reset_a - reset_b).abs() >= RESET_TIME_THRESHOLD_SECS {
-                reset_a.cmp(&reset_b)
-            } else {
-                std::cmp::Ordering::Equal
+            let reset_cmp = reset_a.cmp(&reset_b);
+            if reset_cmp != std::cmp::Ordering::Equal {
+                return reset_cmp;
             }
+
+            // Priority 4: Deterministic fallback (Tie-breaker for strict total order)
+            a.account_id.cmp(&b.account_id)
         });
 
         // 【调试日志】打印排序后的账号顺序（显示目标模型的 quota）
@@ -2125,17 +2124,39 @@ impl TokenManager {
                 }
             }
 
-            // 【核心固化】凡解析出可用账号且当前为粘性会话调度，确保立即固化绑定，防止轮换或会话漂移
+            // 同一会话的并发第一次绑定归到已经写下的账号，后到的请求改用赢家。
             if let Some(ref selected) = target_token {
                 if let Some(sid) = session_id {
                     if scheduling.mode != SchedulingMode::PerformanceFirst && !rotate {
-                        self.session_accounts
-                            .insert(sid.to_string(), selected.account_id.clone());
-                        tracing::info!(
-                            "Sticky Session: Ensured binding account {} to session {}",
-                            selected.email,
-                            sid
-                        );
+                        let bound = {
+                            self.session_accounts
+                                .entry(sid.to_string())
+                                .or_insert_with(|| selected.account_id.clone())
+                                .clone()
+                        };
+                        if bound != selected.account_id {
+                            if let Some(winner) =
+                                tokens_snapshot.iter().find(|t| t.account_id == bound)
+                            {
+                                let winner_limited = self
+                                    .is_rate_limited(&winner.account_id, Some(&normalized_target))
+                                    .await;
+                                if !winner_limited {
+                                    tracing::info!(
+                                        "Sticky Session: Adopted concurrent binding {} for session {}",
+                                        winner.email,
+                                        sid
+                                    );
+                                    target_token = Some(winner.clone());
+                                }
+                            }
+                        } else {
+                            tracing::info!(
+                                "Sticky Session: Ensured binding account {} to session {}",
+                                selected.email,
+                                sid
+                            );
+                        }
                     }
                 }
             }
@@ -2386,6 +2407,9 @@ impl TokenManager {
                                 }
                                 last_error = Some(format!("Token refresh failed: {}", e));
                                 attempted.insert(token.account_id.clone());
+                                if let Some(sid) = session_id {
+                                    self.abandon_session(sid, &token.account_id);
+                                }
                                 if quota_group != "image_gen"
                                     && matches!(&last_used_account_id, Some((id, _)) if id == &token.account_id)
                                 {
@@ -3584,13 +3608,35 @@ impl TokenManager {
         self.session_accounts.remove(session_id);
     }
 
-    /// [FIX] 遭遇 429/529 等限流或过载时解绑会话并清空最近使用记录，打破粘性死锁
+    /// 比较并删除：只有映射里仍然是这个账号才清掉当前会话。
+    pub fn abandon_session(&self, session_id: &str, account_id: &str) -> bool {
+        let still_bound = self
+            .session_accounts
+            .get(session_id)
+            .map(|bound| bound.as_str() == account_id)
+            .unwrap_or(false);
+        if still_bound {
+            self.session_accounts.remove(session_id);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// 上游成功后写下真正用过的账号。轮换成功的新账号也从这里进入粘性表。
+    pub fn commit_session(&self, session_id: &str, account_id: &str) {
+        if session_id.is_empty() || account_id.is_empty() {
+            return;
+        }
+        self.session_accounts
+            .insert(session_id.to_string(), account_id.to_string());
+    }
+
+    /// 解绑当前会话。不清全局 last_used，避免一个租户的失败打散别人的 60 秒窗口。
     pub async fn unbind_session_and_clear_last_used(&self, session_id: Option<&str>) {
         if let Some(sid) = session_id {
             self.session_accounts.remove(sid);
         }
-        let mut last_used = self.last_used_account.lock().await;
-        *last_used = None;
     }
 
     /// 获取当前 Token 池内有效账号数量
@@ -4956,8 +5002,6 @@ mod tests {
 
     /// 测试排序比较函数（与 get_token_internal 中的逻辑一致）
     fn compare_tokens(a: &ProxyToken, b: &ProxyToken) -> Ordering {
-        const RESET_TIME_THRESHOLD_SECS: i64 = 600; // 10 分钟阈值
-
         // 统一走 models::quota::tier_priority（与生产排序逻辑共用同一实现）
         let tier_priority =
             |tier: &Option<String>| crate::models::quota::tier_priority(tier.as_deref());
@@ -4978,22 +5022,24 @@ mod tests {
             return health_cmp;
         }
 
-        // Third: compare by reset time (earlier/closer is better)
+        // Third: compare by reset time (earlier/closer is better) [Fix #3570]
         let reset_a = a.reset_time.unwrap_or(i64::MAX);
         let reset_b = b.reset_time.unwrap_or(i64::MAX);
-        let reset_diff = (reset_a - reset_b).abs();
-
-        if reset_diff >= RESET_TIME_THRESHOLD_SECS {
-            let reset_cmp = reset_a.cmp(&reset_b);
-            if reset_cmp != Ordering::Equal {
-                return reset_cmp;
-            }
+        let reset_cmp = reset_a.cmp(&reset_b);
+        if reset_cmp != Ordering::Equal {
+            return reset_cmp;
         }
 
         // Fourth: compare by remaining quota percentage (higher is better)
         let quota_a = a.remaining_quota.unwrap_or(0);
         let quota_b = b.remaining_quota.unwrap_or(0);
-        quota_b.cmp(&quota_a)
+        let quota_cmp = quota_b.cmp(&quota_a);
+        if quota_cmp != Ordering::Equal {
+            return quota_cmp;
+        }
+
+        // Tie-breaker
+        a.account_id.cmp(&b.account_id)
     }
 
     #[test]
@@ -5060,43 +5106,81 @@ mod tests {
         assert_eq!(compare_tokens(&late_reset, &soon_reset), Ordering::Greater);
     }
 
+    /// [Fix #3570] 验证重置时间早的优先，且相同重置时间时按配额排序
     #[test]
-    fn test_sorting_reset_time_threshold() {
+    fn test_sorting_reset_time_direct_comparison() {
         let now = chrono::Utc::now().timestamp();
 
-        // 差异小于10分钟（600秒）视为相同优先级，此时按配额排序
-        let reset_a = create_test_token("a@test.com", Some("PRO"), 1.0, Some(now + 1800), Some(80)); // 30分钟后, 80%配额
-        let reset_b = create_test_token("b@test.com", Some("PRO"), 1.0, Some(now + 2100), Some(50)); // 35分钟后, 50%配额
+        // 刷新时间较早的账号优先于刷新时间较晚的账号
+        let reset_a = create_test_token("a@test.com", Some("PRO"), 1.0, Some(now + 1800), Some(20)); // 30分钟后, 20%配额
+        let reset_b = create_test_token("b@test.com", Some("PRO"), 1.0, Some(now + 2100), Some(80)); // 35分钟后, 80%配额
 
-        // 差5分钟 < 10分钟阈值，视为相同，按配额排序（80% > 50%）
+        // 即使 a 配额低，但重置时间更早，所以 a 优先于 b
         assert_eq!(compare_tokens(&reset_a, &reset_b), Ordering::Less);
+        assert_eq!(compare_tokens(&reset_b, &reset_a), Ordering::Greater);
+
+        // 当重置时间完全相同时，按配额降序排序（高配额优先）
+        let reset_c = create_test_token("c@test.com", Some("PRO"), 1.0, Some(now + 1800), Some(90)); // 30分钟后, 90%配额
+        assert_eq!(compare_tokens(&reset_c, &reset_a), Ordering::Less);
     }
 
+    /// [Fix #3570] 验证重置时间排序满足严格全序（Total Order），防止 Rust driftsort/smallsort panic
+    /// 典型构造反例：A (T), B (T+300), C (T+600)
+    /// 旧逻辑中 |A-B|<600 => Equal, |B-C|<600 => Equal, 但 |A-C|>=600 => Less，违反传递性导致 panic
     #[test]
-    fn test_sorting_reset_time_beyond_threshold() {
+    fn test_sorting_transitivity_no_panic_issue_3570() {
         let now = chrono::Utc::now().timestamp();
+        let token_a = create_test_token("a@test.com", Some("FREE"), 1.0, Some(now), Some(100));
+        let token_b =
+            create_test_token("b@test.com", Some("FREE"), 1.0, Some(now + 300), Some(100));
+        let token_c =
+            create_test_token("c@test.com", Some("FREE"), 1.0, Some(now + 600), Some(100));
 
-        // 差异超过10分钟，按刷新时间排序（忽略配额）
-        let soon_low_quota = create_test_token(
-            "soon@test.com",
-            Some("PRO"),
-            1.0,
-            Some(now + 1800),
-            Some(20),
-        ); // 30分钟后, 20%
-        let late_high_quota = create_test_token(
-            "late@test.com",
-            Some("PRO"),
-            1.0,
-            Some(now + 18000),
-            Some(90),
-        ); // 5小时后, 90%
+        let cmp_ab = compare_tokens(&token_a, &token_b);
+        let cmp_bc = compare_tokens(&token_b, &token_c);
+        let cmp_ac = compare_tokens(&token_a, &token_c);
 
-        // 差4.5小时 > 10分钟，刷新时间优先，30分钟 < 5小时
-        assert_eq!(
-            compare_tokens(&soon_low_quota, &late_high_quota),
-            Ordering::Less
-        );
+        // 传递性要求：若 a < b 且 b < c，则必须 a < c
+        assert_eq!(cmp_ab, Ordering::Less);
+        assert_eq!(cmp_bc, Ordering::Less);
+        assert_eq!(cmp_ac, Ordering::Less);
+
+        // 反对称性要求：cmp(b, a) == cmp(a, b).reverse()
+        assert_eq!(compare_tokens(&token_b, &token_a), Ordering::Greater);
+        assert_eq!(compare_tokens(&token_c, &token_b), Ordering::Greater);
+        assert_eq!(compare_tokens(&token_c, &token_a), Ordering::Greater);
+    }
+
+    /// [Fix #3570] 模拟 Issue 报告中的真实场景：200+ 个高密度账号池排序测试，绝不触发 panic
+    #[test]
+    fn test_sorting_large_account_pool_dense_reset_times_issue_3570() {
+        let now = chrono::Utc::now().timestamp();
+        let mut tokens: Vec<ProxyToken> = (0..205)
+            .map(|i| {
+                // 每隔 60 秒一个 reset_time，密集分布在 0 ~ 204*60 秒
+                let reset_offset = (i as i64) * 60;
+                create_test_token(
+                    &format!("user_{:03}@test.com", i),
+                    Some("FREE"),
+                    1.0,
+                    Some(now + reset_offset),
+                    Some(100),
+                )
+            })
+            .collect();
+
+        // 逆序排列模拟无序输入
+        tokens.reverse();
+
+        // 执行排序（旧逻辑在 driftsort/smallsort 遇到密集 reset_time 必定 panic）
+        tokens.sort_by(compare_tokens);
+
+        // 验证排序结果正确性：reset_time 必须严格递增
+        for window in tokens.windows(2) {
+            let t1 = window[0].reset_time.unwrap();
+            let t2 = window[1].reset_time.unwrap();
+            assert!(t1 <= t2, "Tokens must be sorted by reset_time ascending");
+        }
     }
 
     #[test]
@@ -5525,8 +5609,6 @@ mod tests {
     /// 测试高端模型排序：Ultra 账号优先于 Pro 账号（即使 Pro 配额更高）
     #[test]
     fn test_ultra_priority_for_high_end_models() {
-        const RESET_TIME_THRESHOLD_SECS: i64 = 600;
-
         // 模拟高端模型排序逻辑
         fn compare_tokens_for_model(
             a: &ProxyToken,

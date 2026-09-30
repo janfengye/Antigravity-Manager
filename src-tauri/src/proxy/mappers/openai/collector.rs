@@ -30,7 +30,15 @@ where
     let mut tool_calls_map: HashMap<u32, (String, String, String, Vec<String>)> = HashMap::new();
 
     while let Some(chunk_result) = stream.next().await {
-        let chunk = chunk_result.map_err(|e| format!("Stream error: {}", e))?;
+        let chunk = chunk_result.map_err(|e| {
+            crate::proxy::mappers::error_classifier::report_stream_error(
+                "openai-collector",
+                "collect_stream_to_json",
+                &e,
+                format!("model={}", response.model),
+            )
+            .client_message()
+        })?;
         let text = String::from_utf8_lossy(&chunk);
 
         for line in text.lines() {

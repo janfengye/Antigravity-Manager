@@ -193,17 +193,13 @@ pub async fn internal_start_proxy_service(
     let active_accounts = token_manager.load_accounts().await.unwrap_or(0);
 
     if active_accounts == 0 {
-        let zai_enabled = config.zai.enabled
-            && !matches!(config.zai.dispatch_mode, crate::proxy::ZaiDispatchMode::Off);
-        if !zai_enabled {
-            tracing::warn!("沒有可用賬號，反代邏輯將暫停，請通過管理界面添加。");
-            return Ok(ProxyStatus {
-                running: false,
-                port: config.port,
-                base_url: format!("http://127.0.0.1:{}", config.port),
-                active_accounts: 0,
-            });
-        }
+        tracing::warn!("沒有可用賬號，反代邏輯將暫停，請通過管理界面添加。");
+        return Ok(ProxyStatus {
+            running: false,
+            port: config.port,
+            base_url: format!("http://127.0.0.1:{}", config.port),
+            active_accounts: 0,
+        });
     }
 
     let mut instance_lock = state.instance.write().await;
@@ -256,10 +252,6 @@ pub async fn ensure_admin_server(
         config.experimental.thinking_retention_days,
         Some(config.experimental.thinking_max_memory_turns),
     );
-    crate::proxy::config::update_global_compression_level(
-        config.experimental.compression_level.clone(),
-        config.experimental.enable_usage_scaling,
-    );
 
     // Ensure monitor exists
     let monitor = {
@@ -291,7 +283,6 @@ pub async fn ensure_admin_server(
         config.upstream_proxy.clone(),
         config.user_agent_override.clone(),
         crate::proxy::ProxySecurityConfig::from_proxy_config(&config),
-        config.zai.clone(),
         monitor,
         config.experimental.clone(),
         config.debug_logging.clone(),
@@ -318,11 +309,7 @@ pub async fn ensure_admin_server(
     crate::proxy::update_global_system_prompt_config(config.global_system_prompt.clone());
     // [NEW] 初始化全局图像思维模式配置
     crate::proxy::update_image_thinking_mode(config.image_thinking_mode.clone());
-    // [NEW] 初始化全局压缩等级配置
-    crate::proxy::config::update_global_compression_level(
-        config.experimental.compression_level.clone(),
-        config.experimental.enable_usage_scaling,
-    );
+    crate::proxy::update_multimodal_config(config.multimodal.clone());
     crate::proxy::config::update_global_audit_config(
         config.experimental.payload_storage_mode.clone(),
         config.experimental.log_retention_days,
@@ -683,63 +670,6 @@ fn extract_model_ids(value: &serde_json::Value) -> Vec<String> {
     }
 
     out
-}
-
-/// Fetch available models from the configured z.ai Anthropic-compatible API (`/v1/models`).
-#[tauri::command]
-pub async fn fetch_zai_models(
-    zai: crate::proxy::ZaiConfig,
-    upstream_proxy: crate::proxy::config::UpstreamProxyConfig,
-    request_timeout: u64,
-) -> Result<Vec<String>, String> {
-    if zai.base_url.trim().is_empty() {
-        return Err("z.ai base_url is empty".to_string());
-    }
-    if zai.api_key.trim().is_empty() {
-        return Err("z.ai api_key is not set".to_string());
-    }
-
-    let url = join_base_url(&zai.base_url, "/v1/models");
-
-    let mut builder =
-        reqwest::Client::builder().timeout(Duration::from_secs(request_timeout.max(5)));
-    if upstream_proxy.enabled && !upstream_proxy.url.is_empty() {
-        let proxy = reqwest::Proxy::all(&upstream_proxy.url)
-            .map_err(|e| format!("Invalid upstream proxy url: {}", e))?;
-        builder = builder.proxy(proxy);
-    }
-    let client = builder
-        .build()
-        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
-
-    let resp = client
-        .get(&url)
-        .header("Authorization", format!("Bearer {}", zai.api_key))
-        .header("x-api-key", zai.api_key)
-        .header("anthropic-version", "2023-06-01")
-        .header("accept", "application/json")
-        .send()
-        .await
-        .map_err(|e| format!("Upstream request failed: {}", e))?;
-
-    let status = resp.status();
-    let text = resp
-        .text()
-        .await
-        .map_err(|e| format!("Failed to read response: {}", e))?;
-
-    if !status.is_success() {
-        let preview = crate::proxy::mappers::common_utils::safe_truncate_str(&text, 4000);
-        return Err(format!("Upstream returned {}: {}", status, preview));
-    }
-
-    let json: serde_json::Value =
-        serde_json::from_str(&text).map_err(|e| format!("Invalid JSON response: {}", e))?;
-    let mut models = extract_model_ids(&json);
-    models.retain(|s| !s.trim().is_empty());
-    models.sort();
-    models.dedup();
-    Ok(models)
 }
 
 /// 获取当前调度配置

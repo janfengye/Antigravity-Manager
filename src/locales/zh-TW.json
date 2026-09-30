@@ -413,6 +413,10 @@
       "auto_launch_enabled": "啟用",
       "auto_launch_disabled": "停用",
       "auto_launch_desc": "系統啟動時自動執行 Antigravity Tools",
+      "quiet_autostart": "免打擾啟動（留在系統匣）",
+      "quiet_autostart_desc": "開機自啟時不彈出主視窗。同時開啟輕量模式時，會直接釋放前端行程。手動開啟軟體仍會顯示主視窗；系統沒有系統匣時會改為顯示視窗。",
+      "quiet_autostart_enabled": "已開啟免打擾啟動",
+      "quiet_autostart_disabled": "已關閉免打擾啟動",
       "auto_check_update": "自動檢查更新",
       "auto_check_update_desc": "啟動時自動檢查新版本",
       "auto_check_update_enabled": "已啟用自動檢查更新",
@@ -1064,10 +1068,13 @@
       },
       "log_retention_title": "請求日誌保留",
       "log_retention_body_hours": "請求主體保留小時數",
-      "log_retention_storage_gb": "日誌保留空間上限 (GB)",
-      "log_retention_storage_gb_desc": "達到上限後自動觸發滑動窗口，淘汰最尾端 30% 日誌記錄以容納新日誌寫入",
+      "log_retention_storage_gb": "請求日誌上限 (GB)",
+      "log_retention_storage_gb_desc": "預設 1GB；達到上限後自動淘汰最舊 30% 記錄並繼續寫入",
       "log_retention_current_usage": "目前資料庫空間",
       "log_retention_rows": "最大日誌行數",
+      "internal_error_log_storage_mb": "內部報錯日誌上限 (MB)",
+      "internal_error_log_storage_mb_desc": "預設 500MB；僅記錄失敗。達到上限後淘汰最舊 30% 並繼續追加，不影響帳號資料。",
+      "internal_error_log_current_usage": "目前佔用",
       "opencode_sync": {
         "card_title": "OpenCode",
         "status": {
@@ -1119,6 +1126,9 @@
           "sync_success_count": "Added {{count}} model(s) to Droid",
           "sync_error": "Sync failed: {{error}}"
         }
+      },
+      "multimodal_settings": {
+        "title": "多模態交互設定 (Multimodal Settings)"
       }
     },
     "example": {
@@ -1451,6 +1461,33 @@
     },
     "error": {
       "load_failed": "載入失敗"
+    },
+    "model_config": {
+      "title": "模型配置"
+    },
+    "multimodal": {
+      "banner_title": "多模態交互與長程保鮮治理 (Pipeline First)",
+      "banner_desc": "針對長程多模態 Agent（如 Codex、Claude Code、Cursor）頻繁查看截圖或文檔的場景，提供協議無關的多模態歷史保鮮滑窗與物理記憶體防爆治理，徹底根治會話歷史因累積圖片過多引發的 400 阻斷崩潰與 Token 急速膨脹。",
+      "sliding_window_title": "多模態歷史保鮮滑動視窗",
+      "opt_in_tag": "長程 Agent 推薦 (預設關閉)",
+      "sliding_window_desc": "預設關閉（100% 原始透傳所有圖片）。開啟後，網關在請求流水線中自動保鮮最新 N 張圖片，對超出的更早歷史圖片剔除 Base64 並替換為結構化佔位符。",
+      "max_fresh_images_label": "保鮮圖片最大張數",
+      "max_fresh_images_hint": "僅保留最新的 N 張圖片完整多模態視覺嵌入。更早的歷史圖片將自動剝離 Base64 並替換為結構化佔位符。填 0 表示不限制張數（僅受累積容量限制）。",
+      "unit_images": "張",
+      "strip_remote_urls_label": "同時剝離歷史遠端 / OSS 圖片直鏈",
+      "strip_remote_urls_hint": "預設不勾選（僅剝離過往 Base64 實體，保留輕量 HTTP/HTTPS 直鏈）。勾選此項後，歷史輪次中的遠端圖片直鏈也將一併剝離為佔位符，極致節省視覺 Token。",
+      "max_total_mb_title": "多模態圖片累計最大解碼容量",
+      "hard_safety_tag": "記憶體安全紅線 (常開)",
+      "max_total_mb_desc": "單次請求中所有保留的多模態圖片總解碼體積上限（預設 32MB）。若即使在保鮮視窗內的圖片總和依然超出此上限，網關將執行 LRU 策略優先淘汰最早歷史圖片，絕對保障當前最新一輪（Current Turn）的視覺感知！",
+      "hot_reload_hint": "多模態配置儲存後立即熱生效，無需重啟反代服務。",
+      "save_btn": "儲存多模態設定",
+      "strategy_select_label": "保鮮治理策略模式 (二選一獨立策略，互不干擾)",
+      "strategy_count_title": "按圖片張數保鮮 (Count-Based)",
+      "strategy_count_desc": "固定保留最近 N 張圖片，不管單圖大小。操作直觀，嚴格與對話輪數對應。",
+      "strategy_memory_title": "按累積記憶體保鮮 (Memory-Based)",
+      "strategy_memory_desc": "自最新輪次往前回溯計算 Base64 體積，配額內全保留，超出配額的更早舊圖自動剔除。",
+      "memory_budget_label": "累積記憶體保鮮上限",
+      "memory_budget_hint": "以 Base64 總解碼體積為限額。從最新輪次往前回溯，只要累積在限額內的圖片完整保留，更早超額舊圖剝離降級為佔位符。"
     }
   },
   "monitor": {
@@ -1509,7 +1546,7 @@
       "payload_empty": "無封包資料",
       "concise_mode": "簡要模式",
       "full_mode": "完整模式",
-      "concise_desc": "已為您精簡工具參數與冗餘欄位，突出思考塊、用量與對話主體",
+      "concise_desc": "保留轉出報文的原始層級，並將標識、模型、思考配置、系統提示詞、對話與工具前置；圖片等大體積內容已省略",
       "search_placeholder": "搜尋此封包...",
       "no_upstream_payload": "無轉出封包 (直接轉發或未記錄)",
       "search_placeholder_with_shortcut": "搜尋此報文... (Enter 下一個, Shift+Enter 上一個)",
@@ -1544,8 +1581,9 @@
       "toggle_button": "日誌儲存與維護設定",
       "button_text": "日誌設定",
       "title": "日誌儲存週期與維護設定",
-      "subtitle": "統一管理請求日誌保留天數、思考塊滑動視窗與磁碟空間回收",
-      "retention_title": "請求日誌保留策略",
+      "subtitle": "統一管理請求日誌與內部報錯日誌的滑動窗口容量",
+      "retention_title": "請求日誌 (滑動窗口)",
+      "internal_error_title": "內部報錯日誌 (滑動窗口)",
       "payload_thinking_title": "報文儲存與思考塊週期",
       "maintenance_title": "日誌維護與空間清理",
       "save_retention": "儲存保留策略",

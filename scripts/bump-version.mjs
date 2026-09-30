@@ -273,7 +273,7 @@ const TARGET_FILES = [
         // 按结构锚定而非精确当前版本串：预发布轮次会跳过 README(stableOnly)，
         // 此时 currentVersion 已前进到如 4.7.14-beta，而 README 仍停在上一个正式版
         // (v4.7.13)，精确匹配会静默失配 —— 导致下一轮正式发版 README 不更新。
-        name: 'README.md (标题与徽章)',
+        name: 'README.md (英文主页标题与徽章)',
         relPath: 'README.md',
         stableOnly: true,
         replace: (content) => content
@@ -281,8 +281,8 @@ const TARGET_FILES = [
             .replace(/Version-[0-9][^"]*-blue/, `Version-${newVersion}-blue`),
     },
     {
-        name: 'README_EN.md (标题与徽章)',
-        relPath: 'README_EN.md',
+        name: 'README_ZH.md (中文主页标题与徽章)',
+        relPath: 'README_ZH.md',
         stableOnly: true,
         replace: (content) => content
             .replace(/\(v[0-9][^)]*\)/, `(v${newVersion})`)

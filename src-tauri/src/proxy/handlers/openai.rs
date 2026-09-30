@@ -19,7 +19,6 @@ use crate::proxy::server::AppState;
 use crate::proxy::upstream::client::mask_email;
 
 const MAX_RETRY_ATTEMPTS: usize = 3;
-const MAX_INPUT_IMAGES: usize = 16;
 const MAX_INPUT_IMAGE_BYTES: usize = 20 * 1024 * 1024;
 const MAX_TOTAL_INPUT_IMAGE_BYTES: usize = 32 * 1024 * 1024;
 const CODEX_VISIBLE_THOUGHT_MESSAGE_PREFIX: &str = "msg_thought_";
@@ -44,26 +43,24 @@ struct NormalizedInputImage {
 }
 
 fn validate_input_image_limits(
-    image_count: usize,
+    _image_count: usize,
     image_bytes: usize,
     total_bytes: usize,
 ) -> Result<(), String> {
-    if image_count > MAX_INPUT_IMAGES {
-        return Err(format!(
-            "Too many input images: maximum is {}",
-            MAX_INPUT_IMAGES
-        ));
-    }
     if image_bytes > MAX_INPUT_IMAGE_BYTES {
         return Err(format!(
             "Input image is too large: maximum decoded size is {} bytes",
             MAX_INPUT_IMAGE_BYTES
         ));
     }
-    if total_bytes > MAX_TOTAL_INPUT_IMAGE_BYTES {
+    let max_total = crate::proxy::config::get_multimodal_config()
+        .max_total_image_mb
+        .max(1)
+        .saturating_mul(1024 * 1024);
+    if total_bytes > max_total {
         return Err(format!(
             "Total input image data is too large: maximum decoded size is {} bytes",
-            MAX_TOTAL_INPUT_IMAGE_BYTES
+            max_total
         ));
     }
     Ok(())
@@ -644,23 +641,6 @@ fn into_history_without_inline_media(value: Value) -> Option<Value> {
     }
 }
 
-fn omit_media_before_latest_user_turn(items: &mut [Value]) {
-    let Some(current_turn_start) = items.iter().rposition(|item| {
-        item.get("role").and_then(Value::as_str) == Some("user")
-            && matches!(
-                item.get("type").and_then(Value::as_str),
-                None | Some("message")
-            )
-    }) else {
-        return;
-    };
-
-    for item in &mut items[..current_turn_start] {
-        let historical = std::mem::take(item);
-        *item = into_history_without_inline_media(historical).unwrap_or(Value::Null);
-    }
-}
-
 async fn save_session_unless_response_cancelled<F>(
     mut ack_tx: tokio::sync::oneshot::Sender<()>,
     save: F,
@@ -947,7 +927,6 @@ mod stream_peek_tests {
     use super::into_history_without_inline_media;
     use super::is_codex_transcript_only_assistant_message;
     use super::is_edit_image_field;
-    use super::omit_media_before_latest_user_turn;
     use super::parse_generation_input_images;
     use super::response_has_inline_image_data;
     use super::responses_input_item_type;
@@ -959,8 +938,7 @@ mod stream_peek_tests {
     use super::stream_chunk_has_image_data;
     use super::validate_input_image_limits;
     use super::validate_responses_image_data_url;
-    use super::validate_responses_input_image_limits;
-    use super::{MAX_INPUT_IMAGES, MAX_INPUT_IMAGE_BYTES, MAX_TOTAL_INPUT_IMAGE_BYTES};
+    use super::{MAX_INPUT_IMAGE_BYTES, MAX_TOTAL_INPUT_IMAGE_BYTES};
     use crate::proxy::mappers::openai::{transform_openai_request, OpenAIRequest};
     use serde_json::{json, Value};
 
@@ -1206,40 +1184,13 @@ data: {"type":"response.failed","response":{"status":"failed","error":{"code":"u
         )
         .unwrap_err()
         .starts_with("Total input image data is too large"));
-        assert!(validate_input_image_limits(
-            MAX_INPUT_IMAGES,
-            2 * 1024 * 1024,
-            MAX_TOTAL_INPUT_IMAGE_BYTES
-        )
-        .is_ok());
-        assert!(validate_input_image_limits(
-            MAX_INPUT_IMAGES,
-            2 * 1024 * 1024,
-            MAX_TOTAL_INPUT_IMAGE_BYTES + 1
-        )
-        .is_err());
-    }
-
-    #[test]
-    fn responses_omits_old_images_before_validating_current_turn() {
-        let images = |count| {
-            (0..count)
-                .map(|_| json!({"type": "input_image", "image_url": "data:image/png;base64,AQ=="}))
-                .collect::<Vec<_>>()
-        };
-        let mut input = vec![
-            json!({"type": "message", "role": "user", "content": images(16)}),
-            json!({"type": "message", "role": "assistant", "content": "done"}),
-            json!({"type": "message", "role": "user", "content": images(16)}),
-        ];
-
-        omit_media_before_latest_user_turn(&mut input);
-        assert!(input[0].to_string().contains("[historical image omitted]"));
-        assert!(!input[0].to_string().contains("data:image/"));
-        assert!(validate_responses_input_image_limits(Some(&Value::Array(input.clone()))).is_ok());
-
-        input[2]["content"] = Value::Array(images(17));
-        assert!(validate_responses_input_image_limits(Some(&Value::Array(input))).is_err());
+        assert!(
+            validate_input_image_limits(100, 2 * 1024 * 1024, MAX_TOTAL_INPUT_IMAGE_BYTES).is_ok()
+        );
+        assert!(
+            validate_input_image_limits(100, 2 * 1024 * 1024, MAX_TOTAL_INPUT_IMAGE_BYTES + 1)
+                .is_err()
+        );
     }
 
     #[tokio::test]
@@ -1575,12 +1526,11 @@ data: {"type":"response.failed","response":{"status":"failed","error":{"code":"u
             assert!(parse_generation_input_images(Some(&input)).is_err());
         }
 
-        let too_many = Value::Array(
-            (0..=MAX_INPUT_IMAGES)
-                .map(|_| json!("data:image/png;base64,AQ=="))
-                .collect(),
-        );
-        assert!(parse_generation_input_images(Some(&too_many)).is_err());
+        let oversized = Value::Array(vec![json!(format!(
+            "data:image/png;base64,{}",
+            "AAAA".repeat(MAX_INPUT_IMAGE_BYTES / 3 + 1)
+        ))]);
+        assert!(parse_generation_input_images(Some(&oversized)).is_err());
         assert!(validate_input_image_limits(1, MAX_INPUT_IMAGE_BYTES + 1, 0).is_err());
         assert!(validate_input_image_limits(1, 1, MAX_TOTAL_INPUT_IMAGE_BYTES + 1).is_err());
 
@@ -1784,6 +1734,9 @@ pub async fn handle_chat_completions(
     upstream_recorder: Option<
         axum::extract::Extension<crate::proxy::monitor::UpstreamRequestBodyHolder>,
     >,
+    user_identity: Option<
+        axum::extract::Extension<crate::proxy::middleware::auth::UserTokenIdentity>,
+    >,
     Json(mut body): Json<Value>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     let clean_start = std::time::Instant::now();
@@ -1809,7 +1762,14 @@ pub async fn handle_chat_completions(
             "[ChatRedirection] Redirecting model {} to image generations",
             model_name
         );
-        return intercept_chat_to_image(state, body, &model_name).await;
+        return intercept_chat_to_image(
+            state,
+            headers,
+            user_identity.map(|identity| identity.token_id.clone()),
+            body,
+            &model_name,
+        )
+        .await;
     }
 
     let debug_cfg = state.debug_logging.read().await.clone();
@@ -1871,6 +1831,15 @@ pub async fn handle_chat_completions(
     }
 
     let normalized_interaction_ledger = body.get("_interaction_ledger").cloned();
+    let session_hint = json!({
+        "session_id": body.get("session_id").filter(|v| v.is_string()),
+        "sessionId": body.get("sessionId").filter(|v| v.is_string()),
+        "conversation_id": body.get("conversation_id").filter(|v| v.is_string()),
+        "chat_id": body.get("chat_id").filter(|v| v.is_string()),
+        "thread_id": body.get("thread_id").filter(|v| v.is_string()),
+        "client_session_id": body.get("client_session_id").filter(|v| v.is_string()),
+        "metadata": body.get("metadata").filter(|v| v.is_object()),
+    });
     let mut openai_req: OpenAIRequest = serde_json::from_value(body)
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid request: {}", e)))?;
 
@@ -2026,22 +1995,14 @@ pub async fn handle_chat_completions(
         client_budget
     };
 
-    let effort_hint = openai_req
+    let effort_hint: Option<String> = openai_req
         .reasoning_effort
-        .as_deref()
-        .or_else(|| {
-            openai_req
-                .reasoning
-                .as_ref()
-                .and_then(|r| r.effort.as_deref())
-        })
-        .or_else(|| {
-            openai_req
-                .thinking
-                .as_ref()
-                .and_then(|t| t.effort.as_deref())
-        });
-    let effort_tier = crate::proxy::common::variant_mapping::tier_from_effort(effort_hint);
+        .as_ref()
+        .map(|s| s.to_string())
+        .or_else(|| openai_req.reasoning.as_ref().and_then(|r| r.effort.clone()))
+        .or_else(|| openai_req.thinking.as_ref().and_then(|t| t.effort.clone()));
+    let effort_tier =
+        crate::proxy::common::variant_mapping::tier_from_effort(effort_hint.as_deref());
 
     let variant_spec =
         if crate::proxy::mappers::openai::request::is_tiered_flash_model(&openai_req.model) {
@@ -2075,7 +2036,7 @@ pub async fn handle_chat_completions(
             openai_req.thinking = Some(crate::proxy::mappers::openai::models::ThinkingConfig {
                 thinking_type: Some("enabled".to_string()),
                 budget_tokens: raw_client_budget,
-                effort: effort_hint.map(|s| s.to_string()),
+                effort: effort_hint.clone(),
             });
         } else if is_client_control {
             // [CRITICAL FIX] 客户端控制模式下，客户端未传数字预算（全缺省或仅传等级）
@@ -2098,7 +2059,7 @@ pub async fn handle_chat_completions(
             openai_req.thinking = Some(crate::proxy::mappers::openai::models::ThinkingConfig {
                 thinking_type: Some("enabled".to_string()),
                 budget_tokens: Some(spec.thinking_budget),
-                effort: effort_hint.map(|s| s.to_string()),
+                effort: effort_hint.clone(),
             });
         }
         openai_req.max_tokens = Some(spec.max_output_tokens);
@@ -2126,27 +2087,24 @@ pub async fn handle_chat_completions(
     let mut retried_without_thinking = false;
 
     // 2. 模型路由解析 (移到循环外以支持在所有路径返回 X-Mapped-Model)
-    let mapped_model = crate::proxy::common::model_mapping::resolve_model_route(
+    let mapped_model = crate::proxy::common::model_mapping::resolve_model_route_with_effort(
         &openai_req.model,
         &*state.custom_mapping.read().await,
+        effort_hint.as_deref(),
     );
-    let explicit_sid = headers
-        .get("x-session-id")
-        .or_else(|| headers.get("x-jeikcode-session-id"))
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty());
-    let fallback_sid = if let Some(sid) = explicit_sid {
-        sid.to_string()
-    } else {
-        SessionManager::extract_openai_session_id(&openai_req)
-    };
-    let session_scope = crate::proxy::thinking_store::SessionScope::from_headers_and_body(
+    let anchor = SessionManager::openai_content_anchor(&openai_req);
+    let session_scope = crate::proxy::thinking_store::SessionScope::resolve(
         &headers,
-        original_body.as_ref(),
-        fallback_sid,
+        Some(&session_hint),
+        None,
+        anchor,
+        user_identity
+            .as_ref()
+            .map(|identity| identity.token_id.as_str()),
     );
-    openai_req.session_id = Some(session_scope.store_key.clone());
+    let store_key = session_scope.store_key.clone();
+    let affinity_key = session_scope.affinity_key.clone();
+    openai_req.session_id = Some(store_key.clone());
     let client_session_id = session_scope.client_id.clone();
 
     while let Some(attempt) = next_rotation_attempt(
@@ -2170,9 +2128,6 @@ pub async fn handle_chat_completions(
             None, // body
         );
 
-        // 3. 提取 SessionId (粘性指纹)
-        let session_id = session_scope.store_key.clone();
-
         // 4. 获取 Token (使用准确的 request_type)
         // 关键：在重试尝试时根据 force_rotate 决定是否轮换账号
         let (access_token, project_id, email, account_id, _wait_ms) =
@@ -2183,7 +2138,7 @@ pub async fn handle_chat_completions(
                 match token_manager
                     .get_image_token(
                         force_rotate,
-                        Some(&session_id),
+                        Some(&affinity_key),
                         &mapped_model,
                         &image_scheduler,
                         request_timeout,
@@ -2205,7 +2160,7 @@ pub async fn handle_chat_completions(
                     .get_token(
                         &config.request_type,
                         force_rotate,
-                        Some(&session_id),
+                        Some(&affinity_key),
                         &mapped_model,
                     )
                     .await
@@ -2241,12 +2196,17 @@ pub async fn handle_chat_completions(
 
         // 4. 转换请求 (返回内容包含 session_id, message_count, prefix_hash)
         let tf_start = std::time::Instant::now();
-        let (mut gemini_body, session_id, message_count, _prefix_hash) = transform_openai_request(
-            &openai_req,
-            &project_id,
-            &mapped_model,
-            proxy_token.as_ref(),
-        );
+        let (mut gemini_body, _routed_session, message_count, _prefix_hash) =
+            transform_openai_request_with_session(
+                &openai_req,
+                &project_id,
+                &mapped_model,
+                proxy_token.as_ref(),
+                &affinity_key,
+                None,
+                false,
+            );
+        let session_id = store_key.clone();
         let tf_micros = tf_start.elapsed().as_micros() as u64;
         let norm_total_micros = norm_start.elapsed().as_micros() as u64;
         norm_ms = norm_total_micros.saturating_sub(tf_micros) as f64 / 1000.0;
@@ -2406,6 +2366,7 @@ pub async fn handle_chat_completions(
         let upstream_url = response.url().to_string();
         let status = response.status();
         if status.is_success() {
+            token_manager.commit_session(&affinity_key, &account_id);
             // 5. 处理流式 vs 非流式
             if actual_stream {
                 use axum::body::Body;
@@ -2429,6 +2390,23 @@ pub async fn handle_chat_completions(
                     "upstream_response",
                     meta,
                 );
+
+                // [Auto-Heal] 纯思考空回复流式自愈门禁 (Pipeline First)
+                let auto_heal_ctx = crate::proxy::pipeline::auto_heal::ThinkingAutoHealContext {
+                    upstream: upstream.clone(),
+                    method,
+                    access_token: access_token.clone(),
+                    original_body: gemini_body.clone(),
+                    query_string,
+                    extra_headers: extra_headers.clone(),
+                    account_id: Some(account_id.clone()),
+                    trace_id: trace_id.clone(),
+                };
+                let gemini_stream =
+                    crate::proxy::pipeline::auto_heal::wrap_stream_with_empty_thinking_auto_heal(
+                        Box::pin(gemini_stream),
+                        auto_heal_ctx,
+                    );
 
                 // [P1 FIX] Enhanced Peek logic to handle heartbeats and slow start
                 // Pre-read until we find meaningful content, skip heartbeats
@@ -2865,10 +2843,7 @@ pub async fn handle_chat_completions(
                     trace_id, status_code
                 );
                 // 1. 精准定向净化 ThinkingStore 中的异构污染签名（保留思考文本与健康签名）
-                crate::proxy::thinking_store::ThinkingStore::global()
-                    .purge_corrupted_signatures(&session_id, &mapped_model);
-                // 2. 清理当前 session 的 SignatureCache
-                crate::proxy::SignatureCache::global().delete_session_signature(&client_session_id);
+                session_scope.purge_signatures(&mapped_model);
                 // 3. 保持同一账号原地重试
                 force_rotate = false;
                 continue;
@@ -2917,10 +2892,8 @@ pub async fn handle_chat_completions(
                 .await;
         }
 
-        if status_code == 429 || status_code == 529 {
-            token_manager
-                .unbind_session_and_clear_last_used(Some(&session_id))
-                .await;
+        if classification.abandons_sticky_account() {
+            token_manager.abandon_session(&affinity_key, &account_id);
         }
 
         // [FIX] 403 时优先检测 VALIDATION_REQUIRED 并设置 is_forbidden / validation_block 状态，确保及时提取 URL 与更新 UI
@@ -3008,8 +2981,7 @@ pub async fn handle_chat_completions(
         // 之后该 sessionId 的所有请求都 400 "input token count exceeds ... 1048576"。
         // 给 (账号, 对话) 的 sessionId 升代并立即重试:新 sessionId = 上游全新会话,对话无感恢复。
         if status_code == 400 && error_text.contains("exceeds the maximum number of tokens") {
-            let fingerprint = SessionManager::extract_openai_session_id(&openai_req);
-            let generation = crate::proxy::common::session::bump_session(&account_id, &fingerprint);
+            let generation = crate::proxy::common::session::bump_session(&account_id, &store_key);
             tracing::warn!(
                 "[OpenAI] Upstream session token accumulation exceeded 1M on account {}. sessionId bumped to generation {}, retrying with a fresh upstream session.",
                 email, generation
@@ -3070,6 +3042,9 @@ pub async fn handle_completions(
     upstream_recorder: Option<
         axum::extract::Extension<crate::proxy::monitor::UpstreamRequestBodyHolder>,
     >,
+    user_identity: Option<
+        axum::extract::Extension<crate::proxy::middleware::auth::UserTokenIdentity>,
+    >,
     Json(mut body): Json<Value>,
 ) -> Response {
     let clean_start = std::time::Instant::now();
@@ -3112,7 +3087,7 @@ pub async fn handle_completions(
     let mut stored_routing_session_id = None;
     let mut session_delta_input = Vec::new();
     if is_codex_style {
-        let mut existing_input = body
+        let existing_input = body
             .as_object_mut()
             .and_then(|obj| obj.remove("input"))
             .and_then(|value| match value {
@@ -3120,8 +3095,6 @@ pub async fn handle_completions(
                 _ => None,
             })
             .unwrap_or_default();
-        // 完整回放先裁掉最新用户轮次之前的内联媒体，再执行硬限制校验。
-        omit_media_before_latest_user_turn(&mut existing_input);
 
         let merged = if let Some(ref prev_id) = previous_response_id {
             if let Some((session, parent)) =
@@ -3775,38 +3748,28 @@ pub async fn handle_completions(
     }
 
     // [NEW v4.2.0] Context Management & Reasoning Replay
-    let explicit_sid = headers
-        .get("x-session-id")
-        .or_else(|| headers.get("x-jeikcode-session-id"))
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty());
-    let fallback_sid = if let Some(sid) = explicit_sid {
-        sid.to_string()
-    } else if is_responses_api {
-        if explicit_session_id.is_some() || previous_response_id.is_some() {
-            routing_session_id.clone()
-        } else {
-            SessionManager::extract_openai_session_id(&openai_req)
-        }
-    } else {
-        SessionManager::extract_openai_session_id(&openai_req)
+    let anchor = SessionManager::openai_content_anchor(&openai_req);
+    // 粘性身份只用客户端显式会话号。网关生成的 response id 和每轮
+    // previous_response_id 只给会话库串历史，不进入 SessionScope。
+    let session_hint = match explicit_session_id.as_deref() {
+        Some(id) => json!({ "session_id": id }),
+        None => json!({}),
     };
-    let session_scope = crate::proxy::thinking_store::SessionScope::from_headers_and_body(
+    let session_scope = crate::proxy::thinking_store::SessionScope::resolve(
         &headers,
-        original_body.as_ref(),
-        fallback_sid,
+        Some(&session_hint),
+        None,
+        anchor,
+        user_identity
+            .as_ref()
+            .map(|identity| identity.token_id.as_str()),
     );
-    openai_req.session_id = Some(session_scope.store_key.clone());
-    let session_id_str = session_scope.store_key.clone();
+    let store_key = session_scope.store_key.clone();
+    let affinity_key = session_scope.affinity_key.clone();
+    openai_req.session_id = Some(store_key.clone());
+    let session_id_str = store_key.clone();
     let client_session_id = session_scope.client_id.clone();
-    let signature_session_id_str = if is_responses_api {
-        previous_response_id
-            .clone()
-            .unwrap_or_else(|| response_id_for_save.clone())
-    } else {
-        session_id_str.clone()
-    };
+    let signature_session_id_str = session_id_str.clone();
 
     let client_tool_names =
         crate::proxy::mappers::openai::request::extract_client_tool_names(&openai_req.tools);
@@ -3815,20 +3778,26 @@ pub async fn handle_completions(
     // SignatureCache. OpenAI mapping ignores client/cached reasoning text and fills
     // placeholders via ThinkingStore hydrate + finalize instead.
 
-    let experimental_cfg = state.experimental.read().await;
-    let compression_level = if experimental_cfg.compression_level == "disabled" {
-        if experimental_cfg.enable_usage_scaling {
-            "high".to_string()
-        } else {
-            "disabled".to_string()
-        }
-    } else {
-        experimental_cfg.compression_level.clone()
-    };
+    let effort_hint = openai_req
+        .reasoning_effort
+        .as_deref()
+        .or_else(|| {
+            openai_req
+                .reasoning
+                .as_ref()
+                .and_then(|r| r.effort.as_deref())
+        })
+        .or_else(|| {
+            openai_req
+                .thinking
+                .as_ref()
+                .and_then(|t| t.effort.as_deref())
+        });
 
-    let mapped_model = crate::proxy::common::model_mapping::resolve_model_route(
+    let mapped_model = crate::proxy::common::model_mapping::resolve_model_route_with_effort(
         &openai_req.model,
         &*state.custom_mapping.read().await,
+        effort_hint,
     );
     let trace_id = format!("req_{}", chrono::Utc::now().timestamp_subsec_millis());
     if debug_logger::is_enabled(&debug_cfg) {
@@ -3851,135 +3820,6 @@ pub async fn handle_completions(
         }
     }
     let token_manager = state.token_manager.clone();
-
-    let mut compression_applied = false;
-    let mut is_purified = false;
-
-    if compression_level == "high" {
-        let context_limit = if mapped_model.contains("flash") {
-            1_000_000
-        } else {
-            2_000_000
-        };
-
-        let raw_estimated =
-            crate::proxy::mappers::context_manager::ContextManager::estimate_openai_token_usage(
-                &openai_req,
-            );
-        let calibrator = crate::proxy::mappers::estimation_calibrator::get_calibrator();
-        let mut estimated_usage = calibrator.calibrate(raw_estimated);
-        let mut usage_ratio = estimated_usage as f32 / context_limit as f32;
-
-        let threshold_l1 = experimental_cfg.context_compression_threshold_l1;
-        let threshold_l3 = experimental_cfg.context_compression_threshold_l3;
-
-        tracing::info!(
-            "[{}] [ContextManager] [OpenAI] Context pressure: {:.1}% (raw: {}, calibrated: {} / {}), Calibration factor: {:.2}",
-            trace_id, usage_ratio * 100.0, raw_estimated, estimated_usage, context_limit, calibrator.get_factor()
-        );
-
-        // ===== Layer 1: Tool Message Trimming =====
-        if usage_ratio > threshold_l1 && !compression_applied {
-            if crate::proxy::mappers::context_manager::ContextManager::trim_openai_tool_messages(
-                &mut openai_req.messages,
-                5,
-            ) {
-                tracing::info!(
-                    "[{}] [Layer-1] [OpenAI] Tool trimming triggered (usage: {:.1}%, threshold: {:.1}%)",
-                    trace_id, usage_ratio * 100.0, threshold_l1 * 100.0
-                );
-                compression_applied = true;
-
-                let new_raw = crate::proxy::mappers::context_manager::ContextManager::estimate_openai_token_usage(&openai_req);
-                let new_usage = calibrator.calibrate(new_raw);
-                let new_ratio = new_usage as f32 / context_limit as f32;
-
-                tracing::info!(
-                    "[{}] [Layer-1] [OpenAI] Compression result: {:.1}% → {:.1}% (saved {} tokens)",
-                    trace_id,
-                    usage_ratio * 100.0,
-                    new_ratio * 100.0,
-                    estimated_usage - new_usage
-                );
-
-                if new_ratio < 0.7 {
-                    estimated_usage = new_usage;
-                    usage_ratio = new_ratio;
-                } else {
-                    usage_ratio = new_ratio;
-                    compression_applied = false;
-                }
-            }
-        }
-
-        // ===== Layer 3: Fork Conversation + XML Summary =====
-        if usage_ratio > threshold_l3 && !compression_applied {
-            tracing::info!(
-                "[{}] [Layer-3] [OpenAI] Context pressure ({:.1}%) exceeded threshold ({:.1}%), attempting Fork+Summary",
-                trace_id, usage_ratio * 100.0, threshold_l3 * 100.0
-            );
-
-            let token_manager_clone = token_manager.clone();
-
-            match try_compress_openai_with_summary(
-                &openai_req,
-                &trace_id,
-                &token_manager_clone,
-                &state.upstream,
-                &signature_session_id_str,
-            )
-            .await
-            {
-                Ok(forked_req) => {
-                    tracing::info!(
-                        "[{}] [Layer-3] [OpenAI] Fork successful: {} → {} messages",
-                        trace_id,
-                        openai_req.messages.len(),
-                        forked_req.messages.len()
-                    );
-
-                    openai_req = forked_req;
-                    is_purified = false;
-
-                    let new_raw = crate::proxy::mappers::context_manager::ContextManager::estimate_openai_token_usage(&openai_req);
-                    let new_usage = calibrator.calibrate(new_raw);
-                    let new_ratio = new_usage as f32 / context_limit as f32;
-
-                    tracing::info!(
-                        "[{}] [Layer-3] [OpenAI] Compression result: {:.1}% → {:.1}% (saved {} tokens)",
-                        trace_id, usage_ratio * 100.0, new_ratio * 100.0, estimated_usage - new_usage
-                    );
-                }
-                Err(e) => {
-                    tracing::error!(
-                        "[{}] [Layer-3] [OpenAI] Fork+Summary failed: {}, falling back to error response",
-                        trace_id, e
-                    );
-                    return (
-                        StatusCode::BAD_REQUEST,
-                        format!("Context too long and automatic compression failed: {}", e),
-                    )
-                        .into_response();
-                }
-            }
-        }
-    } else if compression_level != "disabled" {
-        if crate::proxy::mappers::context_manager::ContextManager::trim_openai_tool_messages(
-            &mut openai_req.messages,
-            5,
-        ) {
-            tracing::info!("[Codex-Context] Trimmed old tool messages to keep last 5 rounds");
-        }
-
-        if compression_level == "medium" {
-            if crate::proxy::mappers::context_manager::ContextManager::purify_openai_history(
-                &mut openai_req.messages,
-                crate::proxy::mappers::context_manager::PurificationStrategy::Soft,
-            ) {
-                tracing::info!("[Codex-Context] Purified older assistant reasoning_content and natural language history");
-            }
-        }
-    }
 
     let assistant_turn_index = openai_req
         .messages
@@ -4045,10 +3885,7 @@ pub async fn handle_completions(
             None, // body
         );
 
-        // 3. 提取 SessionId (复用)
-        // [New] 使用 TokenManager 内部逻辑提取 session_id，支持粘性调度
-        let session_id_str = session_id_str.clone();
-        let session_id = Some(session_id_str.as_str());
+        let session_id = Some(affinity_key.as_str());
 
         let (access_token, project_id, email, account_id, _wait_ms) =
             if let Some(credentials) = retry_credentials.take() {
@@ -4090,24 +3927,28 @@ pub async fn handle_completions(
 
         let proxy_token = token_manager.get_token_by_id(&account_id);
         let tf_start = std::time::Instant::now();
-        let (mut gemini_body, session_id, message_count, _prefix_hash) = if is_responses_api {
+        let (mut gemini_body, _routed_session, message_count, _prefix_hash) = if is_responses_api {
             transform_openai_request_with_session(
                 &openai_req,
                 &project_id,
                 &mapped_model,
                 proxy_token.as_ref(),
-                &session_id_str,
+                &affinity_key,
                 signature_read_key.as_deref(),
                 true, // is_responses_api
             )
         } else {
-            transform_openai_request(
+            transform_openai_request_with_session(
                 &openai_req,
                 &project_id,
                 &mapped_model,
                 proxy_token.as_ref(),
+                &affinity_key,
+                None,
+                false,
             )
         };
+        let session_id = session_id_str.clone();
         let tf_micros = tf_start.elapsed().as_micros() as u64;
         let norm_total_micros = norm_start.elapsed().as_micros() as u64;
         norm_ms = norm_total_micros.saturating_sub(tf_micros) as f64 / 1000.0;
@@ -4215,7 +4056,7 @@ pub async fn handle_completions(
                 &access_token,
                 gemini_body.clone(),
                 query_string,
-                extra_headers,
+                extra_headers.clone(),
                 Some(account_id.as_str()),
             )
             .await
@@ -4238,6 +4079,7 @@ pub async fn handle_completions(
         let upstream_url = response.url().to_string();
         let status = response.status();
         if status.is_success() {
+            token_manager.commit_session(&affinity_key, &account_id);
             // [智能限流] 请求成功，重置该账号的连续失败计数
             token_manager.mark_account_success(&email);
 
@@ -4264,6 +4106,23 @@ pub async fn handle_completions(
                     "upstream_response",
                     upstream_meta,
                 );
+
+                // [Auto-Heal] 纯思考空回复流式自愈门禁 (Pipeline First)
+                let auto_heal_ctx = crate::proxy::pipeline::auto_heal::ThinkingAutoHealContext {
+                    upstream: upstream.clone(),
+                    method: "streamGenerateContent",
+                    access_token: access_token.clone(),
+                    original_body: gemini_body.clone(),
+                    query_string: Some("alt=sse"),
+                    extra_headers: extra_headers.clone(),
+                    account_id: Some(account_id.clone()),
+                    trace_id: trace_id.clone(),
+                };
+                let gemini_stream =
+                    crate::proxy::pipeline::auto_heal::wrap_stream_with_empty_thinking_auto_heal(
+                        Box::pin(gemini_stream),
+                        auto_heal_ctx,
+                    );
 
                 // DECISION: Which stream to create?
                 // If client wants stream: give them what they asked (Legacy/Codex SSE).
@@ -4858,10 +4717,8 @@ pub async fn handle_completions(
                 .await;
         }
 
-        if status_code == 429 || status_code == 529 {
-            token_manager
-                .unbind_session_and_clear_last_used(Some(&session_id_str))
-                .await;
+        if classification.abandons_sticky_account() {
+            token_manager.abandon_session(&affinity_key, &account_id);
         }
 
         let scheduling_mode = token_manager.get_scheduling_mode().await;
@@ -4975,6 +4832,49 @@ pub async fn handle_list_models(State(state): State<AppState>) -> impl IntoRespo
     }))
 }
 
+/// OpenAI Models API: GET /v1/models/{model}
+/// 检索指定模型的详细元数据
+pub async fn handle_retrieve_model(
+    State(state): State<AppState>,
+    axum::extract::Path(model): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    use crate::proxy::common::model_mapping::find_dynamic_model;
+
+    let only_raw = *state.only_raw_quota_models.read().await;
+    if let Some(matched_id) = find_dynamic_model(
+        &state.custom_mapping,
+        Some(&state.token_manager),
+        only_raw,
+        &model,
+    )
+    .await
+    {
+        (
+            StatusCode::OK,
+            Json(json!({
+                "id": matched_id,
+                "object": "model",
+                "created": 1706745600,
+                "owned_by": "antigravity"
+            })),
+        )
+            .into_response()
+    } else {
+        (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "error": {
+                    "message": format!("The model '{}' does not exist", model),
+                    "type": "invalid_request_error",
+                    "param": "model",
+                    "code": "model_not_found"
+                }
+            })),
+        )
+            .into_response()
+    }
+}
+
 /// OpenAI Images API: POST /v1/images/generations
 /// 处理图像生成请求，转换为 Gemini API 格式
 pub async fn handle_chat_redirection(
@@ -4985,11 +4885,13 @@ pub async fn handle_chat_redirection(
     >,
     Json(body): Json<Value>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    handle_chat_completions(State(state), headers, upstream_recorder, Json(body)).await
+    handle_chat_completions(State(state), headers, upstream_recorder, None, Json(body)).await
 }
 
 async fn intercept_chat_to_image(
     state: AppState,
+    headers: HeaderMap,
+    tenant_id: Option<String>,
     body: Value,
     model_name: &str,
 ) -> Result<Response, (StatusCode, String)> {
@@ -5032,7 +4934,7 @@ async fn intercept_chat_to_image(
         "response_format": "url"
     });
 
-    match handle_images_generations_internal(state, img_req).await {
+    match handle_images_generations_internal(state, headers, tenant_id, img_req).await {
         Ok((email, img_res)) => {
             // Extract URL
             let mut img_markdown = String::new();
@@ -5123,9 +5025,20 @@ async fn intercept_chat_to_image(
 
 pub async fn handle_images_generations(
     State(state): State<AppState>,
+    headers: HeaderMap,
+    user_identity: Option<
+        axum::extract::Extension<crate::proxy::middleware::auth::UserTokenIdentity>,
+    >,
     Json(body): Json<Value>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    match handle_images_generations_internal(state, body).await {
+    match handle_images_generations_internal(
+        state,
+        headers,
+        user_identity.map(|identity| identity.token_id.clone()),
+        body,
+    )
+    .await
+    {
         Ok((email_header, openai_response)) => Ok((
             StatusCode::OK,
             [("X-Account-Email", email_header.as_str())],
@@ -5143,6 +5056,8 @@ pub async fn handle_images_generations(
 
 pub async fn handle_images_generations_internal(
     state: AppState,
+    headers: HeaderMap,
+    tenant_id: Option<String>,
     body: Value,
 ) -> Result<(String, Value), (StatusCode, String, Option<String>)> {
     // 1. 解析请求参数
@@ -5151,6 +5066,14 @@ pub async fn handle_images_generations_internal(
         "Missing 'prompt' field".to_string(),
         None,
     ))?;
+    let affinity_key = crate::proxy::thinking_store::SessionScope::resolve(
+        &headers,
+        Some(&body),
+        None,
+        prompt,
+        tenant_id.as_deref(),
+    )
+    .affinity_key;
 
     let model = body
         .get("model")
@@ -5236,6 +5159,7 @@ pub async fn handle_images_generations_internal(
         let model_to_use = clean_model_name.clone();
         let attempted_account = attempted_account.clone();
         let image_scheduler = image_scheduler.clone();
+        let affinity_key = affinity_key.clone();
 
         tasks.spawn(async move {
             let mut image_permit = None;
@@ -5259,7 +5183,7 @@ pub async fn handle_images_generations_internal(
                         match token_manager
                             .get_image_token(
                                 force_rotate,
-                                None,
+                                Some(&affinity_key),
                                 &model_to_use,
                                 &image_scheduler,
                                 request_timeout,
@@ -5365,6 +5289,9 @@ pub async fn handle_images_generations_internal(
                                 &err_text,
                                 retry_after.as_deref(),
                             );
+                            if classification.abandons_sticky_account() {
+                                token_manager.abandon_session(&affinity_key, &account_id);
+                            }
                             let should_mark_limited = classification.should_lock_account();
                             let needs_quota_refresh = if should_mark_limited {
                                 tracing::warn!(
@@ -5447,6 +5374,7 @@ pub async fn handle_images_generations_internal(
                         match response.json::<Value>().await {
                             Ok(json) => {
                                 if response_has_inline_image_data(&json) {
+                                    token_manager.commit_session(&affinity_key, &account_id);
                                     token_manager.mark_account_success(&account_id);
                                     token_manager
                                         .clear_persisted_live_limit(
@@ -5590,6 +5518,10 @@ pub async fn handle_images_generations_internal(
 
 pub async fn handle_images_edits(
     State(state): State<AppState>,
+    headers: HeaderMap,
+    user_identity: Option<
+        axum::extract::Extension<crate::proxy::middleware::auth::UserTokenIdentity>,
+    >,
     mut multipart: axum::extract::Multipart,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     tracing::info!("[Images] Received edit request");
@@ -5699,6 +5631,16 @@ pub async fn handle_images_edits(
     if prompt.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "Missing prompt".to_string()));
     }
+    let affinity_key = crate::proxy::thinking_store::SessionScope::resolve(
+        &headers,
+        None,
+        None,
+        prompt.clone(),
+        user_identity
+            .as_ref()
+            .map(|identity| identity.token_id.as_str()),
+    )
+    .affinity_key;
 
     tracing::info!(
         model = model,
@@ -5755,6 +5697,7 @@ pub async fn handle_images_edits(
         let response_format = response_format.clone();
         let model_to_use = clean_model_name.clone();
         let image_scheduler = image_scheduler.clone();
+        let affinity_key = affinity_key.clone();
 
         tasks.spawn(async move {
             let mut image_permit = None;
@@ -5779,7 +5722,7 @@ pub async fn handle_images_edits(
                         match token_manager
                             .get_image_token(
                                 force_rotate,
-                                None,
+                                Some(&affinity_key),
                                 image_account_selection_target(&model_to_use),
                                 &image_scheduler,
                                 request_timeout,
@@ -5856,6 +5799,9 @@ pub async fn handle_images_edits(
                                     &err_text,
                                     retry_after.as_deref(),
                                 );
+                            if classification.abandons_sticky_account() {
+                                token_manager.abandon_session(&affinity_key, &account_id);
+                            }
                             let should_mark_limited = classification.should_lock_account();
                             let needs_quota_refresh = if should_mark_limited {
                                 tracing::warn!(
@@ -5920,6 +5866,7 @@ pub async fn handle_images_edits(
                         match response.json::<Value>().await {
                             Ok(json) => {
                                 if response_has_inline_image_data(&json) {
+                                    token_manager.commit_session(&affinity_key, &account_id);
                                     token_manager.mark_account_success(&account_id);
                                     token_manager.clear_persisted_live_limit(
                                         &account_id,
@@ -6230,6 +6177,7 @@ async fn handle_websocket_session(mut socket: WebSocket, headers: HeaderMap, sta
         let response_result = handle_chat_completions(
             State(state.clone()),
             headers.clone(),
+            None,
             None,
             Json(openai_body),
         )

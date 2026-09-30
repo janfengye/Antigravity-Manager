@@ -186,144 +186,17 @@ fn parse_pointer(path: &str) -> Result<JsonPointer, String> {
     JsonPointer::parse(path).map_err(|error| format!("Invalid YAML path {path:?}: {error}"))
 }
 
-#[derive(Debug, Clone)]
-struct IndentlessSequenceStyle {
-    parent_line: String,
-    parent_occurrence: usize,
-    parent_indent: usize,
-}
-
-fn line_without_ending(line: &str) -> &str {
-    line.strip_suffix("\r\n")
-        .or_else(|| line.strip_suffix('\n'))
-        .unwrap_or(line)
-}
-
-fn leading_spaces(line: &str) -> usize {
-    line.bytes().take_while(|byte| *byte == b' ').count()
-}
-
-fn is_sequence_entry(line: &str) -> bool {
-    let trimmed = line.trim_start();
-    trimmed == "-" || trimmed.starts_with("- ")
-}
-
-fn is_empty_mapping_value(line: &str) -> bool {
-    let trimmed = line.trim_start();
-    if trimmed.starts_with('-') {
-        return false;
-    }
-    let Some((key, value)) = trimmed.split_once(':') else {
-        return false;
-    };
-    !key.trim().is_empty() && (value.trim().is_empty() || value.trim_start().starts_with('#'))
-}
-
-fn normalize_indentless_sequences(source: &str) -> (String, Vec<IndentlessSequenceStyle>) {
-    let lines = source.split_inclusive('\n').collect::<Vec<_>>();
-    let mut extra_indent = vec![0_usize; lines.len()];
-    let mut styles = Vec::new();
-
-    for (index, line) in lines.iter().enumerate() {
-        let parent = line_without_ending(line);
-        if !is_empty_mapping_value(parent) {
-            continue;
-        }
-        let parent_indent = leading_spaces(parent);
-        let Some(first_content) = ((index + 1)..lines.len()).find(|candidate| {
-            let body = line_without_ending(lines[*candidate]);
-            let trimmed = body.trim();
-            !trimmed.is_empty() && !trimmed.starts_with('#')
-        }) else {
-            continue;
-        };
-        let first = line_without_ending(lines[first_content]);
-        if leading_spaces(first) != parent_indent || !is_sequence_entry(first) {
-            continue;
-        }
-
-        let mut end = first_content;
-        while end < lines.len() {
-            let body = line_without_ending(lines[end]);
-            let trimmed = body.trim();
-            if !trimmed.is_empty() && !trimmed.starts_with('#') {
-                let indent = leading_spaces(body);
-                if indent < parent_indent || (indent == parent_indent && !is_sequence_entry(body)) {
-                    break;
-                }
-            }
-            end += 1;
-        }
-        for indent in &mut extra_indent[index + 1..end] {
-            *indent += 2;
-        }
-        let parent_occurrence = lines[..index]
-            .iter()
-            .filter(|candidate| line_without_ending(candidate) == parent)
-            .count();
-        styles.push(IndentlessSequenceStyle {
-            parent_line: parent.to_string(),
-            parent_occurrence,
-            parent_indent,
-        });
-    }
-
-    let mut normalized = String::with_capacity(source.len() + extra_indent.iter().sum::<usize>());
-    for (line, indent) in lines.into_iter().zip(extra_indent) {
-        normalized.push_str(&" ".repeat(indent));
-        normalized.push_str(line);
-    }
-    (normalized, styles)
-}
-
-fn restore_indentless_sequences(source: &str, styles: &[IndentlessSequenceStyle]) -> String {
-    let mut lines = source
-        .split_inclusive('\n')
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    for style in styles {
-        let Some(parent_index) = lines
-            .iter()
-            .enumerate()
-            .filter(|(_, line)| line_without_ending(line) == style.parent_line)
-            .nth(style.parent_occurrence)
-            .map(|(index, _)| index)
-        else {
-            continue;
-        };
-        let mut index = parent_index + 1;
-        while index < lines.len() {
-            let body = line_without_ending(&lines[index]);
-            let trimmed = body.trim();
-            if !trimmed.is_empty()
-                && !trimmed.starts_with('#')
-                && leading_spaces(body) <= style.parent_indent
-            {
-                break;
-            }
-            if lines[index].starts_with("  ") {
-                lines[index].drain(..2);
-            }
-            index += 1;
-        }
-    }
-    lines.concat()
-}
-
 fn parse_doc(source: &str) -> Result<YamlDoc, String> {
     let source = if source.trim().is_empty() {
         EMPTY_CONFIG
     } else {
         source
     };
-    let (normalized, _) = normalize_indentless_sequences(source);
-    YamlDoc::parse(&normalized)
-        .map_err(|error| format!("Hermes config.yaml is not valid YAML: {error}"))
+    YamlDoc::parse(source).map_err(|error| format!("Hermes config.yaml is not valid YAML: {error}"))
 }
 
-fn render_doc(doc: &YamlDoc, original_source: &str) -> String {
-    let (_, styles) = normalize_indentless_sequences(original_source);
-    restore_indentless_sequences(doc.as_source(), &styles)
+fn render_doc(doc: &YamlDoc) -> String {
+    doc.as_source().to_string()
 }
 
 fn read_hermes_source(path: &PathBuf) -> Result<String, String> {
@@ -743,7 +616,7 @@ fn apply_sync_losslessly(
     } else {
         deactivate(&mut doc, backup.as_ref())?;
     }
-    Ok(render_doc(&doc, source))
+    Ok(render_doc(&doc))
 }
 
 fn apply_clear_losslessly(source: &str, backup: Option<&str>) -> Result<(String, bool), String> {
@@ -765,7 +638,7 @@ fn apply_clear_losslessly(source: &str, backup: Option<&str>) -> Result<(String,
         }
         changed = true;
     }
-    Ok((render_doc(&doc, source), changed))
+    Ok((render_doc(&doc), changed))
 }
 
 fn apply_restore_losslessly(current: &str, backup: &str) -> Result<String, String> {
@@ -803,7 +676,7 @@ fn apply_restore_losslessly(current: &str, backup: &str) -> Result<String, Strin
             remove(&mut current, "/model")?;
         }
     }
-    Ok(render_doc(&current, current_source))
+    Ok(render_doc(&current))
 }
 
 fn is_sensitive_key(key: &str) -> bool {
@@ -859,7 +732,7 @@ fn redact_sensitive_source(source: &str) -> Result<String, String> {
         .document_root(0)
         .map_err(|error| format!("Failed to inspect Hermes config: {error}"))?;
     let Some(root) = root else {
-        return Ok(render_doc(&doc, source));
+        return Ok(render_doc(&doc));
     };
     let mut paths = Vec::new();
     collect_sensitive_paths(&doc, root, "", &mut paths);
@@ -867,7 +740,7 @@ fn redact_sensitive_source(source: &str) -> Result<String, String> {
     for path in paths {
         upsert(&mut doc, &path, &redacted)?;
     }
-    Ok(render_doc(&doc, source))
+    Ok(render_doc(&doc))
 }
 
 fn read_provider_entry(doc: &YamlDoc) -> Option<(Option<String>, Option<String>, Option<String>)> {

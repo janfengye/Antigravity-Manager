@@ -75,6 +75,46 @@ fn should_enable_tray() -> bool {
     true
 }
 
+/// Login-item launches pass `--minimized`. Quiet startup applies only to that launch.
+fn apply_login_launch_policy(app: &tauri::App) {
+    let launched_by_login = std::env::args().any(|arg| arg == "--minimized");
+    if !launched_by_login {
+        return;
+    }
+
+    let config = modules::load_app_config().unwrap_or_default();
+    if !config.quiet_autostart {
+        info!("Login launch will show the main window because quiet startup is off");
+        return;
+    }
+
+    let tray_enabled = app
+        .try_state::<AppRuntimeFlags>()
+        .map(|flags| flags.tray_enabled)
+        .unwrap_or(true);
+    if !tray_enabled {
+        info!("Quiet startup skipped because the tray is unavailable; showing the main window");
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.show();
+        }
+        return;
+    }
+
+    modules::startup_quiet::arm();
+    if config.lightweight_mode {
+        info!("Quiet login launch will enter lightweight mode once the event loop is ready");
+        modules::startup_quiet::request_lightweight_on_ready();
+    } else {
+        info!("Quiet login launch will keep the main window hidden in the tray");
+        #[cfg(target_os = "macos")]
+        {
+            let _ = app
+                .handle()
+                .set_activation_policy(tauri::ActivationPolicy::Accessory);
+        }
+    }
+}
+
 fn credential_state(value: &str) -> &'static str {
     if value.trim().is_empty() {
         "not set"
@@ -563,6 +603,8 @@ pub fn run() {
             // [PHASE 1] 已整合至 Axum 端口 (8045)，不再单独启动 19527 端口
             info!("Management API integrated into main proxy server (port 8045)");
 
+            apply_login_launch_policy(app);
+
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -645,6 +687,8 @@ pub fn run() {
             commands::get_antigravity_cache_paths,
             commands::open_data_folder,
             commands::get_data_dir_path,
+            commands::get_internal_error_log_path,
+            commands::get_internal_error_log_disk_size,
             commands::set_data_dir,
             commands::migrate_data_dir,
             commands::show_main_window,
@@ -686,7 +730,6 @@ pub fn run() {
             commands::proxy::update_model_mapping,
             commands::proxy::check_proxy_health,
             commands::proxy::get_proxy_pool_config,
-            commands::proxy::fetch_zai_models,
             commands::proxy::get_proxy_scheduling_config,
             commands::proxy::update_proxy_scheduling_config,
             commands::proxy::clear_proxy_session_bindings,
@@ -793,6 +836,12 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app_handle, event| {
             match event {
+                tauri::RunEvent::Ready => {
+                    if modules::startup_quiet::take_lightweight_on_ready() {
+                        info!("Entering lightweight mode for quiet login launch");
+                        let _ = modules::lightweight::enter_lightweight_mode_without_saving(app_handle);
+                    }
+                }
                 // Prevent app from exiting when window is destroyed in lightweight mode
                 tauri::RunEvent::ExitRequested { api, .. } => {
                     let tray_enabled = app_handle

@@ -45,7 +45,15 @@ where
     let mut finish_reason: Option<String> = None;
 
     while let Some(chunk_result) = stream.next().await {
-        let chunk = chunk_result.map_err(|e| format!("Stream error: {}", e))?;
+        let chunk = chunk_result.map_err(|e| {
+            crate::proxy::mappers::error_classifier::report_stream_error(
+                "gemini-collector",
+                "collect_stream_to_json_with_anchor",
+                &e,
+                format!("session={}", session_id),
+            )
+            .client_message()
+        })?;
         let text = std::str::from_utf8(&chunk).unwrap_or(""); // Ignore invalid utf8 for simplicity or handle better
 
         for line in text.lines() {

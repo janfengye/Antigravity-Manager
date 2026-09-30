@@ -340,26 +340,21 @@ impl UpstreamClient {
         extra_headers: std::collections::HashMap<String, String>,
         account_id: Option<&str>, // [NEW] Account ID
     ) -> Result<UpstreamCallResult, String> {
-        // [DEFENSE] 全局终极防御拦截：净化所有发往上游报文中的损坏/空 inlineData 以及触发 Google WAF 拦截的违规计费元数据，并最终统一对齐前缀拓扑
+        // [DEFENSE] 全局终极防御拦截：净化所有发往上游报文中的损坏/空 inlineData 以及触发 Google WAF 拦截的违规计费元数据，并最终统一对齐官方信封与前缀拓扑
         if let Some(inner) = body.get_mut("request") {
             crate::proxy::mappers::common_utils::sanitize_gemini_payload_inline_data(inner);
             crate::proxy::mappers::prompt_sanitizer::PromptSanitizer::sanitize_gemini_payload(
                 inner,
             );
             crate::proxy::mappers::common_utils::ensure_gemini_payload_ends_with_user(inner);
-            crate::proxy::pipeline::InboundThinkingPipeline::align_google_request_prefix_topology(
-                inner,
-            );
         } else {
             crate::proxy::mappers::common_utils::sanitize_gemini_payload_inline_data(&mut body);
             crate::proxy::mappers::prompt_sanitizer::PromptSanitizer::sanitize_gemini_payload(
                 &mut body,
             );
             crate::proxy::mappers::common_utils::ensure_gemini_payload_ends_with_user(&mut body);
-            crate::proxy::pipeline::InboundThinkingPipeline::align_google_request_prefix_topology(
-                &mut body,
-            );
         }
+        crate::proxy::pipeline::InboundThinkingPipeline::align_official_envelope(&mut body);
 
         // [NEW] Get client based on account (cached in proxy pool manager)
         let client = self.get_client(account_id).await;
@@ -380,40 +375,10 @@ impl UpstreamClient {
             header::USER_AGENT,
             header::HeaderValue::from_str(&self.get_user_agent().await).unwrap_or_else(|e| {
                 tracing::warn!("Invalid User-Agent header value, using fallback: {}", e);
-                header::HeaderValue::from_static("antigravity")
+                header::HeaderValue::from_str(crate::constants::USER_AGENT.as_str())
+                    .unwrap_or_else(|_| header::HeaderValue::from_static("antigravity"))
             }),
         );
-
-        // [ENHANCED] 注入 Antigravity 官方客户端关键特征 Headers
-        // 1. Client Identity
-        headers.insert(
-            "x-client-name",
-            header::HeaderValue::from_static("antigravity"),
-        );
-        if let Ok(ver) = header::HeaderValue::from_str(&crate::constants::CURRENT_VERSION) {
-            headers.insert("x-client-version", ver);
-        }
-
-        // 2. Device & Session Identity
-        // Machine ID (Persistent)
-        if let Ok(mid) = machine_uid::get() {
-            if let Ok(mid_val) = header::HeaderValue::from_str(&mid) {
-                headers.insert("x-machine-id", mid_val);
-            }
-        }
-        // Session ID (Per Conversation Isolation)
-        let sess_uuid = if let Some(sid) = extra_headers.get("x-session-id") {
-            derive_session_uuid(sid)
-        } else {
-            crate::constants::SESSION_ID.clone()
-        };
-        if let Ok(sess_val) = header::HeaderValue::from_str(&sess_uuid) {
-            headers.insert("x-vscode-sessionid", sess_val);
-        }
-
-        // [REMOVED v4.1.24] x-goog-api-client (gl-node/fire/grpc) header has been removed.
-        // This header belongs to the IDE's JS layer, not the official client's egress.
-        // Sending it creates a contradictory "Electron + Node.js" fingerprint.
 
         // Keep body.project for content requests, but omit the quota-project header.
         let is_content_request = matches!(method, "generateContent" | "streamGenerateContent");
@@ -427,10 +392,18 @@ impl UpstreamClient {
             }
         }
 
-        // 注入额外的 Headers (如 anthropic-beta)
-        // 严格禁止透传客户端入站的 user-agent，确保出站指纹始终为受支持的 Antigravity 版本
+        // 注入业务透传 Headers (如 anthropic-beta)
+        // 严格过滤客户端特征伪头，确保出站请求头 100% 对齐官方 Antigravity Hub
         for (k, v) in extra_headers {
-            if k.eq_ignore_ascii_case("user-agent") {
+            let k_lower = k.to_ascii_lowercase();
+            if k_lower == "user-agent"
+                || k_lower == "x-session-id"
+                || k_lower == "x-client-name"
+                || k_lower == "x-client-version"
+                || k_lower == "x-machine-id"
+                || k_lower == "x-vscode-sessionid"
+                || k_lower.starts_with("x-jeikcode")
+            {
                 continue;
             }
             if let Ok(hk) = header::HeaderName::from_bytes(k.as_bytes()) {
@@ -441,6 +414,25 @@ impl UpstreamClient {
         }
         if is_content_request {
             headers.remove("x-goog-user-project");
+        }
+
+        // [PIPELINE ALIGNMENT] 统一对齐官方上游特权头：所有 Claude 系列模型出站统一注入 anthropic-beta 声明
+        let target_model_str = body
+            .get("model")
+            .and_then(|v| v.as_str())
+            .or_else(|| {
+                body.get("request")
+                    .and_then(|r| r.get("model"))
+                    .and_then(|v| v.as_str())
+            })
+            .unwrap_or("");
+        if target_model_str.to_lowercase().contains("claude")
+            && !headers.contains_key("anthropic-beta")
+        {
+            headers.insert(
+                header::HeaderName::from_static("anthropic-beta"),
+                header::HeaderValue::from_static("claude-code-20250219"),
+            );
         }
 
         // [DEBUG] Log headers for verification
@@ -580,7 +572,14 @@ impl UpstreamClient {
             }
 
             // 如果没有触发降级且所有端点都尝试过，返回最后的错误
-            return Err(last_err.unwrap_or_else(|| "All endpoints failed".to_string()));
+            let final_err = last_err.unwrap_or_else(|| "All endpoints failed".to_string());
+            tracing::error!(
+                error = %final_err,
+                account = ?account_id,
+                method = %method,
+                "Upstream network request failed across all endpoints (non-server fault)"
+            );
+            return Err(final_err);
         }
     }
 
@@ -652,10 +651,11 @@ impl UpstreamClient {
         &self,
         method: &str,
         access_token: &str,
-        body: Value,
+        mut body: Value,
         account_id: Option<&str>,
         timeout_secs: u64,
     ) -> Result<Value, String> {
+        crate::proxy::pipeline::InboundThinkingPipeline::align_official_envelope(&mut body);
         let client = self.get_client(account_id).await;
         let mut last_error = String::new();
 
@@ -691,6 +691,10 @@ impl UpstreamClient {
                 // 与主请求路径同一判定：仅 408 / 404 / 5xx 换端点；
                 // 其余状态（如 400）说明请求本身有问题，直接终止，不做三倍重试。
                 if !Self::should_try_next_endpoint(status) {
+                    tracing::error!(
+                        error = %last_error,
+                        "Auxiliary v1internal request failed with non-retryable status (non-server fault)"
+                    );
                     return Err(last_error);
                 }
                 tracing::warn!(
@@ -707,11 +711,16 @@ impl UpstreamClient {
                 .map_err(|e| format!("failed to parse response from {}: {}", url, e));
         }
 
-        Err(if last_error.is_empty() {
+        let final_err = if last_error.is_empty() {
             "no v1internal endpoint available".to_string()
         } else {
             last_error
-        })
+        };
+        tracing::error!(
+            error = %final_err,
+            "Auxiliary v1internal request failed across all endpoints (non-server fault)"
+        );
+        Err(final_err)
     }
 }
 

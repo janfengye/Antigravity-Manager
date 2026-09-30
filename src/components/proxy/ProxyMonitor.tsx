@@ -3,7 +3,7 @@ import { listen } from '@tauri-apps/api/event';
 import ModalDialog from '../common/ModalDialog';
 import { useTranslation } from 'react-i18next';
 import { request as invoke } from '../../utils/request';
-import { Trash2, Search, X, Copy, CheckCircle, ChevronLeft, ChevronRight, ChevronDown, RefreshCw, User, Sparkles, FileCode2, Eye, EyeOff, Clock, Settings, HardDrive, Database, Check } from 'lucide-react';
+import { Trash2, Search, X, Copy, CheckCircle, ChevronLeft, ChevronRight, ChevronDown, RefreshCw, User, Sparkles, FileCode2, Eye, EyeOff, Clock, Settings, HardDrive, Database, Check, FileWarning } from 'lucide-react';
 
 import { AppConfig, ExperimentalConfig } from '../../types/config';
 import { formatCompactNumber } from '../../utils/format';
@@ -11,6 +11,7 @@ import { useAccountStore } from '../../stores/useAccountStore';
 import { isTauri } from '../../utils/env';
 import { copyToClipboard } from '../../utils/clipboard';
 import { VirtualizedPayloadViewer } from './VirtualizedPayloadViewer';
+import { extractConcisePayload } from './concisePayload';
 
 
 interface ProxyRequestLog {
@@ -323,598 +324,6 @@ const LogTable: React.FC<LogTableProps> = ({
 };
 
 
-// ==========================================
-// 简要模式智能提取与映射算法
-// ==========================================
-function extractConcisePayload(
-    rawStr: string | undefined,
-    kind: 'request' | 'upstream' | 'response',
-    log?: ProxyRequestLog | null
-): string {
-    if (!rawStr) return '';
-    let obj: any;
-    try {
-        obj = JSON.parse(rawStr);
-    } catch {
-        return rawStr;
-    }
-    if (!obj || typeof obj !== 'object') {
-        return rawStr;
-    }
-
-    // 工具声明 (完整保留 Schema，方便开发者查看工具拼接与入参定义)
-    const simplifyTools = (tools: any): any => {
-        if (!Array.isArray(tools)) return undefined;
-        return tools;
-    };
-
-    // 简化工具调用 (统一规范为: id, type: 'function', function: { name, arguments })
-    const simplifyToolCalls = (toolCalls: any): any => {
-        if (!Array.isArray(toolCalls)) return undefined;
-        return toolCalls.map((tc: any) => {
-            if (!tc || typeof tc !== 'object') return tc;
-            const res: any = {};
-            if (tc.id) res.id = tc.id;
-            res.type = tc.type || 'function';
-            if (tc.function && typeof tc.function === 'object') {
-                res.function = {
-                    name: tc.function.name,
-                    arguments: tc.function.arguments !== undefined ? tc.function.arguments : {}
-                };
-            } else {
-                const name = tc.name || tc.function?.name || 'unknown';
-                const args = tc.arguments !== undefined ? tc.arguments : (tc.args !== undefined ? tc.args : (tc.input !== undefined ? tc.input : {}));
-                res.function = {
-                    name,
-                    arguments: args
-                };
-            }
-            return res;
-        });
-    };
-
-    // 简化消息内容 (Claude / OpenAI parts)
-    const simplifyContent = (content: any): any => {
-        if (typeof content === 'string') return content;
-        if (Array.isArray(content)) {
-            return content.map((item: any) => {
-                if (typeof item === 'string') return item;
-                if (!item || typeof item !== 'object') return item;
-                // Claude tool_use 块
-                if (item.type === 'tool_use') {
-                    return {
-                        type: 'tool_use',
-                        id: item.id,
-                        name: item.name,
-                        input: item.input !== undefined ? item.input : {}
-                    };
-                }
-                // Claude tool_result 块
-                if (item.type === 'tool_result') {
-                    return {
-                        type: 'tool_result',
-                        tool_use_id: item.tool_use_id,
-                        ...(item.content !== undefined ? { content: item.content } : {}),
-                        ...(item.is_error !== undefined ? { is_error: item.is_error } : {})
-                    };
-                }
-                // Claude thinking 块与签名
-                if (item.type === 'thinking') {
-                    return {
-                        type: 'thinking',
-                        thinking: item.thinking,
-                        ...(item.signature !== undefined ? { signature: item.signature } : {}),
-                        ...(item.thought_signature !== undefined ? { thought_signature: item.thought_signature } : {}),
-                        ...(item.thoughtSignature !== undefined ? { thoughtSignature: item.thoughtSignature } : {}),
-                        ...(item.thinking_signature !== undefined ? { thinking_signature: item.thinking_signature } : {})
-                    };
-                }
-                // Claude redacted_thinking 块
-                if (item.type === 'redacted_thinking') {
-                    return {
-                        type: 'redacted_thinking',
-                        data: item.data
-                    };
-                }
-                // 文本块
-                if (item.type === 'text') {
-                    return item;
-                }
-                return item;
-            });
-        }
-        return content;
-    };
-
-    // 简化消息列表
-    const simplifyMessages = (messages: any): any => {
-        if (!Array.isArray(messages)) return undefined;
-        return messages.map((m: any) => {
-            if (!m || typeof m !== 'object') return m;
-            const res: any = { role: m.role };
-            if (m.content !== undefined) {
-                res.content = simplifyContent(m.content);
-            }
-            if (m.reasoning_content !== undefined) {
-                res.reasoning_content = m.reasoning_content;
-            }
-            if (m.thinking !== undefined) {
-                res.thinking = m.thinking;
-            }
-            if (m.signature !== undefined) {
-                res.signature = m.signature;
-            }
-            if (m.thought_signature !== undefined) {
-                res.thought_signature = m.thought_signature;
-            }
-            if (m.thinking_signature !== undefined) {
-                res.thinking_signature = m.thinking_signature;
-            }
-            if (m.tool_calls) {
-                res.tool_calls = simplifyToolCalls(m.tool_calls);
-            }
-            if (m.tool_call_id) {
-                res.tool_call_id = m.tool_call_id;
-            }
-            if (m.name) {
-                res.name = m.name;
-            }
-            return res;
-        });
-    };
-
-    // 简化 Gemini 轮次 (contents)
-    const simplifyGeminiContents = (contents: any): any => {
-        if (!Array.isArray(contents)) return undefined;
-        return contents.map((c: any) => {
-            if (!c || typeof c !== 'object') return c;
-            const res: any = { role: c.role };
-            if (Array.isArray(c.parts)) {
-                res.parts = c.parts.map((p: any) => {
-                    if (!p || typeof p !== 'object') return p;
-
-                    // 1. 优先识别工具调用 (functionCall) 并保留其名称、ID、参数与携带的加密思考签名
-                    if (p.functionCall) {
-                        const fcPart: any = {
-                            functionCall: {
-                                name: p.functionCall.name,
-                                ...(p.functionCall.id ? { id: p.functionCall.id } : {}),
-                                args: p.functionCall.args !== undefined ? p.functionCall.args : {}
-                            }
-                        };
-                        if (p.thought !== undefined) fcPart.thought = p.thought;
-                        if (p.thoughtSignature !== undefined) fcPart.thoughtSignature = p.thoughtSignature;
-                        if (p.thought_signature !== undefined) fcPart.thought_signature = p.thought_signature;
-                        if (p.signature !== undefined) fcPart.signature = p.signature;
-                        return fcPart;
-                    }
-
-                    // 2. 优先识别工具响应 (functionResponse) 并保留其名称、ID、返回值与携带的签名
-                    if (p.functionResponse) {
-                        const frPart: any = {
-                            functionResponse: {
-                                name: p.functionResponse.name,
-                                ...(p.functionResponse.id ? { id: p.functionResponse.id } : {}),
-                                response: p.functionResponse.response !== undefined ? p.functionResponse.response : {}
-                            }
-                        };
-                        if (p.thought !== undefined) frPart.thought = p.thought;
-                        if (p.thoughtSignature !== undefined) frPart.thoughtSignature = p.thoughtSignature;
-                        if (p.thought_signature !== undefined) frPart.thought_signature = p.thought_signature;
-                        if (p.signature !== undefined) frPart.signature = p.signature;
-                        return frPart;
-                    }
-
-                    // 3. 独立思考块 (纯思考过程，不带工具调用)
-                    if (p.thought !== undefined || p.thought_signature !== undefined || p.thoughtSignature !== undefined || p.signature !== undefined) {
-                        const tPart: any = {};
-                        if (p.thought !== undefined) tPart.thought = p.thought;
-                        if (p.thought_signature !== undefined) tPart.thought_signature = p.thought_signature;
-                        if (p.thoughtSignature !== undefined) tPart.thoughtSignature = p.thoughtSignature;
-                        if (p.signature !== undefined) tPart.signature = p.signature;
-                        if (p.text !== undefined) tPart.text = p.text;
-                        return tPart;
-                    }
-
-                    // 4. 普通文本块
-                    if (p.text !== undefined) {
-                        return { text: p.text };
-                    }
-
-                    return p;
-                });
-            }
-            return res;
-        });
-    };
-
-    // 简化系统提示词 (Gemini / Anthropic)
-    const simplifySystemInstruction = (sys: any): any => {
-        if (!sys || typeof sys !== 'object') return sys;
-        if (Array.isArray(sys.parts)) {
-            return {
-                parts: sys.parts.map((p: any) => {
-                    if (typeof p === 'string') return { text: p };
-                    if (p && typeof p === 'object' && p.text !== undefined) return { text: p.text };
-                    return p;
-                })
-            };
-        }
-        return sys;
-    };
-
-    // 提取用量与缓存命中率
-    const simplifyUsage = (usage: any): any => {
-        if (!usage || typeof usage !== 'object') return undefined;
-        const res: any = {};
-        const rawInput = usage.prompt_tokens ?? usage.input_tokens ?? usage.promptTokenCount;
-        const output = usage.completion_tokens ?? usage.output_tokens ?? usage.candidatesTokenCount;
-
-        let cached = usage.cached_tokens ?? usage.cache_read_input_tokens ?? usage.cachedContentTokenCount;
-        if (cached == null && usage.prompt_tokens_details?.cached_tokens != null) {
-            cached = usage.prompt_tokens_details.cached_tokens;
-        }
-        if (cached == null && usage.input_tokens_details?.cached_tokens != null) {
-            cached = usage.input_tokens_details.cached_tokens;
-        }
-
-        // 计算全量上下文输入 Token (Total Context Input)
-        // 1. Anthropic 官方协议: input_tokens 仅代表未缓存增量，总上下文 = input_tokens + cache_read_input_tokens
-        // 2. 兼容历史日志: 若 cached > rawInput，说明 rawInput 存的是未缓存差值，做自愈加和
-        let totalInput = rawInput != null ? Number(rawInput) : undefined;
-        if (cached != null && totalInput != null && cached > totalInput) {
-            totalInput = totalInput + Number(cached);
-        } else if (usage.cache_read_input_tokens != null && usage.prompt_tokens == null && usage.promptTokenCount == null) {
-            totalInput = Number(usage.input_tokens || 0) + Number(cached || 0);
-        }
-
-        const total = usage.total_tokens ?? usage.totalTokenCount ?? (totalInput != null && output != null ? totalInput + Number(output) : undefined);
-
-        if (totalInput != null) res.input_tokens = totalInput;
-        if (output != null) res.output_tokens = Number(output);
-        if (total != null) res.total_tokens = Number(total);
-        if (cached != null) {
-            res.cached_tokens = Number(cached);
-            if (totalInput != null && totalInput > 0) {
-                const rate = Math.min(100, Math.max(0, (Number(cached) / totalInput) * 100));
-                res.cache_hit_rate = `${rate.toFixed(1)}%`;
-            }
-        }
-        if (usage.cache_creation_input_tokens != null) {
-            res.cache_creation_input_tokens = usage.cache_creation_input_tokens;
-        }
-        if (usage.completion_tokens_details?.reasoning_tokens != null) {
-            res.reasoning_tokens = usage.completion_tokens_details.reasoning_tokens;
-        }
-        if (usage.output_tokens_details?.reasoning_tokens != null) {
-            res.reasoning_tokens = usage.output_tokens_details.reasoning_tokens;
-        }
-        return res;
-    };
-
-    /**
-     * 递归深度反转义并反序列化嵌套在 JSON 字符串属性中的 JSON 内容
-     * 例如将 "response": "{\"error\":{\"code\":400...}}" 自动展开为真实的嵌套对象
-     */
-    const deepUnescapeJsonValue = (val: any): any => {
-        if (typeof val === 'string') {
-            const trimmed = val.trim();
-            if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
-                try {
-                    const parsed = JSON.parse(trimmed);
-                    return deepUnescapeJsonValue(parsed);
-                } catch {
-                    return val;
-                }
-            }
-            return val;
-        }
-        if (Array.isArray(val)) {
-            return val.map(deepUnescapeJsonValue);
-        }
-        if (val && typeof val === 'object') {
-            const res: Record<string, any> = {};
-            for (const [k, v] of Object.entries(val)) {
-                res[k] = deepUnescapeJsonValue(v);
-            }
-            return res;
-        }
-        return val;
-    };
-
-    const concise: any = {};
-
-    // 保留用于标识思考块/会话的单行标识 (支持 requestId, sessionId, trace_id 等)
-    const candidateSessionId =
-        obj.requestId ||
-        obj.request?.sessionId ||
-        obj._session_id ||
-        obj.session_id ||
-        (log?.id ? log.id : undefined);
-
-    if (candidateSessionId) {
-        concise._session_thinking_id = candidateSessionId;
-    }
-
-    // 模型
-    if (obj.model) concise.model = obj.model;
-
-    // 思考模型配置 (开启、预算、effort、summary)
-    if (obj.thinking !== undefined) concise.thinking = obj.thinking;
-    if (obj.reasoning_effort !== undefined) concise.reasoning_effort = obj.reasoning_effort;
-    if (obj.reasoning !== undefined) concise.reasoning = obj.reasoning;
-    if (obj.summary !== undefined) concise.summary = obj.summary;
-    if (obj.generationConfig?.thinkingConfig !== undefined) {
-        concise.thinkingConfig = obj.generationConfig.thinkingConfig;
-    } else if (obj.thinkingConfig !== undefined) {
-        concise.thinkingConfig = obj.thinkingConfig;
-    }
-
-    // 系统提示词
-    if (obj.system !== undefined) concise.system = obj.system;
-    if (obj.systemInstruction !== undefined) concise.systemInstruction = simplifySystemInstruction(obj.systemInstruction);
-
-    // 对话主体 (OpenAI / Claude)
-    if (obj.messages) {
-        concise.messages = simplifyMessages(obj.messages);
-    }
-
-    // 对话主体 (Gemini)
-    if (obj.contents) {
-        concise.contents = simplifyGeminiContents(obj.contents);
-    }
-
-    // 工具声明
-    if (obj.tools) {
-        concise.tools = simplifyTools(obj.tools);
-    }
-
-    // Antigravity 专用的 request 嵌套包装层 (核心：正确映射原中转报文的嵌套层级)
-    if (obj.request && typeof obj.request === 'object') {
-        const innerReq: any = {};
-
-        // 单行会话标识
-        if (obj.request.sessionId) {
-            innerReq.sessionId = obj.request.sessionId;
-        }
-
-        // 思考配置 (thinkingConfig / generationConfig)
-        if (obj.request.generationConfig?.thinkingConfig !== undefined) {
-            innerReq.thinkingConfig = obj.request.generationConfig.thinkingConfig;
-        } else if (obj.request.thinkingConfig !== undefined) {
-            innerReq.thinkingConfig = obj.request.thinkingConfig;
-        }
-
-        // 系统提示词
-        if (obj.request.systemInstruction !== undefined) {
-            innerReq.systemInstruction = simplifySystemInstruction(obj.request.systemInstruction);
-        }
-
-        // 对话主体与思考块 (Gemini contents 或 Claude messages)
-        if (obj.request.contents) {
-            innerReq.contents = simplifyGeminiContents(obj.request.contents);
-        }
-        if (obj.request.messages) {
-            innerReq.messages = simplifyMessages(obj.request.messages);
-        }
-
-        // 工具声明
-        if (obj.request.tools) {
-            innerReq.tools = simplifyTools(obj.request.tools);
-        }
-
-        concise.request = innerReq;
-    }
-
-    // 响应：思考块与思考签名 (顶层响应或非流式)
-    if (obj.thinking !== undefined) concise.thinking = obj.thinking;
-    if (obj.thinking_signature !== undefined) concise.thinking_signature = obj.thinking_signature;
-    if (obj.thought_signature !== undefined) concise.thought_signature = obj.thought_signature;
-    if (obj.signature !== undefined) concise.signature = obj.signature;
-    if (obj.thoughtSignature !== undefined) concise.thoughtSignature = obj.thoughtSignature;
-    if (obj._timing !== undefined) concise._timing = obj._timing;
-
-    // 🌟 响应报文规范化提取：若为 response，优先将 choices / candidates / content 数组扁平化提升为顶层统一结构
-    if (kind === 'response') {
-        if (obj.choices && Array.isArray(obj.choices) && obj.choices.length > 0) {
-            const first = obj.choices[0];
-            const msg = first?.message || first?.delta;
-            if (msg) {
-                if (concise.thinking === undefined) {
-                    const th = msg.reasoning_content || msg.thinking;
-                    if (th) concise.thinking = th;
-                }
-                if (concise.thinking_signature === undefined) {
-                    const sig = msg.thoughtSignature || msg.thought_signature || msg.signature;
-                    if (sig) concise.thinking_signature = sig;
-                }
-                if (concise.content === undefined && msg.content !== undefined) {
-                    concise.content = typeof msg.content === 'string' ? msg.content : simplifyContent(msg.content);
-                }
-                if (concise.tool_calls === undefined && msg.tool_calls) {
-                    concise.tool_calls = simplifyToolCalls(msg.tool_calls);
-                }
-            }
-        } else if (obj.candidates && Array.isArray(obj.candidates) && obj.candidates.length > 0) {
-            const parts = obj.candidates[0]?.content?.parts;
-            if (Array.isArray(parts)) {
-                let thText = '';
-                let normalText = '';
-                let sigText = '';
-                const extractedTools: any[] = [];
-                for (const p of parts) {
-                    if (p.text) {
-                        if (p.thought) thText += p.text;
-                        else normalText += p.text;
-                    }
-                    const s = p.thoughtSignature || p.thought_signature || p.signature || p.functionCall?.thoughtSignature || p.functionCall?.thought_signature;
-                    if (s && !sigText) sigText = s;
-                    if (p.functionCall) {
-                        extractedTools.push({
-                            id: p.functionCall.id || '',
-                            type: 'function',
-                            function: {
-                                name: p.functionCall.name || 'unknown',
-                                arguments: p.functionCall.args !== undefined ? (typeof p.functionCall.args === 'string' ? p.functionCall.args : JSON.stringify(p.functionCall.args)) : '{}'
-                            }
-                        });
-                    }
-                }
-                if (concise.thinking === undefined && thText) concise.thinking = thText;
-                if (concise.thinking_signature === undefined && sigText) concise.thinking_signature = sigText;
-                if (concise.content === undefined && normalText) concise.content = normalText;
-                if (concise.tool_calls === undefined && extractedTools.length > 0) concise.tool_calls = simplifyToolCalls(extractedTools);
-            }
-        } else if (Array.isArray(obj.content) && !obj.messages && !obj.choices) {
-            let thText = '';
-            let sigText = '';
-            let normalText = '';
-            const extractedTools: any[] = [];
-            for (const item of obj.content) {
-                if (item && typeof item === 'object') {
-                    if (item.type === 'thinking') {
-                        if (item.thinking) thText += item.thinking;
-                        const s = item.signature || item.thought_signature || item.thoughtSignature;
-                        if (s && !sigText) sigText = s;
-                    } else if (item.type === 'text' && item.text) {
-                        normalText += item.text;
-                    } else if (item.type === 'tool_use') {
-                        extractedTools.push({
-                            id: item.id || '',
-                            type: 'function',
-                            function: {
-                                name: item.name || 'unknown',
-                                arguments: item.input !== undefined ? (typeof item.input === 'string' ? item.input : JSON.stringify(item.input)) : '{}'
-                            }
-                        });
-                    }
-                }
-            }
-            if (concise.thinking === undefined && thText) concise.thinking = thText;
-            if (concise.thinking_signature === undefined && sigText) concise.thinking_signature = sigText;
-            if (concise.content === undefined && normalText) concise.content = normalText;
-            if (concise.tool_calls === undefined && extractedTools.length > 0) concise.tool_calls = simplifyToolCalls(extractedTools);
-        }
-    }
-
-    // 响应：Choices / Candidates / 聚合响应 (若为 request 或未扁平化提取的 response，保留 choices/candidates)
-    if (kind !== 'response' || (!concise.content && !concise.tool_calls && !concise.thinking)) {
-        if (obj.choices && Array.isArray(obj.choices)) {
-            concise.choices = obj.choices.map((c: any) => {
-                const choiceRes: any = { index: c.index };
-                if (c.finish_reason) choiceRes.finish_reason = c.finish_reason;
-                if (c.message) {
-                    choiceRes.message = {
-                        role: c.message.role,
-                        ...(c.message.reasoning_content !== undefined ? { reasoning_content: c.message.reasoning_content } : {}),
-                        ...(c.message.thinking !== undefined ? { thinking: c.message.thinking } : {}),
-                        ...(c.message.thinking_signature !== undefined ? { thinking_signature: c.message.thinking_signature } : {}),
-                        ...(c.message.thought_signature !== undefined ? { thought_signature: c.message.thought_signature } : {}),
-                        ...(c.message.signature !== undefined ? { signature: c.message.signature } : {}),
-                        ...(c.message.content !== undefined ? { content: c.message.content } : {}),
-                        ...(c.message.tool_calls ? { tool_calls: simplifyToolCalls(c.message.tool_calls) } : {})
-                    };
-                } else if (c.delta) {
-                    choiceRes.delta = {
-                        role: c.delta.role,
-                        ...(c.delta.reasoning_content !== undefined ? { reasoning_content: c.delta.reasoning_content } : {}),
-                        ...(c.delta.thinking !== undefined ? { thinking: c.delta.thinking } : {}),
-                        ...(c.delta.thinking_signature !== undefined ? { thinking_signature: c.delta.thinking_signature } : {}),
-                        ...(c.delta.thought_signature !== undefined ? { thought_signature: c.delta.thought_signature } : {}),
-                        ...(c.delta.signature !== undefined ? { signature: c.delta.signature } : {}),
-                        ...(c.delta.content !== undefined ? { content: c.delta.content } : {}),
-                        ...(c.delta.tool_calls ? { tool_calls: simplifyToolCalls(c.delta.tool_calls) } : {})
-                    };
-                }
-                return choiceRes;
-            });
-        }
-
-        if (obj.candidates && Array.isArray(obj.candidates)) {
-            concise.candidates = obj.candidates.map((cand: any) => {
-                const candRes: any = {};
-                if (cand.finishReason) candRes.finishReason = cand.finishReason;
-                if (cand.content) {
-                    candRes.content = simplifyGeminiContents([cand.content])?.[0] || cand.content;
-                }
-                return candRes;
-            });
-        }
-    }
-
-    if (obj.input !== undefined) {
-        concise.input = typeof obj.input === 'string' ? obj.input : (Array.isArray(obj.input) ? simplifyMessages(obj.input) : obj.input);
-    }
-    if (obj.output !== undefined) {
-        concise.output = obj.output;
-    }
-    if (obj.prompt !== undefined) {
-        concise.prompt = obj.prompt;
-    }
-    if (obj.instructions !== undefined) {
-        concise.instructions = obj.instructions;
-    }
-
-    if (obj.content !== undefined && !obj.messages && !obj.choices && !obj.request) {
-        concise.content = simplifyContent(obj.content);
-    }
-    if (obj.reasoning_content !== undefined && !obj.messages && !obj.choices) {
-        concise.reasoning_content = obj.reasoning_content;
-    }
-    if (obj.tool_calls && !obj.messages && !obj.choices) {
-        concise.tool_calls = simplifyToolCalls(obj.tool_calls);
-    }
-
-    // 错误响应提纯：不阉割双层报错，完整呈现网关诊断与上游原始错误
-    if (obj.type !== undefined && !obj.messages && !obj.choices) concise.type = obj.type;
-    if (obj.code !== undefined && !obj.messages && !obj.choices) concise.code = obj.code;
-    if (obj.status !== undefined && !obj.messages && !obj.choices) concise.status = obj.status;
-    if (obj.error !== undefined) {
-        concise.error = deepUnescapeJsonValue(obj.error);
-    }
-    if (obj.gateway_error !== undefined) {
-        concise.gateway_error = deepUnescapeJsonValue(obj.gateway_error);
-    }
-    if (obj.upstream_error !== undefined) {
-        concise.upstream_error = deepUnescapeJsonValue(obj.upstream_error);
-    }
-
-    // 用量与缓存
-    const usage = simplifyUsage(obj.usage || obj.usageMetadata);
-    if (usage) {
-        concise.usage = usage;
-    } else if (kind === 'response' && (log?.input_tokens || log?.output_tokens)) {
-        const totalIn = (log.cached_tokens && log.cached_tokens > (log.input_tokens || 0))
-            ? (log.input_tokens || 0) + log.cached_tokens
-            : (log.input_tokens || 0);
-        concise.usage = {
-            input_tokens: totalIn,
-            output_tokens: log.output_tokens,
-            total_tokens: totalIn + (log.output_tokens || 0),
-            ...(log.cached_tokens != null ? {
-                cached_tokens: log.cached_tokens,
-                cache_hit_rate: totalIn > 0 ? `${Math.min(100, Math.max(0, (log.cached_tokens / totalIn) * 100)).toFixed(1)}%` : undefined
-            } : {})
-        };
-    }
-
-    const substantiveKeys = Object.keys(concise).filter(k => k !== '_session_thinking_id');
-    if (substantiveKeys.length === 0) {
-        try {
-            let parsed = JSON.parse(rawStr);
-            if (typeof parsed === 'string') {
-                try {
-                    parsed = JSON.parse(parsed);
-                } catch {}
-            }
-            return JSON.stringify(deepUnescapeJsonValue(parsed), null, 2);
-        } catch {
-            return rawStr;
-        }
-    }
-
-    return JSON.stringify(concise, null, 2);
-}
 
 interface StageTimingInfo {
     cleanSec?: number;
@@ -1283,6 +692,7 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
     const [selectedLog, setSelectedLog] = useState<ProxyRequestLog | null>(null);
     const [isLoggingEnabled, setIsLoggingEnabled] = useState(false);
     const [captureHealthLogs, setCaptureHealthLogs] = useState(false);
+    const [internalErrorLogPath, setInternalErrorLogPath] = useState('');
     const [isClearConfirmOpen, setIsClearConfirmOpen] = useState(false);
     const [payloadViewMode, setPayloadViewMode] = useState<'concise' | 'full'>('concise');
     const [showMetadata, setShowMetadata] = useState(true);
@@ -1296,6 +706,7 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
     const [isClearCacheModalOpen, setIsClearCacheModalOpen] = useState(false);
     const [cacheClearedSuccess, setCacheClearedSuccess] = useState(false);
     const [dbDiskSizeBytes, setDbDiskSizeBytes] = useState<number | null>(null);
+    const [errorLogDiskSizeBytes, setErrorLogDiskSizeBytes] = useState<number | null>(null);
 
     const fetchDbDiskSize = useCallback(async () => {
         try {
@@ -1306,11 +717,27 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
         }
     }, []);
 
+    const fetchErrorLogDiskSize = useCallback(async () => {
+        try {
+            const bytes = await invoke<number>('get_internal_error_log_disk_size');
+            setErrorLogDiskSizeBytes(bytes);
+        } catch (e) {
+            console.error('Failed to get internal error log disk size', e);
+        }
+    }, []);
+
     useEffect(() => {
         if (showLogSettings) {
             fetchDbDiskSize();
+            fetchErrorLogDiskSize();
         }
-    }, [showLogSettings, fetchDbDiskSize]);
+    }, [showLogSettings, fetchDbDiskSize, fetchErrorLogDiskSize]);
+
+    useEffect(() => {
+        invoke<string>('get_internal_error_log_path')
+            .then((path) => setInternalErrorLogPath(path))
+            .catch((e) => console.error('Failed to get internal error log path', e));
+    }, []);
 
     const formatBytes = (bytes: number) => {
         if (bytes < 1024) return `${bytes} B`;
@@ -1691,9 +1118,9 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
 
     const updateLogRetentionField = (field: 'max_body_age_hours' | 'max_storage_gb' | 'max_rows', value: number) => {
         if (!appConfig) return;
-        const currentRetention = appConfig.proxy?.log_retention || { max_body_age_hours: 24, max_storage_gb: 0.5, max_rows: 100000 };
+        const currentRetention = appConfig.proxy?.log_retention || { max_body_age_hours: 24, max_storage_gb: 1.0, max_rows: 100000 };
         const safeVal = field === 'max_storage_gb'
-            ? Math.max(0.1, isNaN(value) ? 0.5 : value)
+            ? Math.max(0.1, isNaN(value) ? 1.0 : value)
             : Math.max(1, isNaN(value) ? 1 : value);
         const updated = {
             ...currentRetention,
@@ -1710,6 +1137,21 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
                 experimental: {
                     ...currentExp,
                 }
+            }
+        };
+        setAppConfig(updatedConfig);
+    };
+
+    const updateInternalErrorLogRetention = (value: number) => {
+        if (!appConfig) return;
+        const safeVal = Math.max(1, isNaN(value) ? 500 : value);
+        const updatedConfig: AppConfig = {
+            ...appConfig,
+            proxy: {
+                ...appConfig.proxy,
+                internal_error_log_retention: {
+                    max_storage_mb: safeVal,
+                },
             }
         };
         setAppConfig(updatedConfig);
@@ -1741,6 +1183,7 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
             await invoke('save_config', { config: appConfig });
             setSaveSuccess(true);
             fetchDbDiskSize();
+            fetchErrorLogDiskSize();
             setTimeout(() => setSaveSuccess(false), 2000);
         } catch (e) {
             console.error('Failed to save log settings', e);
@@ -1871,6 +1314,14 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
                             {t('monitor.filters.reset')}
                         </button>
                     )}
+                    {internalErrorLogPath && (
+                        <span
+                            className="ml-auto min-w-0 max-w-full truncate text-[11px] leading-5 text-gray-400 dark:text-gray-500 select-text"
+                            title={t('monitor.filters.internal_error_log', { path: internalErrorLogPath, defaultValue: `内部错误记录在 ${internalErrorLogPath}，滑动窗口` })}
+                        >
+                            {t('monitor.filters.internal_error_log', { path: internalErrorLogPath, defaultValue: `内部错误记录在 ${internalErrorLogPath}，滑动窗口` })}
+                        </span>
+                    )}
                 </div>
             </div>
 
@@ -1885,7 +1336,7 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
                                 {t('monitor.settings.title', { defaultValue: '日志存储周期与维护设置' })}
                             </span>
                             <span className="text-xs text-gray-500 dark:text-gray-400 hidden sm:inline">
-                                {t('monitor.settings.subtitle', { defaultValue: '统一管理请求日志保留天数、思考块滑动窗口与磁盘空间回收' })}
+                                {t('monitor.settings.subtitle', { defaultValue: '统一管理请求日志与内部报错日志的滑动窗口容量' })}
                             </span>
                         </div>
                         <div className="flex items-center gap-2">
@@ -1911,21 +1362,21 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
                         </div>
                     </div>
 
-                    {/* 2-Column Balanced Settings Grid */}
+                    {/* 请求日志 / 内部报错日志 / 维护 */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-                        {/* 1. 请求日志与报文保留策略 */}
+                        {/* 1. 请求日志 */}
                         <div className="p-3.5 bg-white dark:bg-base-100 rounded-xl border border-gray-200/90 dark:border-base-200 shadow-xs flex flex-col justify-between space-y-3">
                             <div className="space-y-3">
                                 <span className="text-xs font-bold text-gray-800 dark:text-gray-200 flex items-center gap-1.5">
                                     <Clock size={13} className="text-indigo-500 dark:text-indigo-400" />
-                                    {t('monitor.settings.retention_title', { defaultValue: '请求日志与报文保留策略 (滑动窗口)' })}
+                                    {t('monitor.settings.retention_title', { defaultValue: '请求日志 (滑动窗口)' })}
                                 </span>
                                 <div className="space-y-2.5">
                                     {/* 空间上限 */}
                                     <div>
                                         <div className="flex items-center justify-between mb-1">
                                             <label className="text-xs font-medium text-gray-600 dark:text-gray-300">
-                                                {t('proxy.config.log_retention_storage_gb', { defaultValue: '日志保留空间上限 (GB)' })}
+                                                {t('proxy.config.log_retention_storage_gb', { defaultValue: '请求日志上限 (GB)' })}
                                             </label>
                                             <span className="text-[10px] text-gray-500 dark:text-gray-400">
                                                 {t('proxy.config.log_retention_current_usage', { defaultValue: '当前库占用' })}: <strong className="font-mono text-gray-700 dark:text-gray-200">{dbDiskSizeBytes !== null ? formatBytes(dbDiskSizeBytes) : '...'}</strong>
@@ -1941,7 +1392,7 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
                                             className="input input-xs input-bordered bg-gray-50 dark:bg-base-200 border-gray-300 dark:border-base-300 text-gray-800 dark:text-white w-full font-mono text-xs focus:border-blue-500"
                                         />
                                         <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5 leading-tight">
-                                            {t('proxy.config.log_retention_storage_gb_desc', { defaultValue: '完全由容量上限滑动窗口托管，保留完整报文不被提前掏空；达到上限自动淘汰最尾部 30% 记录' })}
+                                            {t('proxy.config.log_retention_storage_gb_desc', { defaultValue: '默认 1GB；达到上限后自动淘汰最旧 30% 记录并继续写入' })}
                                         </p>
                                     </div>
 
@@ -1981,8 +1432,40 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
                             </div>
                         </div>
 
-                        {/* 2. 维护与清理操作 */}
+                        {/* 2. 内部报错日志 */}
                         <div className="p-3.5 bg-white dark:bg-base-100 rounded-xl border border-gray-200/90 dark:border-base-200 shadow-xs flex flex-col justify-between space-y-3">
+                            <div className="space-y-3">
+                                <span className="text-xs font-bold text-gray-800 dark:text-gray-200 flex items-center gap-1.5">
+                                    <FileWarning size={13} className="text-rose-500 dark:text-rose-400" />
+                                    {t('monitor.settings.internal_error_title', { defaultValue: '内部报错日志 (滑动窗口)' })}
+                                </span>
+                                <div>
+                                    <div className="flex items-center justify-between mb-1">
+                                        <label className="text-xs font-medium text-gray-600 dark:text-gray-300">
+                                            {t('proxy.config.internal_error_log_storage_mb', { defaultValue: '内部报错日志上限 (MB)' })}
+                                        </label>
+                                        <span className="text-[10px] text-gray-500 dark:text-gray-400">
+                                            {t('proxy.config.internal_error_log_current_usage', { defaultValue: '当前占用' })}: <strong className="font-mono text-gray-700 dark:text-gray-200">{errorLogDiskSizeBytes !== null ? formatBytes(errorLogDiskSizeBytes) : '...'}</strong>
+                                        </span>
+                                    </div>
+                                    <input
+                                        type="number"
+                                        min={1}
+                                        max={10240}
+                                        step={50}
+                                        value={appConfig.proxy.internal_error_log_retention?.max_storage_mb ?? 500}
+                                        onChange={(e) => updateInternalErrorLogRetention(Number(e.target.value))}
+                                        className="input input-xs input-bordered bg-gray-50 dark:bg-base-200 border-gray-300 dark:border-base-300 text-gray-800 dark:text-white w-full font-mono text-xs focus:border-blue-500"
+                                    />
+                                    <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5 leading-tight">
+                                        {t('proxy.config.internal_error_log_storage_mb_desc', { defaultValue: '默认 500MB；仅记录失败。达到上限后淘汰最旧 30% 并继续追加，不影响账号数据。' })}
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* 3. 维护与清理操作 */}
+                        <div className="p-3.5 bg-white dark:bg-base-100 rounded-xl border border-gray-200/90 dark:border-base-200 shadow-xs flex flex-col justify-between space-y-3 md:col-span-2">
                             <div>
                                 <span className="text-xs font-bold text-gray-800 dark:text-gray-200 flex items-center gap-1.5 mb-1.5">
                                     <HardDrive size={13} className="text-amber-500 dark:text-amber-400" />
@@ -1992,7 +1475,7 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
                                     {t('settings.advanced.logs_desc', { defaultValue: '清理应用产生的日志缓存文件或清空全部历史请求记录，释放磁盘空间。' })}
                                 </p>
                             </div>
-                            <div className="space-y-2 pt-2">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2">
                                 <button
                                     type="button"
                                     onClick={() => setIsClearCacheModalOpen(true)}
@@ -2010,7 +1493,7 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
                                     {t('monitor.actions.clear_all_requests', { defaultValue: '清空全部历史请求' })}
                                 </button>
                                 {cacheClearedSuccess && (
-                                    <p className="text-xs text-emerald-600 dark:text-emerald-400 text-center font-medium">
+                                    <p className="text-xs text-emerald-600 dark:text-emerald-400 text-center font-medium sm:col-span-2">
                                         ✓ {t('settings.advanced.logs_cleared', { defaultValue: '日志缓存已清理' })}
                                     </p>
                                 )}
@@ -2200,7 +1683,7 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
                                     </div>
                                     <span className="hidden sm:inline-block text-[11px] text-gray-500 dark:text-gray-400">
                                         {payloadViewMode === 'concise'
-                                            ? t('monitor.details.concise_desc', '已为您精简工具参数与冗余字段，突出思考块、用量与对话主体')
+                                            ? t('monitor.details.concise_desc', '保留转出报文的原始层级，并将标识、模型、思考配置、系统提示词、对话与工具前置；图片等大体积内容已省略')
                                             : '显示原始完整未修剪报文'}
                                     </span>
                                 </div>

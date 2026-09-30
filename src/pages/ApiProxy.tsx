@@ -14,8 +14,6 @@ import {
     Terminal,
     Trash2,
     BrainCircuit,
-    Puzzle,
-    Zap,
     ArrowRight,
     Sparkles,
     Code,
@@ -23,7 +21,8 @@ import {
     X,
     Edit2,
     Save,
-    Share2
+    Share2,
+    Bot
 } from 'lucide-react';
 import { AppConfig, ProxyConfig, StickySessionConfig, ExperimentalConfig } from '../types/config';
 import HelpTooltip from '../components/common/HelpTooltip';
@@ -33,12 +32,13 @@ import { cn } from '../utils/cn';
 import { useProxyModels } from '../hooks/useProxyModels';
 import GroupedSelect, { SelectOption } from '../components/common/GroupedSelect';
 import { CliSyncCard } from '../components/proxy/CliSyncCard';
-import DebouncedSlider from '../components/common/DebouncedSlider';
 import { listAccounts } from '../services/accountService';
 import CircuitBreaker from '../components/settings/CircuitBreaker';
 import GlobalSystemPrompt from '../components/settings/GlobalSystemPrompt';
 import ImageThinkingMode from '../components/settings/ImageThinkingMode';
 import ThinkingBudget from '../components/settings/ThinkingBudget';
+import MultimodalSettings from '../components/settings/MultimodalSettings';
+import AgentSettings from '../components/settings/AgentSettings';
 import { CircuitBreakerConfig } from '../types/config';
 
 interface ProxyStatus {
@@ -159,18 +159,13 @@ export default function ApiProxy() {
     });
 
     const [appConfig, setAppConfig] = useState<AppConfig | null>(null);
-    const [activeMenuTab, setActiveMenuTab] = useState<'settings' | 'cli' | 'protocols'>('settings');
+    const [activeMenuTab, setActiveMenuTab] = useState<'settings' | 'models' | 'cli' | 'protocols'>('settings');
     const [configLoading, setConfigLoading] = useState(true);
     const [configError, setConfigError] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);
     const [copied, setCopied] = useState<string | null>(null);
     const [selectedProtocol, setSelectedProtocol] = useState<'openai' | 'anthropic' | 'gemini'>('openai');
-    const [selectedModelId, setSelectedModelId] = useState('gemini-3-flash');
-    const [zaiAvailableModels, setZaiAvailableModels] = useState<string[]>([]);
-    const [zaiModelsLoading, setZaiModelsLoading] = useState(false);
-    const [, setZaiModelsError] = useState<string | null>(null);
-    const [zaiNewMappingFrom, setZaiNewMappingFrom] = useState('');
-    const [zaiNewMappingTo, setZaiNewMappingTo] = useState('');
+    const [selectedModelId, setSelectedModelId] = useState('gemini-3.8-flash-tiered');
     const [customMappingValue, setCustomMappingValue] = useState(''); // 自定义映射表单的选中值
     const [editingKey, setEditingKey] = useState<string | null>(null);
     const [editingValue, setEditingValue] = useState<string>('');
@@ -209,16 +204,6 @@ export default function ApiProxy() {
     const [cfMode, setCfMode] = useState<'quick' | 'auth'>('quick');
     const [cfToken, setCfToken] = useState('');
     const [cfUseHttp2, setCfUseHttp2] = useState(true); // 默认启用HTTP/2，更稳定
-
-    const zaiModelOptions = useMemo(() => {
-        const unique = new Set(zaiAvailableModels);
-        return Array.from(unique).sort();
-    }, [zaiAvailableModels]);
-
-    const zaiModelMapping = useMemo(() => {
-        return appConfig?.proxy.zai?.model_mapping || {};
-    }, [appConfig?.proxy.zai?.model_mapping]);
-
 
     // 生成自定义映射表单的选项 (从 models 动态生成，统一纯正 Model ID 风格)
     const customMappingOptions: SelectOption[] = useMemo(() => {
@@ -521,9 +506,6 @@ export default function ApiProxy() {
         const newConfig = {
             ...appConfig.proxy,
             custom_mapping: {
-                "gemini-3.6-flash": "gemini-3.6-flash-tiered",
-                "gemini-3.7-flash": "gemini-3.7-flash-tiered",
-                "gemini-3.8-flash": "gemini-3.8-flash-tiered",
                 "gemini-3.x-flash": "3.x-flash-tiered",
             }
         };
@@ -546,12 +528,9 @@ export default function ApiProxy() {
             name: t('proxy.router.preset_default'),
             description: t('proxy.router.preset_default_desc'),
             mappings: {
-                "gemini-3.6-flash": "gemini-3.6-flash-tiered",
-                "gemini-3.7-flash": "gemini-3.7-flash-tiered",
-                "gemini-3.8-flash": "gemini-3.8-flash-tiered",
                 "gemini-3.x-flash": "3.x-flash-tiered",
                 "gpt-4*": "gemini-3.1-pro-high",
-                "gpt-4o*": "gemini-3-flash",
+                "gpt-4o*": "gemini-3.8-flash-high",
                 "gpt-3.5*": "gemini-2.5-flash",
                 "o1-*": "gemini-3.1-pro-high",
                 "o3-*": "gemini-3.1-pro-high",
@@ -569,7 +548,7 @@ export default function ApiProxy() {
             mappings: {
                 "gpt-4*": "claude-opus-4-6-thinking",
                 "gpt-4o*": "claude-sonnet-4-6",
-                "gpt-3.5*": "gemini-3-flash",
+                "gpt-3.5*": "gemini-3.8-flash-tiered",
                 "o1-*": "claude-opus-4-6-thinking",
                 "o3-*": "claude-opus-4-6-thinking",
                 "claude-3-5-sonnet-*": "claude-sonnet-4-6",
@@ -584,14 +563,14 @@ export default function ApiProxy() {
             name: t('proxy.router.preset_cost'),
             description: t('proxy.router.preset_cost_desc'),
             mappings: {
-                "gpt-4*": "gemini-3-flash",
+                "gpt-4*": "gemini-3.8-flash-high",
                 "gpt-4o*": "gemini-2.5-flash",
                 "gpt-3.5*": "gemini-2.5-flash",
-                "o1-*": "gemini-3-flash",
-                "o3-*": "gemini-3-flash",
-                "claude-3-5-sonnet-*": "gemini-3-flash",
-                "claude-3-opus-*": "gemini-3-flash",
-                "claude-opus-4-*": "gemini-3-flash", // Cost-effective: map all opus 4 to flash
+                "o1-*": "gemini-3.8-flash-high",
+                "o3-*": "gemini-3.8-flash-high",
+                "claude-3-5-sonnet-*": "gemini-3.8-flash-high",
+                "claude-3-opus-*": "gemini-3.8-flash-high",
+                "claude-opus-4-*": "gemini-3.8-flash-high",
                 "claude-haiku-*": "gemini-2.5-flash",
                 "claude-3-haiku-*": "gemini-2.5-flash",
             }
@@ -602,14 +581,14 @@ export default function ApiProxy() {
             description: t('proxy.router.preset_balanced_desc'),
             mappings: {
                 "gpt-4*": "gemini-3.1-pro-high",
-                "gpt-4o*": "gemini-3-flash",
+                "gpt-4o*": "gemini-3.8-flash-high",
                 "gpt-3.5*": "gemini-2.5-flash",
                 "o1-*": "claude-sonnet-4-6",
                 "o3-*": "claude-sonnet-4-6",
                 "claude-3-5-sonnet-*": "claude-sonnet-4-6",
                 "claude-3-opus-*": "gemini-3.1-pro-high",
                 "claude-opus-4-5*": "gemini-3.1-pro-high",
-                "claude-opus-4-6*": "claude-opus-4-6-thinking", // Balanced: Keep 4.6 as itself (or map to high?) Let's map to itself for now to utilize header
+                "claude-opus-4-6*": "claude-opus-4-6-thinking",
                 "claude-haiku-*": "gemini-2.5-flash",
                 "claude-3-haiku-*": "gemini-2.5-flash",
             }
@@ -760,10 +739,7 @@ export default function ApiProxy() {
                 ...appConfig.proxy,
                 experimental: {
                     ...(appConfig.proxy.experimental || {
-                        enable_usage_scaling: true,
-                        context_compression_threshold_l1: 0.4,
-                        context_compression_threshold_l2: 0.55,
-                        context_compression_threshold_l3: 0.7
+                        enable_usage_scaling: false,
                     }),
                     ...updates
                 }
@@ -809,92 +785,6 @@ export default function ApiProxy() {
             console.error('Failed to clear rate limits:', error);
             showToast(`${t('common.error')}: ${error}`, 'error');
         }
-    };
-
-    const refreshZaiModels = async () => {
-        if (!appConfig?.proxy.zai) return;
-        setZaiModelsLoading(true);
-        setZaiModelsError(null);
-        try {
-            const models = await invoke<string[]>('fetch_zai_models', {
-                zai: appConfig.proxy.zai,
-                upstreamProxy: appConfig.proxy.upstream_proxy,
-                requestTimeout: appConfig.proxy.request_timeout,
-            });
-            setZaiAvailableModels(models);
-        } catch (error: any) {
-            console.error('Failed to fetch z.ai models:', error);
-            setZaiModelsError(error.toString());
-        } finally {
-            setZaiModelsLoading(false);
-        }
-    };
-
-    const updateZaiDefaultModels = (updates: Partial<NonNullable<ProxyConfig['zai']>['models']>) => {
-        if (!appConfig?.proxy.zai) return;
-        const newConfig = {
-            ...appConfig,
-            proxy: {
-                ...appConfig.proxy,
-                zai: {
-                    ...appConfig.proxy.zai,
-                    models: { ...appConfig.proxy.zai.models, ...updates }
-                }
-            }
-        };
-        saveConfig(newConfig);
-    };
-
-    const upsertZaiModelMapping = (from: string, to: string) => {
-        if (!appConfig?.proxy.zai) return;
-        const currentMapping = appConfig.proxy.zai.model_mapping || {};
-        const newMapping = { ...currentMapping, [from]: to };
-
-        const newConfig = {
-            ...appConfig,
-            proxy: {
-                ...appConfig.proxy,
-                zai: {
-                    ...appConfig.proxy.zai,
-                    model_mapping: newMapping
-                }
-            }
-        };
-        saveConfig(newConfig);
-    };
-
-    const removeZaiModelMapping = (from: string) => {
-        if (!appConfig?.proxy.zai) return;
-        const currentMapping = appConfig.proxy.zai.model_mapping || {};
-        const newMapping = { ...currentMapping };
-        delete newMapping[from];
-
-        const newConfig = {
-            ...appConfig,
-            proxy: {
-                ...appConfig.proxy,
-                zai: {
-                    ...appConfig.proxy.zai,
-                    model_mapping: newMapping
-                }
-            }
-        };
-        saveConfig(newConfig);
-    };
-
-    const updateZaiGeneralConfig = (updates: Partial<NonNullable<ProxyConfig['zai']>>) => {
-        if (!appConfig?.proxy.zai) return;
-        const newConfig = {
-            ...appConfig,
-            proxy: {
-                ...appConfig.proxy,
-                zai: {
-                    ...appConfig.proxy.zai,
-                    ...updates
-                }
-            }
-        };
-        saveConfig(newConfig);
     };
 
     const handleToggle = async () => {
@@ -1668,6 +1558,18 @@ print(response.choices[0].message.content)`;
                                 </button>
                                 <button
                                     type="button"
+                                    onClick={() => setActiveMenuTab('models')}
+                                    className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all ${
+                                        activeMenuTab === 'models'
+                                            ? 'bg-white dark:bg-base-100 text-blue-600 dark:text-blue-400 shadow-xs'
+                                            : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+                                    }`}
+                                >
+                                    <BrainCircuit size={14} className={activeMenuTab === 'models' ? 'text-blue-600 dark:text-blue-400' : 'text-gray-400'} />
+                                    {t('proxy.model_config.title', { defaultValue: '模型配置' })}
+                                </button>
+                                <button
+                                    type="button"
                                     onClick={() => setActiveMenuTab('cli')}
                                     className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all ${
                                         activeMenuTab === 'cli'
@@ -2127,6 +2029,65 @@ print(response.choices[0].message.content)`;
                             </div>
                         )}
 
+                        {/* TAB: 模型配置 (models) */}
+                        {activeMenuTab === 'models' && (
+                            <div className="p-4 space-y-4">
+                                {/* 思考设置 (Thinking & Reasoning Settings) - 默认收起 */}
+                                <CollapsibleCard
+                                    title={t('proxy.config.thinking_settings.title', { defaultValue: '思考设置 (Thinking Settings)' })}
+                                    icon={<BrainCircuit size={18} className="text-purple-500" />}
+                                    defaultExpanded={false}
+                                >
+                                    <ThinkingBudget
+                                        config={appConfig.proxy.thinking_budget}
+                                        onChange={(tbConfig) => updateProxyConfig({ thinking_budget: tbConfig })}
+                                        onSave={handleSaveProxySettings}
+                                        thinkingStoreEnabled={appConfig.proxy.experimental?.thinking_store_enabled !== false}
+                                        onThinkingStoreChange={(enabled) =>
+                                            updateExperimentalConfig({ thinking_store_enabled: enabled })
+                                        }
+                                        thinkingMaxMemoryTurns={appConfig.proxy.experimental?.thinking_max_memory_turns ?? 600}
+                                        onThinkingMaxMemoryTurnsChange={(turns: number) =>
+                                            updateExperimentalConfig({ thinking_max_memory_turns: turns })
+                                        }
+                                        thinkingRetentionDays={appConfig.proxy.experimental?.thinking_retention_days ?? 15}
+                                        onThinkingRetentionDaysChange={(days: number) =>
+                                            updateExperimentalConfig({ thinking_retention_days: days })
+                                        }
+                                    />
+                                </CollapsibleCard>
+
+                                {/* 多模态交互设置 (Multimodal Settings) - 默认收起 */}
+                                <CollapsibleCard
+                                    title={t('proxy.config.multimodal_settings.title', { defaultValue: '多模态交互设置 (Multimodal Settings)' })}
+                                    icon={<Sparkles size={18} className="text-pink-500" />}
+                                    defaultExpanded={false}
+                                >
+                                    <MultimodalSettings
+                                        config={appConfig.proxy.multimodal}
+                                        onChange={(mConfig) => updateProxyConfig({ multimodal: mConfig })}
+                                        onSave={handleSaveProxySettings}
+                                    />
+                                </CollapsibleCard>
+
+                                {/* 特定 Agent 特性配置 (Specific Agent Settings) - 默认收起 */}
+                                <CollapsibleCard
+                                    title={t('proxy.config.agent_settings.title', { defaultValue: '特定 Agent 配置 (Specific Agent Settings)' })}
+                                    icon={<Bot size={18} className="text-cyan-500" />}
+                                    defaultExpanded={false}
+                                >
+                                    <AgentSettings
+                                        experimentalConfig={appConfig.proxy.experimental}
+                                        onChange={updateExperimentalConfig}
+                                        onSave={handleSaveProxySettings}
+                                    />
+                                </CollapsibleCard>
+
+                                {/* 模型路由中心 紧随其后 */}
+                                {renderModelRouterSection()}
+                            </div>
+                        )}
+
                         {/* TAB 2: CLI 一键配置 (cli) */}
                         {activeMenuTab === 'cli' && (
                             <div className="p-4">
@@ -2153,259 +2114,6 @@ print(response.choices[0].message.content)`;
                 {
                     !configLoading && !configError && appConfig && activeMenuTab === 'settings' && (
                         <div className="space-y-4">
-                            {/* 思考设置 (Thinking & Reasoning Settings) */}
-                            <CollapsibleCard
-                                title={t('proxy.config.thinking_settings.title', { defaultValue: '思考设置 (Thinking Settings)' })}
-                                icon={<BrainCircuit size={18} className="text-purple-500" />}
-                                defaultExpanded={true}
-                            >
-                                <ThinkingBudget
-                                    config={appConfig.proxy.thinking_budget}
-                                    onChange={(tbConfig) => updateProxyConfig({ thinking_budget: tbConfig })}
-                                    onSave={handleSaveProxySettings}
-                                    thinkingStoreEnabled={appConfig.proxy.experimental?.thinking_store_enabled !== false}
-                                    onThinkingStoreChange={(enabled) =>
-                                        updateExperimentalConfig({ thinking_store_enabled: enabled })
-                                    }
-                                    thinkingMaxMemoryTurns={appConfig.proxy.experimental?.thinking_max_memory_turns ?? 600}
-                                    onThinkingMaxMemoryTurnsChange={(turns: number) =>
-                                        updateExperimentalConfig({ thinking_max_memory_turns: turns })
-                                    }
-                                    thinkingRetentionDays={appConfig.proxy.experimental?.thinking_retention_days ?? 15}
-                                    onThinkingRetentionDaysChange={(days: number) =>
-                                        updateExperimentalConfig({ thinking_retention_days: days })
-                                    }
-                                />
-                            </CollapsibleCard>
-
-                            {/* 模型路由中心 紧随思考设置之后 */}
-                            {renderModelRouterSection()}
-
-                            {/* z.ai (GLM) Dispatcher */}
-                            <CollapsibleCard
-                                title={t('proxy.config.zai.title')}
-                                icon={<Zap size={18} className="text-amber-500" />}
-                                enabled={!!appConfig.proxy.zai?.enabled}
-                                onToggle={(checked) => updateZaiGeneralConfig({ enabled: checked })}
-                            >
-                                <div className="space-y-4">
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                        <div className="space-y-1">
-                                            <label className="text-[11px] font-medium text-gray-500 dark:text-gray-400">
-                                                {t('proxy.config.zai.base_url')}
-                                            </label>
-                                            <input
-                                                type="text"
-                                                value={appConfig.proxy.zai?.base_url || 'https://api.z.ai/api/anthropic'}
-                                                onChange={(e) => updateZaiGeneralConfig({ base_url: e.target.value })}
-                                                className="input input-sm input-bordered w-full font-mono text-xs"
-                                            />
-                                        </div>
-                                        <div className="space-y-1">
-                                            <label className="text-[11px] font-medium text-gray-500 dark:text-gray-400">
-                                                {t('proxy.config.zai.dispatch_mode')}
-                                            </label>
-                                            <select
-                                                className="select select-sm select-bordered w-full text-xs"
-                                                value={appConfig.proxy.zai?.dispatch_mode || 'off'}
-                                                onChange={(e) => updateZaiGeneralConfig({ dispatch_mode: e.target.value as any })}
-                                            >
-                                                <option value="off">{t('proxy.config.zai.modes.off')}</option>
-                                                <option value="exclusive">{t('proxy.config.zai.modes.exclusive')}</option>
-                                                <option value="pooled">{t('proxy.config.zai.modes.pooled')}</option>
-                                                <option value="fallback">{t('proxy.config.zai.modes.fallback')}</option>
-                                            </select>
-                                        </div>
-                                    </div>
-
-                                    <div className="space-y-1">
-                                        <label className="text-[11px] font-medium text-gray-500 dark:text-gray-400 flex items-center justify-between">
-                                            <span>{t('proxy.config.zai.api_key')}</span>
-                                            {!(appConfig.proxy.zai?.api_key) && (
-                                                <span className="text-amber-500 text-[10px] flex items-center gap-1">
-                                                    <HelpTooltip text={t('proxy.config.zai.warning')} />
-                                                    {t('common.required')}
-                                                </span>
-                                            )}
-                                        </label>
-                                        <input
-                                            type="password"
-                                            value={appConfig.proxy.zai?.api_key || ''}
-                                            onChange={(e) => updateZaiGeneralConfig({ api_key: e.target.value })}
-                                            placeholder="sk-..."
-                                            className="input input-sm input-bordered w-full font-mono text-xs"
-                                        />
-                                    </div>
-
-                                    {/* Model Mapping Section */}
-                                    <div className="pt-4 border-t border-gray-100 dark:border-base-200">
-                                        <div className="flex items-center justify-between mb-3">
-                                            <h4 className="text-[11px] font-bold text-gray-400 uppercase tracking-widest">
-                                                {t('proxy.config.zai.models.title')}
-                                            </h4>
-                                            <button
-                                                onClick={refreshZaiModels}
-                                                disabled={zaiModelsLoading || !appConfig.proxy.zai?.api_key}
-                                                className="btn btn-ghost btn-xs gap-1"
-                                            >
-                                                <RefreshCw size={12} className={zaiModelsLoading ? 'animate-spin' : ''} />
-                                                {t('proxy.config.zai.models.refresh')}
-                                            </button>
-                                        </div>
-
-                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                                            {['opus', 'sonnet', 'haiku'].map((family) => (
-                                                <div key={family} className="space-y-1">
-                                                    <label className="text-[10px] text-gray-500 capitalize">{family}</label>
-                                                    <div className="flex gap-1">
-                                                        {zaiModelOptions.length > 0 && (
-                                                            <select
-                                                                className="select select-xs select-bordered max-w-[80px]"
-                                                                value=""
-                                                                onChange={(e) => e.target.value && updateZaiDefaultModels({ [family]: e.target.value })}
-                                                            >
-                                                                <option value="">{t('proxy.config.zai.models.select_placeholder')}</option>
-                                                                {zaiModelOptions.map(m => <option key={m} value={m}>{m}</option>)}
-                                                            </select>
-                                                        )}
-                                                        <input
-                                                            type="text"
-                                                            className="input input-xs input-bordered w-full font-mono"
-                                                            value={appConfig.proxy.zai?.models?.[family as keyof typeof appConfig.proxy.zai.models] || ''}
-                                                            onChange={(e) => updateZaiDefaultModels({ [family]: e.target.value })}
-                                                        />
-                                                    </div>
-                                                </div>
-                                            ))}
-                                        </div>
-
-                                        <details className="mt-3 group">
-                                            <summary className="cursor-pointer text-[10px] text-gray-500 hover:text-blue-500 transition-colors inline-flex items-center gap-1 select-none">
-                                                <Settings size={12} />
-                                                {t('proxy.config.zai.models.advanced_title')}
-                                            </summary>
-                                            <div className="mt-2 space-y-2 p-2 bg-gray-50 dark:bg-base-200 border border-gray-200/50 dark:border-base-300 rounded-lg">
-                                                {/* Advanced Mapping Table */}
-                                                {Object.entries(zaiModelMapping).map(([from, to]) => (
-                                                    <div key={from} className="flex items-center gap-2">
-                                                        <div className="flex-1 bg-white dark:bg-base-100 px-2 py-1 rounded border border-gray-200 dark:border-base-300 text-[10px] font-mono truncate" title={from}>{from}</div>
-                                                        <ArrowRight size={10} className="text-gray-400" />
-                                                        <div className="flex-[1.5] flex gap-1">
-                                                            {zaiModelOptions.length > 0 && (
-                                                                <select
-                                                                    className="select select-xs select-ghost h-6 min-h-0 px-1"
-                                                                    value=""
-                                                                    onChange={(e) => e.target.value && upsertZaiModelMapping(from, e.target.value)}
-                                                                >
-                                                                    <option value="">▼</option>
-                                                                    {zaiModelOptions.map(m => <option key={m} value={m}>{m}</option>)}
-                                                                </select>
-                                                            )}
-                                                            <input
-                                                                type="text"
-                                                                className="input input-xs input-bordered w-full font-mono h-6"
-                                                                value={to}
-                                                                onChange={(e) => upsertZaiModelMapping(from, e.target.value)}
-                                                            />
-                                                        </div>
-                                                        <button onClick={() => removeZaiModelMapping(from)} className="text-gray-400 hover:text-red-500"><Trash2 size={12} /></button>
-                                                    </div>
-                                                ))}
-
-                                                <div className="flex items-center gap-2 pt-2 border-t border-gray-200/50">
-                                                    <input
-                                                        className="input input-xs input-bordered flex-1 font-mono"
-                                                        placeholder={t('proxy.config.zai.models.from_placeholder') || "From (e.g. claude-3-opus)"}
-                                                        value={zaiNewMappingFrom}
-                                                        onChange={e => setZaiNewMappingFrom(e.target.value)}
-                                                    />
-                                                    <input
-                                                        className="input input-xs input-bordered flex-1 font-mono"
-                                                        placeholder={t('proxy.config.zai.models.to_placeholder') || "To (e.g. glm-4)"}
-                                                        value={zaiNewMappingTo}
-                                                        onChange={e => setZaiNewMappingTo(e.target.value)}
-                                                    />
-                                                    <button
-                                                        className="btn btn-xs btn-primary"
-                                                        onClick={() => {
-                                                            if (zaiNewMappingFrom && zaiNewMappingTo) {
-                                                                upsertZaiModelMapping(zaiNewMappingFrom, zaiNewMappingTo);
-                                                                setZaiNewMappingFrom('');
-                                                                setZaiNewMappingTo('');
-                                                            }
-                                                        }}
-                                                    >
-                                                        <Plus size={12} />
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        </details>
-                                    </div>
-                                </div>
-                            </CollapsibleCard>
-
-                            {/* MCP System */}
-                            <CollapsibleCard
-                                title={t('proxy.config.zai.mcp.title')}
-                                icon={<Puzzle size={18} className="text-blue-500" />}
-                                enabled={!!appConfig.proxy.zai?.mcp?.enabled}
-                                onToggle={(checked) => updateZaiGeneralConfig({ mcp: { ...(appConfig.proxy.zai?.mcp || {}), enabled: checked } as any })}
-                                rightElement={
-                                    <div className="flex gap-2 text-[10px]">
-                                        {['web_search', 'web_reader', 'vision'].map(f =>
-                                            appConfig.proxy.zai?.mcp?.[(f + '_enabled') as keyof typeof appConfig.proxy.zai.mcp] && (
-                                                <span key={f} className="bg-blue-500 dark:bg-blue-600 px-1.5 py-0.5 rounded text-white font-semibold shadow-sm">
-                                                    {t(`proxy.config.zai.mcp.${f}`).split(' ')[0]}
-                                                </span>
-                                            )
-                                        )}
-                                    </div>
-                                }
-                            >
-                                <div className="space-y-3">
-                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                                        <label className="flex items-center gap-2 border border-gray-100 dark:border-base-200 p-2 rounded-lg cursor-pointer hover:bg-gray-50 dark:hover:bg-base-200/50 transition-colors">
-                                            <input
-                                                type="checkbox"
-                                                className="checkbox checkbox-xs rounded border-2 border-gray-400 dark:border-gray-500 checked:border-blue-600 checked:bg-blue-600 [--chkbg:theme(colors.blue.600)] [--chkfg:white]"
-                                                checked={!!appConfig.proxy.zai?.mcp?.web_search_enabled}
-                                                onChange={(e) => updateZaiGeneralConfig({ mcp: { ...(appConfig.proxy.zai?.mcp || {}), web_search_enabled: e.target.checked } as any })}
-                                            />
-                                            <span className="text-xs">{t('proxy.config.zai.mcp.web_search')}</span>
-                                        </label>
-                                        <label className="flex items-center gap-2 border border-gray-100 dark:border-base-200 p-2 rounded-lg cursor-pointer hover:bg-gray-50 dark:hover:bg-base-200/50 transition-colors">
-                                            <input
-                                                type="checkbox"
-                                                className="checkbox checkbox-xs rounded border-2 border-gray-400 dark:border-gray-500 checked:border-blue-600 checked:bg-blue-600 [--chkbg:theme(colors.blue.600)] [--chkfg:white]"
-                                                checked={!!appConfig.proxy.zai?.mcp?.web_reader_enabled}
-                                                onChange={(e) => updateZaiGeneralConfig({ mcp: { ...(appConfig.proxy.zai?.mcp || {}), web_reader_enabled: e.target.checked } as any })}
-                                            />
-                                            <span className="text-xs">{t('proxy.config.zai.mcp.web_reader')}</span>
-                                        </label>
-                                        <label className="flex items-center gap-2 border border-gray-100 dark:border-base-200 p-2 rounded-lg cursor-pointer hover:bg-gray-50 dark:hover:bg-base-200/50 transition-colors">
-                                            <input
-                                                type="checkbox"
-                                                className="checkbox checkbox-xs rounded border-2 border-gray-400 dark:border-gray-500 checked:border-blue-600 checked:bg-blue-600 [--chkbg:theme(colors.blue.600)] [--chkfg:white]"
-                                                checked={!!appConfig.proxy.zai?.mcp?.vision_enabled}
-                                                onChange={(e) => updateZaiGeneralConfig({ mcp: { ...(appConfig.proxy.zai?.mcp || {}), vision_enabled: e.target.checked } as any })}
-                                            />
-                                            <span className="text-xs">{t('proxy.config.zai.mcp.vision')}</span>
-                                        </label>
-                                    </div>
-
-                                    {appConfig.proxy.zai?.mcp?.enabled && (
-                                        <div className="bg-gray-100 dark:bg-base-200 rounded-lg p-3 text-[10px] font-mono text-gray-600 dark:text-gray-300">
-                                            <div className="mb-1 font-bold text-gray-400 uppercase tracking-wider">{t('proxy.config.zai.mcp.local_endpoints')}</div>
-                                            <div className="space-y-0.5 select-all">
-                                                {appConfig.proxy.zai?.mcp?.web_search_enabled && <div>http://127.0.0.1:{status.running ? status.port : (appConfig.proxy.port || 8045)}/mcp/web_search_prime/mcp</div>}
-                                                {appConfig.proxy.zai?.mcp?.web_reader_enabled && <div>http://127.0.0.1:{status.running ? status.port : (appConfig.proxy.port || 8045)}/mcp/web_reader/mcp</div>}
-                                                {appConfig.proxy.zai?.mcp?.vision_enabled && <div>http://127.0.0.1:{status.running ? status.port : (appConfig.proxy.port || 8045)}/mcp/zai-mcp-server/mcp</div>}
-                                            </div>
-                                        </div>
-                                    )}
-                                </div>
-                            </CollapsibleCard>
-
                             {/* Account Scheduling & Rotation */}
                             <CollapsibleCard
                                 title={t('proxy.config.scheduling.title')}
@@ -2593,111 +2301,6 @@ print(response.choices[0].message.content)`;
                                             onChange={(newConfig) => updateProxyConfig({ global_system_prompt: newConfig })}
                                         />
                                     </div>
-                                </div>
-                            </CollapsibleCard>
-
-                            {/* 实验性设置 */}
-                            <CollapsibleCard
-                                title={t('proxy.config.experimental.title')}
-                                icon={<Sparkles size={18} className="text-purple-500" />}
-                            >
-                                <div className="space-y-4">
-                                    <div className="flex items-center justify-between p-4 bg-gray-50 dark:bg-base-200 rounded-xl border border-gray-100 dark:border-base-300">
-                                        <div className="space-y-1">
-                                            <div className="flex items-center gap-2">
-                                                <span className="text-sm font-bold text-gray-900 dark:text-base-content">
-                                                    {t('proxy.config.experimental.compression_level_label', { defaultValue: '智能上下文压缩等级' })}
-                                                </span>
-                                                <HelpTooltip text={t('proxy.config.experimental.compression_level_tooltip', { defaultValue: '选择您希望启用的压缩等级。静态降噪与口语提纯不需要达到 30k 即可常驻生效。' })} />
-                                                <span className="px-1.5 py-0.5 rounded bg-indigo-100 dark:bg-indigo-900/30 text-[10px] text-indigo-600 dark:text-indigo-400 font-bold border border-indigo-200 dark:border-indigo-800">
-                                                    All Protocols
-                                                </span>
-                                            </div>
-                                            <p className="text-[10px] text-gray-500 dark:text-gray-400 max-w-lg">
-                                                {t('proxy.config.experimental.compression_level_desc', { defaultValue: '选择不同的压缩方案：Low 仅终端日志降噪；Medium 在此基础上增加口语净化；High 额外开启大上下文分阶段防御重置。' })}
-                                            </p>
-                                        </div>
-                                        <select
-                                            className="select select-sm select-bordered w-48 text-xs font-normal focus:outline-none dark:bg-base-300 dark:text-base-content border-gray-200 dark:border-base-400"
-                                            value={appConfig.proxy.experimental?.compression_level || (appConfig.proxy.experimental?.enable_usage_scaling ? 'high' : 'disabled')}
-                                            onChange={(e) => {
-                                                const val = e.target.value;
-                                                updateExperimentalConfig({
-                                                    compression_level: val,
-                                                    enable_usage_scaling: val === 'high'
-                                                });
-                                            }}
-                                        >
-                                            <option value="disabled" className="text-xs dark:bg-base-300">{t('proxy.config.experimental.level_disabled', { defaultValue: '关闭 (Disabled)' })}</option>
-                                            <option value="low" className="text-xs dark:bg-base-300">{t('proxy.config.experimental.level_low', { defaultValue: '低度 (Low - 日志降噪)' })}</option>
-                                            <option value="medium" className="text-xs dark:bg-base-300">{t('proxy.config.experimental.level_medium', { defaultValue: '中度 (Medium - 日志+口语)' })}</option>
-                                            <option value="high" className="text-xs dark:bg-base-300">{t('proxy.config.experimental.level_high', { defaultValue: '高度 (High - 动态防暴)' })}</option>
-                                        </select>
-                                    </div>
-
-                                    {((appConfig.proxy.experimental?.compression_level || (appConfig.proxy.experimental?.enable_usage_scaling ? 'high' : 'disabled')) === 'high') && (
-                                        <>
-                                            {/* L1 Threshold */}
-                                            <div className="flex flex-col gap-2 p-4 bg-gray-50 dark:bg-base-200 rounded-xl border border-gray-100 dark:border-base-300">
-                                                <div className="flex items-center justify-between w-full">
-                                                    <div className="flex items-center gap-2">
-                                                        <span className="text-sm font-bold text-gray-900 dark:text-base-content">
-                                                            {t('proxy.config.experimental.context_compression_threshold_l1')}
-                                                        </span>
-                                                        <HelpTooltip text={t('proxy.config.experimental.context_compression_threshold_l1_tooltip')} />
-                                                    </div>
-                                                </div>
-                                                <DebouncedSlider
-                                                    min={0.1}
-                                                    max={1}
-                                                    step={0.05}
-                                                    className="range range-purple range-xs"
-                                                    value={appConfig.proxy.experimental?.context_compression_threshold_l1 || 0.4}
-                                                    onChange={(val) => updateExperimentalConfig({ context_compression_threshold_l1: val })}
-                                                />
-                                            </div>
-
-                                            {/* L2 Threshold */}
-                                            <div className="flex flex-col gap-2 p-4 bg-gray-50 dark:bg-base-200 rounded-xl border border-gray-100 dark:border-base-300">
-                                                <div className="flex items-center justify-between w-full">
-                                                    <div className="flex items-center gap-2">
-                                                        <span className="text-sm font-bold text-gray-900 dark:text-base-content">
-                                                            {t('proxy.config.experimental.context_compression_threshold_l2')}
-                                                        </span>
-                                                        <HelpTooltip text={t('proxy.config.experimental.context_compression_threshold_l2_tooltip')} />
-                                                    </div>
-                                                </div>
-                                                <DebouncedSlider
-                                                    min={0.1}
-                                                    max={1}
-                                                    step={0.05}
-                                                    className="range range-purple range-xs"
-                                                    value={appConfig.proxy.experimental?.context_compression_threshold_l2 || 0.55}
-                                                    onChange={(val) => updateExperimentalConfig({ context_compression_threshold_l2: val })}
-                                                />
-                                            </div>
-
-                                            {/* L3 Threshold */}
-                                            <div className="flex flex-col gap-2 p-4 bg-gray-50 dark:bg-base-200 rounded-xl border border-gray-100 dark:border-base-300">
-                                                <div className="flex items-center justify-between w-full">
-                                                    <div className="flex items-center gap-2">
-                                                        <span className="text-sm font-bold text-gray-900 dark:text-base-content">
-                                                            {t('proxy.config.experimental.context_compression_threshold_l3')}
-                                                        </span>
-                                                        <HelpTooltip text={t('proxy.config.experimental.context_compression_threshold_l3_tooltip')} />
-                                                    </div>
-                                                </div>
-                                                <DebouncedSlider
-                                                    min={0.1}
-                                                    max={1}
-                                                    step={0.05}
-                                                    className="range range-purple range-xs"
-                                                    value={appConfig.proxy.experimental?.context_compression_threshold_l3 || 0.7}
-                                                    onChange={(val) => updateExperimentalConfig({ context_compression_threshold_l3: val })}
-                                                />
-                                            </div>
-                                        </>
-                                    )}
                                 </div>
                             </CollapsibleCard>
 

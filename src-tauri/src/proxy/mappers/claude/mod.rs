@@ -91,11 +91,30 @@ where
                             }
                         }
                         Err(e) => {
+                            let session = state
+                                .session_id
+                                .clone()
+                                .unwrap_or_else(|| "-".to_string());
+                            let report = crate::proxy::mappers::error_classifier::report_stream_error(
+                                "claude",
+                                "create_claude_sse_stream",
+                                &e,
+                                format!(
+                                    "trace={} session={} messages={} buffer_bytes={}",
+                                    trace_id,
+                                    session,
+                                    message_count,
+                                    buffer.len()
+                                ),
+                            );
                             let error_json = serde_json::json!({
                                 "type": "error",
                                 "error": {
-                                    "type": "overloaded_error",
-                                    "message": format!("Stream error: {}", e)
+                                    "type": report.classified.error_type,
+                                    "message": report.client_message(),
+                                    "function": report.function,
+                                    "call_site": report.call_site(),
+                                    "params": report.params,
                                 }
                             });
                             yield Ok(state.emit("error", error_json));
@@ -108,10 +127,35 @@ where
                     // [FIX #Bug1] Timeout - send keepalive ping but track consecutive count
                     consecutive_pings += 1;
                     if consecutive_pings >= MAX_CONSECUTIVE_PINGS {
-                        tracing::error!(
-                            "[{}] Stream idle for {}s ({}x 20s timeout), terminating",
-                            trace_id, consecutive_pings * 20, consecutive_pings
+                        let idle_secs = consecutive_pings * 20;
+                        let session = state
+                            .session_id
+                            .clone()
+                            .unwrap_or_else(|| "-".to_string());
+                        let report = crate::proxy::mappers::error_classifier::report_stream_error(
+                            "claude",
+                            "create_claude_sse_stream",
+                            &"stream idle timeout",
+                            format!(
+                                "trace={} session={} messages={} idle_secs={} consecutive_pings={}",
+                                trace_id,
+                                session,
+                                message_count,
+                                idle_secs,
+                                consecutive_pings
+                            ),
                         );
+                        let error_json = serde_json::json!({
+                            "type": "error",
+                            "error": {
+                                "type": report.classified.error_type,
+                                "message": report.client_message(),
+                                "function": report.function,
+                                "call_site": report.call_site(),
+                                "params": report.params,
+                            }
+                        });
+                        yield Ok(state.emit("error", error_json));
                         break;
                     }
                     tracing::debug!(

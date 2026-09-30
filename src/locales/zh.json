@@ -159,7 +159,21 @@
     "quota_tight_short": "偏紧",
     "rolling_5h": "5小时滚动:",
     "weekly_7d": "7天周配额:",
-    "zero_weekly_warning": "{{count}} 个可用账号因周配额已耗尽触发熔断 (判定 0%)"
+    "zero_weekly_warning": "{{count}} 个可用账号因周配额已耗尽触发熔断 (判定 0%)",
+    "view_mode_weighted": "综合加权",
+    "view_mode_5h": "5H 滚动",
+    "view_mode_weekly": "7天周配额",
+    "view_mode_title_weighted": "综合加权：结合套餐等级与双向木桶短板的全局调度可用度",
+    "view_mode_title_5h": "5H 滚动：近 5 小时冲刺可用度 (受周配额硬顶约束)",
+    "view_mode_title_weekly": "7天周配额：本周宏观总预算 (受 5H 瞬时冷却阀门约束)",
+    "constrained_by_weekly": "受周额度压制",
+    "constrained_by_weekly_desc": "5H 滚动剩余 {{raw5h}}%，但受周总配额 {{rawWeekly}}% 限制",
+    "cooling_5h": "5H 冷却中",
+    "cooling_5h_desc": "本周总配额为 {{rawWeekly}}%，但当前 5H 滑动窗口已打满耗尽，处于即时冷却重置期",
+    "weekly_exhausted_badge": "周额度熔断",
+    "mini_tag_constrained": "周限",
+    "mini_tag_cooling": "冷却",
+    "mini_tag_exhausted": "熔断"
   },
   "accounts": {
     "account": "账号",
@@ -418,6 +432,10 @@
       "auto_launch_enabled": "启用",
       "auto_launch_disabled": "禁用",
       "auto_launch_desc": "系统启动时自动运行 Antigravity Tools",
+      "quiet_autostart": "免打扰启动（留在托盘）",
+      "quiet_autostart_desc": "开机自启时不弹出主窗口。同时开启轻量模式时，会直接释放前端进程。手动打开软件仍会显示主窗口；系统没有托盘时会改为显示窗口。",
+      "quiet_autostart_enabled": "已开启免打扰启动",
+      "quiet_autostart_disabled": "已关闭免打扰启动",
       "auto_check_update": "自动检查更新",
       "auto_check_update_desc": "启动时自动检查新版本",
       "auto_check_update_enabled": "已启用自动检查更新",
@@ -850,10 +868,13 @@
       "enable_logging_hint": "记录历史记录以便调试 (微小性能损耗)",
       "log_retention_title": "请求日志保留",
       "log_retention_body_hours": "请求体保留小时数",
-      "log_retention_storage_gb": "日志保留空间上限 (GB)",
-      "log_retention_storage_gb_desc": "达到上限后自动触发滑动窗口，淘汰最尾部 30% 日志记录以容纳新日志入库",
+      "log_retention_storage_gb": "请求日志上限 (GB)",
+      "log_retention_storage_gb_desc": "默认 1GB；达到上限后自动淘汰最旧 30% 记录并继续写入",
       "log_retention_current_usage": "当前数据库空间",
       "log_retention_rows": "最大日志行数",
+      "internal_error_log_storage_mb": "内部报错日志上限 (MB)",
+      "internal_error_log_storage_mb_desc": "默认 500MB；仅记录失败。达到上限后淘汰最旧 30% 并继续追加，不影响账号数据。",
+      "internal_error_log_current_usage": "当前占用",
       "upstream_proxy": {
         "title": "全局上游代理 (Global Proxy)",
         "desc": "开启后，应用内所有外部请求（API 反代、Token 刷新、配额查询、更新检测）都将通过此代理。",
@@ -1083,6 +1104,12 @@
       },
       "prompt_multimodal": {
         "title": "全局提示词与多模态设置 (Prompt & Multimodal)"
+      },
+      "multimodal_settings": {
+        "title": "多模态交互设置 (Multimodal Settings)"
+      },
+      "agent_settings": {
+        "title": "特定 Agent 配置 (Specific Agent Settings)"
       }
     },
     "cloudflared": {
@@ -1414,6 +1441,33 @@
     },
     "error": {
       "load_failed": "加载失败"
+    },
+    "model_config": {
+      "title": "模型配置"
+    },
+    "multimodal": {
+      "banner_title": "多模态交互与长程保鲜治理 (Pipeline First)",
+      "banner_desc": "针对长程多模态 Agent（如 Codex、Claude Code、Cursor）频繁查看截图或文档的场景，提供协议无关的多模态历史保鲜滑窗与物理内存防爆治理，彻底根治会话历史因累积图片过多引发的 400 阻断崩溃与 Token 急速膨胀。",
+      "sliding_window_title": "多模态历史保鲜滑动窗口",
+      "opt_in_tag": "长程 Agent 推荐 (默认关闭)",
+      "sliding_window_desc": "默认关闭（100% 原始透传所有图片）。开启后，网关在请求流水线中自动保鲜最新 N 张图片，对超出的更早历史图片剔除 Base64 并替换为结构化占位符。",
+      "max_fresh_images_label": "保鲜图片最大张数",
+      "max_fresh_images_hint": "仅保留最新的 N 张图片完整多模态视觉嵌入。更早的历史图片将自动剥离 Base64 并替换为结构化占位符。填 0 表示不限制张数（仅受累积容量限制）。",
+      "unit_images": "张",
+      "strip_remote_urls_label": "同时剥离历史远程 / OSS 图片直链",
+      "strip_remote_urls_hint": "默认不勾选（仅剥离过往 Base64 实体，保留轻量 HTTP/HTTPS 直链）。勾选此项后，历史轮次中的远程图片直链也将一并剥离为占位符，极致节省视觉 Token。",
+      "max_total_mb_title": "多模态图片累计最大解码容量",
+      "hard_safety_tag": "内存安全红线 (常开)",
+      "max_total_mb_desc": "单次请求中所有保留的多模态图片总解码体积上限（默认 32MB）。若即使在保鲜窗口内的图片总和依然超出此上限，网关将执行 LRU 策略优先淘汰最早历史图片，绝对保障当前最新一轮（Current Turn）的视觉感知！",
+      "hot_reload_hint": "多模态配置保存后立即热生效，无需重启反代服务。",
+      "save_btn": "保存多模态设置",
+      "strategy_select_label": "保鲜治理策略模式 (二选一独立策略，互不干扰)",
+      "strategy_count_title": "按图片张数保鲜 (Count-Based)",
+      "strategy_count_desc": "固定保留最近 N 张图片，不管单图大小。操作直观，严格与对话轮数对应。",
+      "strategy_memory_title": "按累积内存保鲜 (Memory-Based)",
+      "strategy_memory_desc": "自最新轮次往前回溯计算 Base64 体积，配额内全保留，超出配额的更早旧图自动剔除。",
+      "memory_budget_label": "累积内存保鲜上限",
+      "memory_budget_hint": "以 Base64 总解码体积为限额。从最新轮次往前回溯，只要累积在限额内的图片完整保留，更早超额旧图剥离降级为占位符。"
     }
   },
   "monitor": {
@@ -1443,6 +1497,7 @@
       "images": "绘图",
       "capture_health": "捕获健康检查",
       "capture_health_tip": "默认关闭：过滤全部 GET 成功请求（含 /v1/models 模型列表轮询与 /health 探针）且不入库；失败请求始终记录；开启后才全部记录并落库",
+      "internal_error_log": "内部错误记录在 {{path}}，滑动窗口",
       "reset": "重置",
       "by_account": "按账号筛选",
       "all_accounts": "全部账号"
@@ -1475,7 +1530,7 @@
       "payload_empty": "无数据",
       "concise_mode": "简要模式",
       "full_mode": "完整模式",
-      "concise_desc": "已为您精简工具参数与冗余字段，突出思考块、用量与对话主体",
+      "concise_desc": "保留转出报文的原始层级，并将标识、模型、思考配置、系统提示词、对话与工具前置；图片等大体积内容已省略",
       "search_placeholder": "搜索此报文...",
       "search_placeholder_with_shortcut": "搜索此报文... (Enter 下一个, Shift+Enter 上一个)",
       "case_sensitive": "区分大小写",
@@ -1510,8 +1565,9 @@
       "toggle_button": "日志存储与维护设置",
       "button_text": "日志设置",
       "title": "日志存储周期与维护设置",
-      "subtitle": "统一管理请求日志保留天数、思考块滑动窗口与磁盘空间回收",
-      "retention_title": "请求日志保留策略",
+      "subtitle": "统一管理请求日志与内部报错日志的滑动窗口容量",
+      "retention_title": "请求日志 (滑动窗口)",
+      "internal_error_title": "内部报错日志 (滑动窗口)",
       "payload_thinking_title": "报文存储与思考块周期",
       "maintenance_title": "日志维护与空间清理",
       "save_retention": "保存保留策略",
@@ -1582,7 +1638,7 @@
       "timeout_error": "请求超时,请检查网络连接",
       "connection_error": "无法连接到服务器,请检查网络或代理设置",
       "decode_error": "网络连接不稳定,数据传输中断。建议: 1) 检查网络连接 2) 更换代理节点 3) 稍后重试",
-      "stream_error": "数据流传输错误,请稍后重试",
+      "stream_error": "数据流在完成前中断，请稍后重试",
       "unknown_error": "发生未知错误,请稍后重试"
     }
   },

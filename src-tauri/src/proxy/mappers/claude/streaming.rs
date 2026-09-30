@@ -494,13 +494,30 @@ impl StreamingState {
             // [FIX] Explicitly signal error to client to prevent UI freeze
             // using standard SSE error event format
             // data: {"type": "error", "error": {...}}
+            let report = crate::proxy::mappers::error_classifier::report_stream_error(
+                "claude",
+                "StreamingState::handle_parse_error",
+                &"sse parse error",
+                format!(
+                    "session={} model={} messages={} parse_error_count={} raw_bytes={} preview={}",
+                    self.session_id.as_deref().unwrap_or("-"),
+                    self.model_name.as_deref().unwrap_or("-"),
+                    self.message_count,
+                    self.parse_error_count,
+                    raw_data.len(),
+                    crate::proxy::mappers::error_classifier::preview_payload(raw_data)
+                ),
+            );
             chunks.push(self.emit(
                 "error",
                 json!({
                     "type": "error",
                     "error": {
-                        "type": "overloaded_error", // Use standard type
-                        "message": "网络连接不稳定，请检查您的网络或代理设置。",
+                        "type": report.classified.error_type,
+                        "message": report.client_message(),
+                        "function": report.function,
+                        "call_site": report.call_site(),
+                        "params": report.params,
                     }
                 }),
             ));
@@ -1086,7 +1103,9 @@ impl<'a> PartProcessor<'a> {
             tool_use["signature"] = json!(sig);
 
             // 2. Cache tool signature (Layer 1 recovery)
-            SignatureCache::global().cache_tool_signature(&tool_id, sig.clone());
+            if let Some(sid) = self.state.session_id.as_deref() {
+                SignatureCache::global().cache_tool_signature(sid, &tool_id, sig.clone());
+            }
 
             // 3. [NEW v3.3.17] Cache to session-based storage
             if let Some(session_id) = &self.state.session_id {

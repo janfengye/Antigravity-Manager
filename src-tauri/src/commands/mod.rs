@@ -423,6 +423,17 @@ pub async fn save_config(
 
     modules::save_app_config(&config)?;
 
+    crate::modules::logger::set_internal_error_log_budget_bytes(
+        config.proxy.internal_error_log_retention.budget_bytes(),
+    );
+    if let Err(e) =
+        tokio::task::spawn_blocking(crate::modules::logger::apply_internal_error_log_retention)
+            .await
+            .map_err(|e| e.to_string())?
+    {
+        tracing::warn!("Failed to apply internal error log retention: {}", e);
+    }
+
     // 通知托盘配置已更新
     let _ = app.emit("config://updated", ());
 
@@ -430,15 +441,7 @@ pub async fn save_config(
     crate::proxy::update_thinking_budget_config(config.proxy.thinking_budget.clone());
     crate::proxy::update_global_system_prompt_config(config.proxy.global_system_prompt.clone());
     crate::proxy::update_image_thinking_mode(config.proxy.image_thinking_mode.clone());
-    crate::proxy::config::update_global_compression_level(
-        config.proxy.experimental.compression_level.clone(),
-        config.proxy.experimental.enable_usage_scaling,
-    );
-    crate::proxy::config::update_global_thresholds(
-        config.proxy.experimental.context_compression_threshold_l1,
-        config.proxy.experimental.context_compression_threshold_l2,
-        config.proxy.experimental.context_compression_threshold_l3,
-    );
+    crate::proxy::update_multimodal_config(config.proxy.multimodal.clone());
     crate::proxy::config::update_global_audit_config(
         config.proxy.experimental.payload_storage_mode.clone(),
         config.proxy.experimental.log_retention_days,
@@ -470,8 +473,6 @@ pub async fn save_config(
             .await;
         // 更新安全策略 (auth)
         instance.axum_server.update_security(&config.proxy).await;
-        // 更新 z.ai 配置
-        instance.axum_server.update_zai(&config.proxy).await;
         // 更新实验性配置
         instance
             .axum_server
@@ -490,22 +491,13 @@ pub async fn save_config(
         crate::proxy::update_global_system_prompt_config(config.proxy.global_system_prompt.clone());
         // [NEW] 更新全局图像思维模式配置
         crate::proxy::update_image_thinking_mode(config.proxy.image_thinking_mode.clone());
-        // [NEW] 更新全局压缩等级配置
-        crate::proxy::config::update_global_compression_level(
-            config.proxy.experimental.compression_level.clone(),
-            config.proxy.experimental.enable_usage_scaling,
-        );
+        crate::proxy::update_multimodal_config(config.proxy.multimodal.clone());
         crate::proxy::config::update_global_audit_config(
             config.proxy.experimental.payload_storage_mode.clone(),
             config.proxy.experimental.log_retention_days,
             config.proxy.experimental.thinking_store_enabled,
             config.proxy.experimental.thinking_retention_days,
             Some(config.proxy.experimental.thinking_max_memory_turns),
-        );
-        crate::proxy::config::update_global_thresholds(
-            config.proxy.experimental.context_compression_threshold_l1,
-            config.proxy.experimental.context_compression_threshold_l2,
-            config.proxy.experimental.context_compression_threshold_l3,
         );
         // 更新代理池配置
         instance
@@ -895,6 +887,21 @@ pub async fn get_data_dir_path() -> Result<String, String> {
     Ok(modules::account::format_data_dir_path(&path))
 }
 
+/// 内部失败日志当日文件路径（按天滚动 + 容量滑动窗口）
+#[tauri::command]
+pub async fn get_internal_error_log_path() -> Result<String, String> {
+    let path = modules::logger::internal_error_log_path()?;
+    Ok(modules::account::format_data_dir_path(&path))
+}
+
+/// 内部失败日志当前占用字节数（error.log*）
+#[tauri::command]
+pub async fn get_internal_error_log_disk_size() -> Result<u64, String> {
+    tokio::task::spawn_blocking(modules::logger::internal_error_log_disk_size)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 /// 选择并迁移数据目录（指针写在家目录，删除旧目录后下次启动仍能找到）
 #[tauri::command]
 pub async fn set_data_dir(
@@ -1010,9 +1017,13 @@ pub async fn migrate_data_dir(new_path: String, clean_source: bool) -> Result<()
     Ok(())
 }
 
-/// 显示主窗口
+/// 显示主窗口。登录项的免打扰启动只跳过这一次自动显示。
 #[tauri::command]
 pub async fn show_main_window(window: tauri::Window) -> Result<(), String> {
+    if crate::modules::startup_quiet::take() {
+        tracing::info!("Skipped the automatic first window show for a quiet login launch");
+        return Ok(());
+    }
     window.show().map_err(|e| e.to_string())
 }
 

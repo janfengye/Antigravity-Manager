@@ -74,6 +74,9 @@ pub async fn handle_generate(
     upstream_recorder: Option<
         axum::extract::Extension<crate::proxy::monitor::UpstreamRequestBodyHolder>,
     >,
+    user_identity: Option<
+        axum::extract::Extension<crate::proxy::middleware::auth::UserTokenIdentity>,
+    >,
     Json(mut body): Json<Value>, // 改为 mut 以支持修复提示词注入
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     let clean_start = std::time::Instant::now();
@@ -114,7 +117,16 @@ pub async fn handle_generate(
     // 1. 验证方法
     // [NEW] :countTokens 冒号语法，直接代理到上游 v1internal:countTokens
     if method == "countTokens" {
-        return Ok(execute_count_tokens(state, model_name, body).await);
+        return Ok(execute_count_tokens(
+            state,
+            headers,
+            user_identity
+                .as_ref()
+                .map(|identity| identity.token_id.clone()),
+            model_name,
+            body,
+        )
+        .await);
     }
 
     if method != "generateContent" && method != "streamGenerateContent" {
@@ -168,9 +180,18 @@ pub async fn handle_generate(
     let mut used_attempts = 0;
     let mut retried_without_thinking = false;
 
-    let initial_mapped_model = crate::proxy::common::model_mapping::resolve_model_route(
+    let client_effort = body
+        .get("request")
+        .unwrap_or(&body)
+        .get("generationConfig")
+        .and_then(|gc| gc.get("thinkingConfig"))
+        .and_then(|tc| tc.get("thinkingLevel").or_else(|| tc.get("effort")))
+        .and_then(|v| v.as_str());
+
+    let initial_mapped_model = crate::proxy::common::model_mapping::resolve_model_route_with_effort(
         &model_name,
         &*state.custom_mapping.read().await,
+        client_effort,
     );
 
     while let Some(attempt) = next_rotation_attempt(
@@ -183,13 +204,17 @@ pub async fn handle_generate(
 
         // 3. 模型路由解析
         let mapped_model = initial_mapped_model.clone();
-        // 提取 tools 列表以进行联网探测 (Gemini 风格可能是嵌套的)
-        let tools_val: Option<Vec<Value>> =
-            body.get("tools").and_then(|t| t.as_array()).map(|arr| {
+        // 提取 tools 列表以进行联网探测 (Gemini 风格可能是嵌套的，支持已带 request 包装的客户端)
+        let effective_req = body.get("request").unwrap_or(&body);
+        let tools_val: Option<Vec<Value>> = effective_req
+            .get("tools")
+            .and_then(|t| t.as_array())
+            .map(|arr| {
                 let mut flattened = Vec::new();
                 for tool_entry in arr {
                     if let Some(decls) = tool_entry
                         .get("functionDeclarations")
+                        .or_else(|| tool_entry.get("function_declarations"))
                         .and_then(|v| v.as_array())
                     {
                         flattened.extend(decls.iter().cloned());
@@ -204,31 +229,25 @@ pub async fn handle_generate(
             &model_name,
             &mapped_model,
             &tools_val,
-            None,        // size (not applicable for Gemini native protocol)
-            None,        // quality
-            None,        // [NEW] image_size
-            Some(&body), // [NEW] Pass request body for imageConfig parsing
+            None,                // size (not applicable for Gemini native protocol)
+            None,                // quality
+            None,                // [NEW] image_size
+            Some(effective_req), // [NEW] Pass request body for imageConfig parsing
         );
 
-        // 4. 获取 Token (使用准确的 request_type)
-        // 提取 SessionId (粘性指纹，优先以显式会话头对齐跨协议 store_key)
-        let explicit_sid = headers
-            .get("x-session-id")
-            .or_else(|| headers.get("x-jeikcode-session-id"))
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty());
-        let fallback_sid = if let Some(sid) = explicit_sid {
-            sid.to_string()
-        } else {
-            SessionManager::extract_gemini_session_id(&body, &model_name)
-        };
-        let session_scope = crate::proxy::thinking_store::SessionScope::from_headers_and_body(
+        // 内容锚点只进思维库。账号粘性与上游 sessionId 用 affinity_key。
+        let anchor = SessionManager::gemini_content_anchor(&body);
+        let session_scope = crate::proxy::thinking_store::SessionScope::resolve(
             &headers,
             Some(&body),
-            fallback_sid,
+            None,
+            anchor,
+            user_identity
+                .as_ref()
+                .map(|identity| identity.token_id.as_str()),
         );
         let session_id = session_scope.store_key.clone();
+        let affinity_key = session_scope.affinity_key.clone();
         let client_session_id = session_scope.client_id.clone();
 
         // 关键：根据 force_rotate 标志决定是否轮换账号（支持 Grace Retry 原地重试）
@@ -240,7 +259,7 @@ pub async fn handle_generate(
                 match token_manager
                     .get_image_token(
                         force_rotate,
-                        Some(&session_id),
+                        Some(&affinity_key),
                         &config.final_model,
                         &image_scheduler,
                         request_timeout,
@@ -262,7 +281,7 @@ pub async fn handle_generate(
                     .get_token(
                         &config.request_type,
                         force_rotate,
-                        Some(&session_id),
+                        Some(&affinity_key),
                         &config.final_model,
                     )
                     .await
@@ -305,6 +324,7 @@ pub async fn handle_generate(
             token_obj.as_ref(),
             Some(&token_manager),
             Some(&state.upstream),
+            Some(&affinity_key),
         );
         let tf_micros = tf_start.elapsed().as_micros() as u64;
         let norm_total_micros = norm_start.elapsed().as_micros() as u64;
@@ -381,7 +401,7 @@ pub async fn handle_generate(
             .call_v1_internal_with_headers(
                 upstream_method,
                 &access_token,
-                wrapped_body,
+                wrapped_body.clone(),
                 query_string,
                 extra_headers.clone(),
                 Some(account_id.as_str()),
@@ -448,6 +468,7 @@ pub async fn handle_generate(
             .map(|s| s.to_string());
 
         if status.is_success() {
+            token_manager.commit_session(&affinity_key, &account_id);
             // 6. 响应处理
             if is_stream {
                 use axum::body::Body;
@@ -465,13 +486,30 @@ pub async fn handle_generate(
                     "status": status.as_u16(),
                     "upstream_url": upstream_url,
                 });
-                let mut response_stream = debug_logger::wrap_stream_with_debug(
+                let response_stream = debug_logger::wrap_stream_with_debug(
                     Box::pin(response.bytes_stream()),
                     debug_cfg.clone(),
                     trace_id.clone(),
                     "upstream_response",
                     meta,
                 );
+
+                // [Auto-Heal] 纯思考空回复流式自愈门禁 (Pipeline First)
+                let auto_heal_ctx = crate::proxy::pipeline::auto_heal::ThinkingAutoHealContext {
+                    upstream: upstream.clone(),
+                    method: upstream_method,
+                    access_token: access_token.clone(),
+                    original_body: wrapped_body.clone(),
+                    query_string,
+                    extra_headers: extra_headers.clone(),
+                    account_id: Some(account_id.clone()),
+                    trace_id: trace_id.clone(),
+                };
+                let mut response_stream =
+                    crate::proxy::pipeline::auto_heal::wrap_stream_with_empty_thinking_auto_heal(
+                        Box::pin(response_stream),
+                        auto_heal_ctx,
+                    );
                 let mut buffer = BytesMut::new();
                 let s_id = session_id.clone(); // Clone for stream closure
 
@@ -556,8 +594,30 @@ pub async fn handle_generate(
                             match tokio::time::timeout(std::time::Duration::from_secs(300), response_stream.next()).await {
                                 Ok(next_item) => next_item,
                                 Err(_) => {
-                                    error!("[Gemini-SSE] Idle timeout after 300s, terminating stream");
+                                    let report = crate::proxy::mappers::error_classifier::report_stream_error(
+                                        "gemini",
+                                        "handle_generate",
+                                        &"stream idle timeout",
+                                        format!(
+                                            "model={} session={} buffer_bytes={} idle_secs=300",
+                                            model_name_for_stream,
+                                            s_id_for_stream,
+                                            buffer.len()
+                                        ),
+                                    );
                                     stream_failed = true;
+                                    let error_json = serde_json::json!({
+                                        "error": {
+                                            "code": 504,
+                                            "message": report.client_message(),
+                                            "status": "DEADLINE_EXCEEDED",
+                                            "function": report.function,
+                                            "call_site": report.call_site(),
+                                            "params": report.params
+                                        }
+                                    });
+                                    yield Ok::<Bytes, String>(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&error_json).unwrap_or_default())));
+                                    yield Ok::<Bytes, String>(Bytes::from("data: [DONE]\n\n"));
                                     None
                                 }
                             }
@@ -566,21 +626,27 @@ pub async fn handle_generate(
                         let bytes = match item {
                             Some(Ok(b)) => b,
                             Some(Err(e)) => {
-                                error!("[Gemini-SSE] Stream error: {}", e);
+                                let report = crate::proxy::mappers::error_classifier::report_stream_error(
+                                    "gemini",
+                                    "handle_generate",
+                                    &e,
+                                    format!(
+                                        "model={} session={} buffer_bytes={}",
+                                        model_name_for_stream,
+                                        s_id_for_stream,
+                                        buffer.len()
+                                    ),
+                                );
                                 stream_failed = true;
                                 let error_json = serde_json::json!({
-                                    "id": &s_id_for_stream,
-                                    "object": "chat.completion.chunk",
-                                    "model": &model_name_for_stream,
-                                    "choices": [
-                                        {
-                                            "index": 0,
-                                            "delta": {
-                                                "content": format!("\n[Stream Error] {}", e)
-                                            },
-                                            "finish_reason": "error"
-                                        }
-                                    ]
+                                    "error": {
+                                        "code": 503,
+                                        "message": report.client_message(),
+                                        "status": "UNAVAILABLE",
+                                        "function": report.function,
+                                        "call_site": report.call_site(),
+                                        "params": report.params
+                                    }
                                 });
                                 yield Ok::<Bytes, String>(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&error_json).unwrap_or_default())));
                                 yield Ok::<Bytes, String>(Bytes::from("data: [DONE]\n\n"));
@@ -645,9 +711,31 @@ pub async fn handle_generate(
                                             }
                                         }
                                         Err(e) => {
-                                            debug!("[Gemini-SSE] JSON parse error: {}, passing raw line", e);
+                                            let report = crate::proxy::mappers::error_classifier::report_stream_error(
+                                                "gemini",
+                                                "handle_generate",
+                                                &format!("json parse error: {e}"),
+                                                format!(
+                                                    "model={} session={} buffer_bytes={} line_bytes={} preview={}",
+                                                    model_name_for_stream,
+                                                    s_id_for_stream,
+                                                    buffer.len(),
+                                                    json_part.len(),
+                                                    crate::proxy::mappers::error_classifier::preview_payload(json_part)
+                                                ),
+                                            );
                                             stream_failed = true;
-                                            yield Ok::<Bytes, String>(Bytes::from(format!("{}\n\n", line)));
+                                            let error_json = serde_json::json!({
+                                                "error": {
+                                                    "code": 502,
+                                                    "message": report.client_message(),
+                                                    "status": "INTERNAL",
+                                                    "function": report.function,
+                                                    "call_site": report.call_site(),
+                                                    "params": report.params
+                                                }
+                                            });
+                                            yield Ok::<Bytes, String>(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&error_json).unwrap_or_default())));
                                         }
                                     }
                                 } else {
@@ -877,25 +965,12 @@ pub async fn handle_generate(
         // 之后该 sessionId 的所有请求都 400 "input token count exceeds ... 1048576"。
         // 给 (账号, 对话) 的 sessionId 升代并立即重试:新 sessionId = 上游全新会话,对话无感恢复。
         if status_code == 400 && error_text.contains("exceeds the maximum number of tokens") {
-            let fingerprint = session_id.as_str();
-            let generation = crate::proxy::common::session::bump_session(&account_id, fingerprint);
+            let generation = crate::proxy::common::session::bump_session(&account_id, &session_id);
             tracing::warn!(
                 "[Gemini] Upstream session token accumulation exceeded 1M on account {}. sessionId bumped to generation {}, retrying with a fresh upstream session.",
                 email, generation
             );
             continue; // 重试:下一轮读取新代数,派生全新 sessionId
-        }
-
-        if status_code == 429 || status_code == 529 {
-            token_manager
-                .unbind_session_and_clear_last_used(Some(&session_id))
-                .await;
-            tracing::debug!(
-                "[Gemini] Unbound session {} from account {} due to status {}",
-                session_id,
-                email,
-                status_code
-            );
         }
 
         let scheduling_mode = token_manager.get_scheduling_mode().await;
@@ -923,6 +998,15 @@ pub async fn handle_generate(
             &error_text,
             retry_after.as_deref(),
         );
+        if classification.abandons_sticky_account() {
+            token_manager.abandon_session(&affinity_key, &account_id);
+            tracing::debug!(
+                "[Gemini] Unbound session {} from account {} due to status {}",
+                affinity_key,
+                email,
+                status_code
+            );
+        }
 
         if classification.is_model_not_found() {
             tracing::warn!(
@@ -954,10 +1038,7 @@ pub async fn handle_generate(
                     status_code
                 );
                 // 1. 精准定向净化 ThinkingStore 中的异构污染签名
-                crate::proxy::thinking_store::ThinkingStore::global()
-                    .purge_corrupted_signatures(&session_id, &mapped_model);
-                // 2. 清理当前 session 的 SignatureCache
-                crate::proxy::SignatureCache::global().delete_session_signature(&client_session_id);
+                session_scope.purge_signatures(&mapped_model);
                 // 3. 保持同一账号原地重试
                 force_rotate = false;
                 continue;
@@ -1108,19 +1189,73 @@ pub async fn handle_list_models(
     Ok(Json(json!({ "models": models })))
 }
 
-pub async fn handle_get_model(Path(model_name): Path<String>) -> impl IntoResponse {
-    Json(json!({
-        "name": format!("models/{}", model_name),
-        "displayName": model_name
-    }))
+pub async fn handle_get_model(
+    State(state): State<AppState>,
+    Path(model_name): Path<String>,
+) -> impl IntoResponse {
+    use crate::proxy::common::model_mapping::find_dynamic_model;
+
+    let only_raw = *state.only_raw_quota_models.read().await;
+    if let Some(matched_id) = find_dynamic_model(
+        &state.custom_mapping,
+        Some(&state.token_manager),
+        only_raw,
+        &model_name,
+    )
+    .await
+    {
+        (
+            StatusCode::OK,
+            Json(json!({
+                "name": format!("models/{}", matched_id),
+                "version": "001",
+                "displayName": matched_id,
+                "description": "",
+                "inputTokenLimit": 128000,
+                "outputTokenLimit": 8192,
+                "supportedGenerationMethods": ["generateContent", "countTokens"],
+                "temperature": 1.0,
+                "topP": 0.95,
+                "topK": 64
+            })),
+        )
+            .into_response()
+    } else {
+        let clean_name = model_name.strip_prefix("models/").unwrap_or(&model_name);
+        (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "error": {
+                    "code": 404,
+                    "message": format!(
+                        "models/{} is not found for API version v1beta, or is not supported for generateContent. Call ListModels to see the list of available models and their supported methods.",
+                        clean_name
+                    ),
+                    "status": "NOT_FOUND"
+                }
+            })),
+        )
+            .into_response()
+    }
 }
 
 pub async fn handle_count_tokens(
     State(state): State<AppState>,
     Path(model_name): Path<String>,
+    headers: HeaderMap,
+    user_identity: Option<
+        axum::extract::Extension<crate::proxy::middleware::auth::UserTokenIdentity>,
+    >,
     Json(body): Json<Value>,
 ) -> Response {
-    execute_count_tokens(state, model_name, body).await
+    execute_count_tokens(
+        state,
+        headers,
+        user_identity.map(|identity| identity.token_id.clone()),
+        model_name,
+        body,
+    )
+    .await
 }
 
 /// 核心 countTokens 实现：透明代理到上游 v1internal:countTokens
@@ -1129,6 +1264,8 @@ pub async fn handle_count_tokens(
 /// 返回真实的 token 计数，而不是硬编码的 0
 pub async fn execute_count_tokens(
     state: AppState,
+    headers: HeaderMap,
+    tenant_id: Option<String>,
     model_name: String,
     mut body: Value,
 ) -> Response {
@@ -1136,9 +1273,18 @@ pub async fn execute_count_tokens(
     crate::proxy::mappers::common_utils::sanitize_gemini_payload_inline_data(&mut body);
 
     // 1. 模型路由解析
-    let mapped_model = crate::proxy::common::model_mapping::resolve_model_route(
+    let client_effort = body
+        .get("request")
+        .unwrap_or(&body)
+        .get("generationConfig")
+        .and_then(|gc| gc.get("thinkingConfig"))
+        .and_then(|tc| tc.get("thinkingLevel").or_else(|| tc.get("effort")))
+        .and_then(|v| v.as_str());
+
+    let mapped_model = crate::proxy::common::model_mapping::resolve_model_route_with_effort(
         &model_name,
         &*state.custom_mapping.read().await,
+        client_effort,
     );
 
     // 2. 解析请求配置并获取 Token
@@ -1152,25 +1298,39 @@ pub async fn execute_count_tokens(
         Some(&body),
     );
 
-    let session_id = SessionManager::extract_gemini_session_id(&body, &model_name);
+    let anchor = SessionManager::gemini_content_anchor(&body);
+    let session_scope = crate::proxy::thinking_store::SessionScope::resolve(
+        &headers,
+        Some(&body),
+        None,
+        anchor,
+        tenant_id.as_deref(),
+    );
 
     let (access_token, _project_id, email, account_id, _wait_ms) = match state
         .token_manager
         .get_token(
             &config.request_type,
             false,
-            Some(&session_id),
+            Some(&session_scope.affinity_key),
             &config.final_model,
         )
         .await
     {
         Ok(t) => t,
         Err(e) => {
-            let headers = build_token_error_headers(Some(mapped_model.as_str()), None, &e);
+            tracing::warn!(
+                "[Gemini] Token acquisition failed for countTokens (error: {}), falling back to PipelineTokenEstimator",
+                e
+            );
+            let local_tokens = crate::proxy::pipeline::estimate_tokens(&body);
             return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                headers,
-                Json(json!({ "error": format!("Token error: {}", e) })),
+                StatusCode::OK,
+                [
+                    ("X-Account-Email", "offline-estimate"),
+                    ("X-Mapped-Model", mapped_model.as_str()),
+                ],
+                Json(json!({ "totalTokens": local_tokens })),
             )
                 .into_response();
         }
@@ -1180,7 +1340,7 @@ pub async fn execute_count_tokens(
     // [已验证] countTokens 与 generateContent 不同: 顶层只允许 "request" 键,
     // 携带 model/project 会被上游 400 拒绝 (Unknown name "model"/"project");
     // request 内的 safetySettings 同样不被接受 (对齐 CLIProxyAPI 的处理)
-    let mut inner_body = body;
+    let mut inner_body = body.clone();
     if let Some(obj) = inner_body.as_object_mut() {
         obj.remove("safetySettings");
     }
@@ -1203,9 +1363,18 @@ pub async fn execute_count_tokens(
     {
         Ok(r) => r,
         Err(e) => {
+            tracing::warn!(
+                "[Gemini] Upstream call error for countTokens ({}), falling back to PipelineTokenEstimator",
+                e
+            );
+            let local_tokens = crate::proxy::pipeline::estimate_tokens(&body);
             return (
-                StatusCode::BAD_GATEWAY,
-                Json(json!({ "error": format!("Upstream call error: {}", e) })),
+                StatusCode::OK,
+                [
+                    ("X-Account-Email", email.as_str()),
+                    ("X-Mapped-Model", mapped_model.as_str()),
+                ],
+                Json(json!({ "totalTokens": local_tokens })),
             )
                 .into_response();
         }
@@ -1216,9 +1385,19 @@ pub async fn execute_count_tokens(
 
     if !status.is_success() {
         let err_text = response.text().await.unwrap_or_default();
-        return (
+        tracing::warn!(
+            "[Gemini] Upstream countTokens error (status: {}, body: {}), falling back to PipelineTokenEstimator",
             status,
-            Json(json!({ "error": format!("Upstream countTokens error: {}", err_text) })),
+            err_text
+        );
+        let local_tokens = crate::proxy::pipeline::estimate_tokens(&body);
+        return (
+            StatusCode::OK,
+            [
+                ("X-Account-Email", email.as_str()),
+                ("X-Mapped-Model", mapped_model.as_str()),
+            ],
+            Json(json!({ "totalTokens": local_tokens })),
         )
             .into_response();
     }

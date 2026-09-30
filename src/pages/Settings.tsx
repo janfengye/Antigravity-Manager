@@ -1,5 +1,5 @@
 import { useState, useEffect, startTransition } from 'react';
-import { Save, Github, User, MessageCircle, ExternalLink, RefreshCw, Heart, Coffee, LayoutDashboard, Users, Network, Activity, BarChart3, Settings as SettingsIcon, Lock, CheckCircle2, Globe, Send } from 'lucide-react';
+import { Save, Github, User, MessageCircle, ExternalLink, RefreshCw, Heart, Coffee, LayoutDashboard, Users, Network, Activity, BarChart3, Settings as SettingsIcon, Lock, CheckCircle2, Globe, Send, KeyRound } from 'lucide-react';
 import { request as invoke } from '../utils/request';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useConfigStore } from '../stores/useConfigStore';
@@ -41,7 +41,7 @@ function Settings() {
     const { config, loadConfig, saveConfig, updateLanguage, updateTheme } = useConfigStore();
     const { enable, disable, isEnabled } = useDebugConsole();
     const [activeTab, setActiveTab] = useState<'general' | 'account' | 'proxy' | 'advanced' | 'debug' | 'about'>('general');
-    const [appVersion, setAppVersion] = useState<string>('4.8.4');
+    const [appVersion, setAppVersion] = useState<string>('4.8.8');
     const [formData, setFormData] = useState<AppConfig>({
         language: 'zh',
         theme: 'system',
@@ -83,7 +83,7 @@ function Settings() {
             monitored_models: []
         },
         pinned_quota_models: {
-            models: ['gemini-pro-agent', 'gemini-3-flash-agent', 'gemini-3.1-flash-image', 'claude-opus-4-6-thinking']
+            models: ['gemini-3.1-pro-high', 'gemini-3.8-flash-high', 'gemini-3.1-flash-image', 'claude-opus-4-6-thinking']
         },
         cloudflared: {
             enabled: false,
@@ -627,6 +627,37 @@ function Settings() {
                                 <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">{t('settings.general.auto_launch_desc')}</p>
                             </div>
 
+                            {isTauri() && (
+                                <div className="flex items-center justify-between p-4 bg-gray-50 dark:bg-base-200 rounded-lg border border-gray-100 dark:border-base-300">
+                                    <div>
+                                        <div className="font-medium text-gray-900 dark:text-base-content">{t('settings.general.quiet_autostart')}</div>
+                                        <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">{t('settings.general.quiet_autostart_desc')}</p>
+                                    </div>
+                                    <label className="relative inline-flex items-center cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            className="sr-only peer"
+                                            checked={formData.quiet_autostart !== false}
+                                            onChange={async (e) => {
+                                                const enabled = e.target.checked;
+                                                const next = { ...formData, quiet_autostart: enabled };
+                                                setFormData(next);
+                                                if (!config) {
+                                                    return;
+                                                }
+                                                try {
+                                                    await saveConfig(next);
+                                                    showToast(enabled ? t('settings.general.quiet_autostart_enabled') : t('settings.general.quiet_autostart_disabled'), 'success');
+                                                } catch (error) {
+                                                    showToast(`${t('common.error')}: ${error}`, 'error');
+                                                }
+                                            }}
+                                        />
+                                        <div className="w-11 h-6 bg-gray-200 dark:bg-base-300 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-500"></div>
+                                    </label>
+                                </div>
+                            )}
+
                             {/* 自动检查更新 */}
                             <>
                                 <div className="flex items-center justify-between p-4 bg-gray-50 dark:bg-base-200 rounded-lg border border-gray-100 dark:border-base-300">
@@ -724,6 +755,7 @@ function Settings() {
                                             { path: '/', label: t('nav.dashboard'), icon: LayoutDashboard },
                                             { path: '/accounts', label: t('nav.accounts'), icon: Users },
                                             { path: '/api-proxy', label: t('nav.proxy'), icon: Network },
+                                            { path: '/apikey-fun', label: t('nav.apikey_fun', '中转站'), icon: KeyRound },
                                             { path: '/monitor', label: t('nav.call_records'), icon: Activity },
                                             { path: '/token-stats', label: t('nav.token_stats'), icon: BarChart3 },
                                             { path: '/user-token', label: t('nav.user_token', 'User Tokens'), icon: Users },

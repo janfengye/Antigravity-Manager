@@ -147,13 +147,46 @@ pub fn update_image_thinking_mode(mode: Option<String>) {
 }
 
 // ============================================================================
-// 全局压缩等级配置存储
+// 全局多模态交互与保鲜滑窗配置存储
 // ============================================================================
-static GLOBAL_COMPRESSION_LEVEL: OnceLock<RwLock<String>> = OnceLock::new();
-static GLOBAL_USAGE_SCALING: OnceLock<RwLock<bool>> = OnceLock::new();
-static GLOBAL_THRESHOLD_L1: OnceLock<RwLock<f32>> = OnceLock::new();
-static GLOBAL_THRESHOLD_L2: OnceLock<RwLock<f32>> = OnceLock::new();
-static GLOBAL_THRESHOLD_L3: OnceLock<RwLock<f32>> = OnceLock::new();
+static GLOBAL_MULTIMODAL_CONFIG: OnceLock<RwLock<MultimodalConfig>> = OnceLock::new();
+
+pub fn get_multimodal_config() -> MultimodalConfig {
+    GLOBAL_MULTIMODAL_CONFIG
+        .get()
+        .and_then(|lock| lock.read().ok())
+        .map(|cfg| cfg.clone())
+        .unwrap_or_default()
+}
+
+pub fn update_multimodal_config(config: MultimodalConfig) {
+    if let Some(lock) = GLOBAL_MULTIMODAL_CONFIG.get() {
+        if let Ok(mut cfg) = lock.write() {
+            if *cfg != config {
+                *cfg = config.clone();
+                tracing::info!(
+                    "[Multimodal-Config] Global config updated: sliding_window={}, strategy={}, max_fresh_images={}, strip_remote_urls={}, max_total_mb={}",
+                    config.enable_sliding_window,
+                    config.strategy,
+                    config.max_fresh_images,
+                    config.strip_remote_urls,
+                    config.max_total_image_mb,
+                );
+            }
+        }
+    } else {
+        let _ = GLOBAL_MULTIMODAL_CONFIG.set(RwLock::new(config.clone()));
+        tracing::info!(
+            "[Multimodal-Config] Global config initialized: sliding_window={}, strategy={}, max_fresh_images={}, strip_remote_urls={}, max_total_mb={}",
+            config.enable_sliding_window,
+            config.strategy,
+            config.max_fresh_images,
+            config.strip_remote_urls,
+            config.max_total_image_mb,
+        );
+    }
+}
+
 static GLOBAL_PAYLOAD_STORAGE_MODE: OnceLock<RwLock<String>> = OnceLock::new();
 static GLOBAL_LOG_RETENTION_DAYS: OnceLock<RwLock<u32>> = OnceLock::new();
 static GLOBAL_THINKING_STORE_ENABLED: OnceLock<RwLock<bool>> = OnceLock::new();
@@ -247,97 +280,6 @@ pub fn update_global_audit_config(
     );
 }
 
-pub fn get_global_threshold_l1() -> f32 {
-    GLOBAL_THRESHOLD_L1
-        .get()
-        .and_then(|lock| lock.read().ok())
-        .map(|v| *v)
-        .unwrap_or(0.6)
-}
-
-pub fn get_global_threshold_l2() -> f32 {
-    GLOBAL_THRESHOLD_L2
-        .get()
-        .and_then(|lock| lock.read().ok())
-        .map(|v| *v)
-        .unwrap_or(0.75)
-}
-
-pub fn get_global_threshold_l3() -> f32 {
-    GLOBAL_THRESHOLD_L3
-        .get()
-        .and_then(|lock| lock.read().ok())
-        .map(|v| *v)
-        .unwrap_or(0.9)
-}
-
-pub fn get_global_compression_level() -> String {
-    let level = GLOBAL_COMPRESSION_LEVEL
-        .get()
-        .and_then(|lock| lock.read().ok())
-        .map(|cfg| cfg.clone())
-        .unwrap_or_else(|| "disabled".to_string());
-
-    if level == "disabled" {
-        let scaling = GLOBAL_USAGE_SCALING
-            .get()
-            .and_then(|lock| lock.read().ok())
-            .map(|s| *s)
-            .unwrap_or(false);
-        if scaling {
-            "high".to_string()
-        } else {
-            "disabled".to_string()
-        }
-    } else {
-        level
-    }
-}
-
-pub fn update_global_compression_level(level: String, scaling: bool) {
-    if let Some(lock) = GLOBAL_COMPRESSION_LEVEL.get() {
-        if let Ok(mut cfg) = lock.write() {
-            *cfg = level;
-        }
-    } else {
-        let _ = GLOBAL_COMPRESSION_LEVEL.set(RwLock::new(level));
-    }
-
-    if let Some(lock) = GLOBAL_USAGE_SCALING.get() {
-        if let Ok(mut cfg) = lock.write() {
-            *cfg = scaling;
-        }
-    } else {
-        let _ = GLOBAL_USAGE_SCALING.set(RwLock::new(scaling));
-    }
-}
-
-pub fn update_global_thresholds(l1: f32, l2: f32, l3: f32) {
-    if let Some(lock) = GLOBAL_THRESHOLD_L1.get() {
-        if let Ok(mut cfg) = lock.write() {
-            *cfg = l1;
-        }
-    } else {
-        let _ = GLOBAL_THRESHOLD_L1.set(RwLock::new(l1));
-    }
-
-    if let Some(lock) = GLOBAL_THRESHOLD_L2.get() {
-        if let Ok(mut cfg) = lock.write() {
-            *cfg = l2;
-        }
-    } else {
-        let _ = GLOBAL_THRESHOLD_L2.set(RwLock::new(l2));
-    }
-
-    if let Some(lock) = GLOBAL_THRESHOLD_L3.get() {
-        if let Ok(mut cfg) = lock.write() {
-            *cfg = l3;
-        }
-    } else {
-        let _ = GLOBAL_THRESHOLD_L3.set(RwLock::new(l3));
-    }
-}
-
 /// 全局系统提示词配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GlobalSystemPromptConfig {
@@ -373,105 +315,6 @@ impl Default for ProxyAuthMode {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum ZaiDispatchMode {
-    /// Never use z.ai.
-    Off,
-    /// Use z.ai for all Anthropic protocol requests.
-    Exclusive,
-    /// Treat z.ai as one additional slot in the shared pool.
-    Pooled,
-    /// Use z.ai only when the Google pool is unavailable.
-    Fallback,
-}
-
-impl Default for ZaiDispatchMode {
-    fn default() -> Self {
-        Self::Off
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ZaiModelDefaults {
-    /// Default model for "opus" family (when the incoming model is a Claude id).
-    #[serde(default = "default_zai_opus_model")]
-    pub opus: String,
-    /// Default model for "sonnet" family (when the incoming model is a Claude id).
-    #[serde(default = "default_zai_sonnet_model")]
-    pub sonnet: String,
-    /// Default model for "haiku" family (when the incoming model is a Claude id).
-    #[serde(default = "default_zai_haiku_model")]
-    pub haiku: String,
-}
-
-impl Default for ZaiModelDefaults {
-    fn default() -> Self {
-        Self {
-            opus: default_zai_opus_model(),
-            sonnet: default_zai_sonnet_model(),
-            haiku: default_zai_haiku_model(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ZaiMcpConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default)]
-    pub web_search_enabled: bool,
-    #[serde(default)]
-    pub web_reader_enabled: bool,
-    #[serde(default)]
-    pub vision_enabled: bool,
-}
-
-impl Default for ZaiMcpConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            web_search_enabled: false,
-            web_reader_enabled: false,
-            vision_enabled: false,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ZaiConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default = "default_zai_base_url")]
-    pub base_url: String,
-    #[serde(default)]
-    pub api_key: String,
-    #[serde(default)]
-    pub dispatch_mode: ZaiDispatchMode,
-    /// Optional per-model mapping overrides for Anthropic/Claude model ids.
-    /// Key: incoming `model` string, Value: upstream z.ai model id (e.g. `glm-4.7`).
-    #[serde(default)]
-    pub model_mapping: HashMap<String, String>,
-    #[serde(default)]
-    pub models: ZaiModelDefaults,
-    #[serde(default)]
-    pub mcp: ZaiMcpConfig,
-}
-
-impl Default for ZaiConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            base_url: default_zai_base_url(),
-            api_key: String::new(),
-            dispatch_mode: ZaiDispatchMode::Off,
-            model_mapping: HashMap::new(),
-            models: ZaiModelDefaults::default(),
-            mcp: ZaiMcpConfig::default(),
-        }
-    }
-}
-
 /// 实验性功能配置 (Feature Flags)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExperimentalConfig {
@@ -487,28 +330,9 @@ pub struct ExperimentalConfig {
     #[serde(default = "default_true")]
     pub enable_cross_model_checks: bool,
 
-    /// 启用上下文用量缩放 (Context Usage Scaling)
-    /// 激进模式: 缩放用量并激活自动压缩以突破 200k 限制
-    /// 默认关闭以保持透明度,让客户端能触发原生压缩指令
+    /// 默认关闭。只影响回给客户端的用量数字，不改写上下文。
     #[serde(default = "default_false")]
     pub enable_usage_scaling: bool,
-
-    /// 压缩级别 (Compression Level)
-    /// disabled, low, medium, high
-    #[serde(default = "default_compression_level")]
-    pub compression_level: String,
-
-    /// 上下文压缩阈值 L1 (Tool Trimming)
-    #[serde(default = "default_threshold_l1")]
-    pub context_compression_threshold_l1: f32,
-
-    /// 上下文压缩阈值 L2 (Thinking Compression)
-    #[serde(default = "default_threshold_l2")]
-    pub context_compression_threshold_l2: f32,
-
-    /// 上下文压缩阈值 L3 (Fork + Summary)
-    #[serde(default = "default_threshold_l3")]
-    pub context_compression_threshold_l3: f32,
 
     /// 监控报文体存储模式: `simple`（默认，精简落库）或 `full`（原文）
     #[serde(default = "default_payload_storage_mode")]
@@ -529,6 +353,14 @@ pub struct ExperimentalConfig {
     /// 每轮会话在内存中保留的最大思考块轮次（默认 600，滑动窗口淘汰并由 SQLite 索引承接）
     #[serde(default = "default_thinking_max_memory_turns")]
     pub thinking_max_memory_turns: u32,
+
+    /// Claude Desktop Cowork 模式自动响应式自愈压缩 (Auto Reactive Compact for Cowork)
+    #[serde(default = "default_false")]
+    pub enable_cowork_auto_compact: bool,
+
+    /// Cowork 自动响应式压缩触发阈值 (默认 200,000 Tokens)
+    #[serde(default = "default_cowork_compact_threshold")]
+    pub cowork_compact_threshold: u32,
 }
 
 impl Default for ExperimentalConfig {
@@ -538,31 +370,21 @@ impl Default for ExperimentalConfig {
             enable_tool_loop_recovery: false,
             enable_cross_model_checks: true,
             enable_usage_scaling: false,
-            compression_level: "disabled".to_string(),
-            context_compression_threshold_l1: 0.4,
-            context_compression_threshold_l2: 0.55,
-            context_compression_threshold_l3: 0.7,
             payload_storage_mode: default_payload_storage_mode(),
             log_retention_days: default_log_retention_days(),
             thinking_store_enabled: default_thinking_store_enabled(),
             thinking_retention_days: default_thinking_retention_days(),
             thinking_max_memory_turns: default_thinking_max_memory_turns(),
+            enable_cowork_auto_compact: false,
+            cowork_compact_threshold: default_cowork_compact_threshold(),
         }
     }
 }
 
-fn default_threshold_l1() -> f32 {
-    0.4
+fn default_cowork_compact_threshold() -> u32 {
+    200_000
 }
-fn default_threshold_l2() -> f32 {
-    0.55
-}
-fn default_threshold_l3() -> f32 {
-    0.7
-}
-fn default_compression_level() -> String {
-    "disabled".to_string()
-}
+
 fn default_payload_storage_mode() -> String {
     "simple".to_string()
 }
@@ -638,7 +460,10 @@ pub struct ThinkingBudgetConfig {
     #[serde(default = "default_flash_medium")]
     pub flash_medium: i32, // 默认 4000
     #[serde(default = "default_flash_high")]
-    pub flash_high: i32, // 默认 10000
+    pub flash_high: i32, // 默认 -1，走官方模型结构体
+    /// 旧默认值 16384 已迁移为官方 -1。置位后不再重复改写用户后来手选的 16384。
+    #[serde(default)]
+    pub flash_high_legacy_migrated: bool,
     #[serde(default = "default_flash_tiered")]
     pub flash_tiered: i32, // 默认 -1
 
@@ -673,7 +498,7 @@ pub struct ThinkingBudgetConfig {
     pub custom_low: i32,
     #[serde(default = "default_flash_medium")]
     pub custom_medium: i32,
-    #[serde(default = "default_flash_high")]
+    #[serde(default = "default_custom_high")]
     pub custom_high: i32,
     #[serde(default = "default_flash_tiered")]
     pub custom_tiered: i32,
@@ -688,12 +513,16 @@ fn default_thinking_budget_mode() -> ThinkingBudgetMode {
 }
 
 fn default_flash_low() -> i32 {
-    1024
+    1000
 }
 fn default_flash_medium() -> i32 {
-    4096
+    4000
 }
 fn default_flash_high() -> i32 {
+    -1
+}
+
+fn default_custom_high() -> i32 {
     16384
 }
 fn default_flash_tiered() -> i32 {
@@ -708,7 +537,7 @@ fn default_pro_high() -> i32 {
 }
 
 fn default_claude_budget() -> i32 {
-    16384
+    0 // 0 = 使用官方模型结构体的 thinking_budget 默认值，不强制设置
 }
 fn default_claude_low() -> i32 {
     1024
@@ -728,6 +557,7 @@ impl Default for ThinkingBudgetConfig {
             flash_low: default_flash_low(),
             flash_medium: default_flash_medium(),
             flash_high: default_flash_high(),
+            flash_high_legacy_migrated: false,
             flash_tiered: default_flash_tiered(),
 
             pro_mode: default_thinking_budget_mode(),
@@ -745,7 +575,7 @@ impl Default for ThinkingBudgetConfig {
             effort: None,
             custom_low: default_flash_low(),
             custom_medium: default_flash_medium(),
-            custom_high: default_flash_high(),
+            custom_high: default_custom_high(),
             custom_tiered: default_flash_tiered(),
         }
     }
@@ -776,6 +606,54 @@ impl Default for DebugLoggingConfig {
         Self {
             enabled: false,
             output_dir: None,
+        }
+    }
+}
+
+fn default_sliding_strategy() -> String {
+    "count".to_string()
+}
+
+/// 多模态交互与保鲜滑窗配置
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MultimodalConfig {
+    /// 是否启用多模态历史保鲜滑动窗口 (默认关闭，贯彻保真透传)
+    #[serde(default)]
+    pub enable_sliding_window: bool,
+
+    /// 保鲜策略模式: "count" (按图片张数) 或 "memory" (按累积内存大小)
+    #[serde(default = "default_sliding_strategy")]
+    pub strategy: String,
+
+    /// 滑动窗口保鲜最大图片张数（默认 10，填 0 为不限张数）
+    #[serde(default = "default_max_fresh_images")]
+    pub max_fresh_images: usize,
+
+    /// 历史图片剥离时，是否一并剥离远程 / OSS 直链图片 (默认关闭，默认仅剥离 Base64)
+    #[serde(default)]
+    pub strip_remote_urls: bool,
+
+    /// 多模态图片累积最大解码容量限制 (MB，默认 32MB，物理防爆安全红线)
+    #[serde(default = "default_max_total_image_mb")]
+    pub max_total_image_mb: usize,
+}
+
+fn default_max_fresh_images() -> usize {
+    10
+}
+
+fn default_max_total_image_mb() -> usize {
+    32
+}
+
+impl Default for MultimodalConfig {
+    fn default() -> Self {
+        Self {
+            enable_sliding_window: false,
+            strategy: default_sliding_strategy(),
+            max_fresh_images: default_max_fresh_images(),
+            strip_remote_urls: false,
+            max_total_image_mb: default_max_total_image_mb(),
         }
     }
 }
@@ -917,6 +795,10 @@ pub struct ProxyConfig {
     #[serde(default)]
     pub log_retention: LogRetentionConfig,
 
+    /// 内部失败日志（error.log*）滑动窗口容量
+    #[serde(default)]
+    pub internal_error_log_retention: InternalErrorLogRetentionConfig,
+
     /// 调试日志配置 (保存完整链路)
     #[serde(default)]
     pub debug_logging: DebugLoggingConfig,
@@ -928,10 +810,6 @@ pub struct ProxyConfig {
     /// 是否只在 /v1/models 中暴露真实配额模型（隐藏内置虚拟别名）
     #[serde(default)]
     pub only_raw_quota_models: bool,
-
-    /// z.ai provider configuration (Anthropic-compatible).
-    #[serde(default)]
-    pub zai: ZaiConfig,
 
     /// 自定义 User-Agent 请求头 (可选覆盖)
     #[serde(default)]
@@ -982,6 +860,10 @@ pub struct ProxyConfig {
     /// 代理池配置
     #[serde(default)]
     pub proxy_pool: ProxyPoolConfig,
+
+    /// 多模态交互与保鲜滑窗配置
+    #[serde(default)]
+    pub multimodal: MultimodalConfig,
 }
 
 /// Request log retention policy.
@@ -1041,6 +923,43 @@ impl Default for LogRetentionConfig {
     }
 }
 
+/// Internal ERROR log file retention (error.log / error.log.YYYY-MM-DD).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InternalErrorLogRetentionConfig {
+    /// Disk budget in MiB. Over limit, evict oldest 30% and keep appending.
+    #[serde(default = "default_internal_error_max_storage_mb")]
+    pub max_storage_mb: u64,
+}
+
+fn default_internal_error_max_storage_mb() -> u64 {
+    500
+}
+
+impl InternalErrorLogRetentionConfig {
+    /// `ABV_INTERNAL_ERROR_LOG_MB` overrides the config file when set to a positive integer.
+    pub fn budget_bytes(&self) -> u64 {
+        let mb = std::env::var("ABV_INTERNAL_ERROR_LOG_MB")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or(self.max_storage_mb);
+        let mb = if mb == 0 {
+            default_internal_error_max_storage_mb()
+        } else {
+            mb
+        };
+        mb.saturating_mul(1024 * 1024)
+    }
+}
+
+impl Default for InternalErrorLogRetentionConfig {
+    fn default() -> Self {
+        Self {
+            max_storage_mb: default_internal_error_max_storage_mb(),
+        }
+    }
+}
+
 /// 上游代理配置
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct UpstreamProxyConfig {
@@ -1052,18 +971,6 @@ pub struct UpstreamProxyConfig {
 
 pub fn default_custom_mapping() -> std::collections::HashMap<String, String> {
     let mut m = std::collections::HashMap::new();
-    m.insert(
-        "gemini-3.6-flash".to_string(),
-        "gemini-3.6-flash-tiered".to_string(),
-    );
-    m.insert(
-        "gemini-3.7-flash".to_string(),
-        "gemini-3.7-flash-tiered".to_string(),
-    );
-    m.insert(
-        "gemini-3.8-flash".to_string(),
-        "gemini-3.8-flash-tiered".to_string(),
-    );
     m.insert(
         "gemini-3.x-flash".to_string(),
         "3.x-flash-tiered".to_string(),
@@ -1086,10 +993,10 @@ impl Default for ProxyConfig {
             enable_logging: true,       // 默认开启，支持 token 统计功能
             capture_health_logs: false, // 默认关闭，过滤 GET /health 探活且不入库
             log_retention: LogRetentionConfig::default(),
+            internal_error_log_retention: InternalErrorLogRetentionConfig::default(),
             debug_logging: DebugLoggingConfig::default(),
             upstream_proxy: UpstreamProxyConfig::default(),
             only_raw_quota_models: false,
-            zai: ZaiConfig::default(),
             scheduling: crate::proxy::sticky_config::StickySessionConfig::default(),
             experimental: ExperimentalConfig::default(),
             security_monitor: SecurityMonitorConfig::default(),
@@ -1099,6 +1006,7 @@ impl Default for ProxyConfig {
             thinking_budget: ThinkingBudgetConfig::default(),
             global_system_prompt: GlobalSystemPromptConfig::default(),
             proxy_pool: ProxyPoolConfig::default(),
+            multimodal: MultimodalConfig::default(),
             image_thinking_mode: None,
             image_scheduler: ImageSchedulerConfig::default(),
         }
@@ -1107,22 +1015,6 @@ impl Default for ProxyConfig {
 
 fn default_request_timeout() -> u64 {
     120 // 默认 120 秒,原来 60 秒太短
-}
-
-fn default_zai_base_url() -> String {
-    "https://api.z.ai/api/anthropic".to_string()
-}
-
-fn default_zai_opus_model() -> String {
-    "glm-4.7".to_string()
-}
-
-fn default_zai_sonnet_model() -> String {
-    "glm-4.7".to_string()
-}
-
-fn default_zai_haiku_model() -> String {
-    "glm-4.5-air".to_string()
 }
 
 impl ProxyConfig {

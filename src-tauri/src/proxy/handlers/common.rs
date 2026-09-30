@@ -694,6 +694,16 @@ pub fn build_dual_track_error(
         || lower.contains("all accounts exhausted")
         || lower.contains("all accounts unhealthy");
 
+    let is_network_error = lower.contains("http request failed")
+        || lower.contains("failed to connect")
+        || lower.contains("connection refused")
+        || lower.contains("connection reset")
+        || lower.contains("timed out")
+        || lower.contains("timeout")
+        || lower.contains("error trying to connect")
+        || lower.contains("dns error")
+        || lower.contains("all endpoints failed");
+
     let is_not_found = is_model_not_found_error(status_code, error_text);
 
     // 1. 深度解析并反转义上游错误
@@ -710,14 +720,25 @@ pub fn build_dual_track_error(
             "rate_limit_error",
             "all_accounts_limited",
         )
+    } else if is_network_error {
+        (
+            "【网络请求异常（非服务端故障）】".to_string(),
+            format!(
+                "请求上游接口时网络连接失败（非网关服务端故障，请排查网络或代理）：{}",
+                error_text
+            ),
+            "请检查系统代理、上游节点连通性或本地网络设置，确保能正常连接上游服务。".to_string(),
+            "network_error",
+            "upstream_network_error",
+        )
     } else if is_not_found {
         (
-                format!("【模型不存在】[{}]", model),
-                format!("模型 [{}] 在上游端点不存在，或当前绑定的账号暂未开通该模型的访问权限。", model),
-                "请核对模型名称，或在网关配置中的「自定义模型映射」将其重定向至可用模型（如 gemini-2.5-flash）。".to_string(),
-                "invalid_request_error",
-                "model_not_found",
-            )
+            format!("【模型不存在】[{}]", model),
+            format!("模型 [{}] 在上游端点不存在，或当前绑定的账号暂未开通该模型的访问权限。", model),
+            "请核对模型名称，或在网关配置中的「自定义模型映射」将其重定向至可用模型（如 gemini-2.5-flash）。".to_string(),
+            "invalid_request_error",
+            "model_not_found",
+        )
     } else if status_code == 429 || status_code == 529 {
         (
             format!("【上游限流 HTTP {}】", status_code),
@@ -742,17 +763,19 @@ pub fn build_dual_track_error(
     );
 
     // 2. 确定散开到各自协议标准 message 字段的内容：
-    //    若是网关自身限制（无上游参与），则使用网关诊断文本；
+    //    若是网关自身限制或网络异常（无有效上游业务报文参与），则使用网关诊断文本；
     //    若是上游发生的真实报错，100% 保持上游原始报错（raw_upstream_msg），绝不被网关硬编码覆盖！
-    let effective_message = if is_internal_limited || raw_upstream_msg.trim().is_empty() {
-        readable_message.clone()
-    } else {
-        raw_upstream_msg
-    };
+    let effective_message =
+        if is_internal_limited || is_network_error || raw_upstream_msg.trim().is_empty() {
+            readable_message.clone()
+        } else {
+            raw_upstream_msg
+        };
 
     let gateway_error_obj = serde_json::json!({
         "error_code": err_code,
         "model": model,
+        "is_server_error": false,
         "diagnosis": diagnosis,
         "suggestion": suggestion,
         "readable_summary": readable_message
@@ -760,6 +783,7 @@ pub fn build_dual_track_error(
 
     let upstream_error_obj = serde_json::json!({
         "status": status_code,
+        "is_server_error": false,
         "response": parsed_upstream
     });
 
@@ -770,6 +794,7 @@ pub fn build_dual_track_error(
                 "type": err_type,
                 "code": err_code,
                 "message": effective_message,
+                "is_server_error": false,
                 "gateway_error": gateway_error_obj,
                 "upstream_error": upstream_error_obj
             }
@@ -780,6 +805,7 @@ pub fn build_dual_track_error(
                 "type": err_type,
                 "param": serde_json::Value::Null,
                 "code": err_code,
+                "is_server_error": false,
                 "gateway_error": gateway_error_obj,
                 "upstream_error": upstream_error_obj
             }
@@ -789,6 +815,7 @@ pub fn build_dual_track_error(
                 "message": effective_message,
                 "type": err_type,
                 "code": err_code,
+                "is_server_error": false,
                 "gateway_error": gateway_error_obj,
                 "upstream_error": upstream_error_obj
             }
@@ -805,6 +832,7 @@ pub fn build_dual_track_error(
                     "code": status_code,
                     "message": effective_message,
                     "status": upstream_status,
+                    "is_server_error": false,
                     "gateway_error": gateway_error_obj,
                     "upstream_error": upstream_error_obj
                 }
@@ -815,6 +843,7 @@ pub fn build_dual_track_error(
                 "message": effective_message,
                 "type": err_type,
                 "code": err_code,
+                "is_server_error": false,
                 "gateway_error": gateway_error_obj,
                 "upstream_error": upstream_error_obj
             }
@@ -954,5 +983,19 @@ mod retry_after_tests {
             .as_str()
             .unwrap()
             .contains("网关调度受限"));
+    }
+
+    #[test]
+    fn test_build_dual_track_error_network_error() {
+        let raw_err =
+            "HTTP request failed at https://alkalicognition.googleapis.com: failed to connect";
+        let res = build_dual_track_error("claude", 502, "claude-sonnet-4-6", raw_err);
+        assert_eq!(res["error"]["code"], "upstream_network_error");
+        assert_eq!(res["error"]["gateway_error"]["is_server_error"], false);
+        assert_eq!(res["error"]["is_server_error"], false);
+        assert!(res["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("非服务端故障"));
     }
 }

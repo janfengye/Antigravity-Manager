@@ -20,6 +20,10 @@ pub struct AppConfig {
     pub antigravity_args: Option<Vec<String>>,      // [NEW] Antigravity startup arguments
     #[serde(default)]
     pub auto_launch: bool,     // Launch on startup
+    /// Login-item launches stay in the tray. Missing values stay on so existing
+    /// autostart entries, which already pass `--minimized`, keep that behavior.
+    #[serde(default = "default_quiet_autostart")]
+    pub quiet_autostart: bool,
     #[serde(default)]
     pub scheduled_warmup: ScheduledWarmupConfig, // [NEW] Scheduled warmup configuration
     #[serde(default)]
@@ -40,6 +44,10 @@ pub struct AppConfig {
     pub thinking_cleanup_dismissed: Option<bool>, // [NEW] 用户是否已确认/忽略该建议
     #[serde(default)]
     pub dismissed_thinking_cleanup_version: Option<String>, // [NEW] 用户已确认或忽略建议的目标版本号
+}
+
+fn default_quiet_autostart() -> bool {
+    true
 }
 
 /// Scheduled warmup configuration
@@ -203,6 +211,7 @@ impl AppConfig {
             antigravity_cli_executable: None,
             antigravity_args: None,
             auto_launch: false,
+            quiet_autostart: true,
             scheduled_warmup: ScheduledWarmupConfig::default(),
             quota_protection: QuotaProtectionConfig::default(),
             pinned_quota_models: PinnedQuotaModelsConfig::default(),
@@ -236,5 +245,19 @@ mod tests {
             let restored: AppConfig = serde_json::from_str(&saved).unwrap();
             assert_eq!(restored.language, language);
         }
+    }
+
+    #[test]
+    fn quiet_autostart_defaults_to_true_when_missing() {
+        let mut config = AppConfig::new();
+        config.quiet_autostart = false;
+        let mut value = serde_json::to_value(&config).unwrap();
+        value.as_object_mut().unwrap().remove("quiet_autostart");
+        let restored: AppConfig = serde_json::from_value(value).unwrap();
+        assert!(restored.quiet_autostart);
+
+        let saved = serde_json::to_string(&config).unwrap();
+        let restored: AppConfig = serde_json::from_str(&saved).unwrap();
+        assert!(!restored.quiet_autostart);
     }
 }

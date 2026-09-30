@@ -157,7 +157,7 @@ impl NonStreamingProcessor {
             remap_function_call_args(&tool_name, &mut args);
 
             let mut tool_use = ContentBlock::ToolUse {
-                id: tool_id,
+                id: tool_id.clone(),
                 name: tool_name,
                 input: args.clone(),
                 signature: None,
@@ -166,7 +166,15 @@ impl NonStreamingProcessor {
 
             // 只使用 FC 自己的签名
             if let ContentBlock::ToolUse { signature: sig, .. } = &mut tool_use {
-                *sig = signature;
+                *sig = signature.clone();
+            }
+
+            if let (Some(sig), Some(sid)) = (signature.as_ref(), self.session_id.as_deref()) {
+                crate::proxy::SignatureCache::global().cache_tool_signature(
+                    sid,
+                    &tool_id,
+                    sig.clone(),
+                );
             }
 
             self.content_blocks.push(tool_use);

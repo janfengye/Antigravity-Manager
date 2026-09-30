@@ -7,6 +7,10 @@ use serde_json::{json, Value};
 use std::pin::Pin;
 use uuid::Uuid;
 
+use crate::proxy::mappers::error_classifier::{
+    preview_payload, report_stream_error, StreamErrorReport,
+};
+
 /// 保存 thoughtSignature 到会话缓存
 pub fn store_thought_signature(sig: &str, session_id: &str, message_count: usize) {
     if sig.is_empty() {
@@ -183,7 +187,7 @@ where
                                                                         });
 
                                                                     if let Some(sig) = part.get("thoughtSignature").or(part.get("thought_signature")).and_then(|s| s.as_str()) {
-                                                                        crate::proxy::SignatureCache::global().cache_tool_signature(&call_id, sig.to_string());
+                                                                        crate::proxy::SignatureCache::global().cache_tool_signature(&session_id, &call_id, sig.to_string());
                                                                     }
                                                                     thinking_acc.record_tool_id(name, &call_id);
 
@@ -307,20 +311,44 @@ where
                                                     }
                                                 }
                                             }
+                                        } else {
+                                            report_sse_json_parse(
+                                                "openai",
+                                                "create_openai_sse_stream_with_anchor",
+                                                json_part,
+                                                format!(
+                                                    "model={} session={} messages={} buffer_bytes={}",
+                                                    model,
+                                                    session_id,
+                                                    message_count,
+                                                    buffer.len()
+                                                ),
+                                            );
                                         }
                                     }
                                 }
                             }
                         }
                         Some(Err(e)) => {
-                            use crate::proxy::mappers::error_classifier::classify_stream_error;
-                            let (error_type, user_msg, i18n_key) = classify_stream_error(&e);
-                            tracing::error!("OpenAI Stream Error: {}", e);
-                            let error_chunk = json!({
-                                "id": &stream_id, "object": "chat.completion.chunk", "created": created_ts, "model": &model, "choices": [],
-                                "error": { "type": error_type, "message": user_msg, "code": "stream_error", "i18n_key": i18n_key }
-                            });
-                            yield Ok(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&error_chunk).unwrap_or_default())));
+                            let report = report_stream_error(
+                                "openai",
+                                "create_openai_sse_stream_with_anchor",
+                                &e,
+                                format!(
+                                    "model={} session={} messages={} buffer_bytes={}",
+                                    model,
+                                    session_id,
+                                    message_count,
+                                    buffer.len()
+                                ),
+                            );
+                            yield Ok(Bytes::from(openai_chat_error_frame(
+                                &stream_id,
+                                created_ts,
+                                &model,
+                                "chat.completion.chunk",
+                                &report,
+                            )));
                             yield Ok(Bytes::from("data: [DONE]\n\n"));
                             error_occurred = true;
                             break;
@@ -455,20 +483,44 @@ where
                                             if let Some(ref usage) = final_usage { legacy_chunk["usage"] = serde_json::to_value(usage).unwrap(); }
                                             if finish_reason.is_some() { final_usage = None; }
                                             yield Ok::<Bytes, String>(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&legacy_chunk).unwrap_or_default())));
+                                        } else {
+                                            report_sse_json_parse(
+                                                "openai-legacy",
+                                                "create_legacy_sse_stream",
+                                                json_part,
+                                                format!(
+                                                    "model={} session={} messages={} buffer_bytes={}",
+                                                    model,
+                                                    session_id,
+                                                    message_count,
+                                                    buffer.len()
+                                                ),
+                                            );
                                         }
                                     }
                                 }
                             }
                         }
                         Some(Err(e)) => {
-                            use crate::proxy::mappers::error_classifier::classify_stream_error;
-                            let (error_type, user_msg, i18n_key) = classify_stream_error(&e);
-                            tracing::error!("Legacy Stream Error: {}", e);
-                            let error_chunk = json!({
-                                "id": &stream_id, "object": "text_completion", "created": created_ts, "model": &model, "choices": [],
-                                "error": { "type": error_type, "message": user_msg, "code": "stream_error", "i18n_key": i18n_key }
-                            });
-                            yield Ok::<Bytes, String>(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&error_chunk).unwrap_or_default())));
+                            let report = report_stream_error(
+                                "openai-legacy",
+                                "create_legacy_sse_stream",
+                                &e,
+                                format!(
+                                    "model={} session={} messages={} buffer_bytes={}",
+                                    model,
+                                    session_id,
+                                    message_count,
+                                    buffer.len()
+                                ),
+                            );
+                            yield Ok::<Bytes, String>(Bytes::from(openai_chat_error_frame(
+                                &stream_id,
+                                created_ts,
+                                &model,
+                                "text_completion",
+                                &report,
+                            )));
                             yield Ok::<Bytes, String>(Bytes::from("data: [DONE]\n\n"));
                             error_occurred = true;
                             break;
@@ -487,6 +539,28 @@ where
     Box::pin(stream)
 }
 
+fn report_sse_json_parse(
+    adapter: &'static str,
+    function: &'static str,
+    json_part: &str,
+    params: impl std::fmt::Display,
+) {
+    let parse_err = match serde_json::from_str::<Value>(json_part) {
+        Err(err) => err,
+        Ok(_) => return,
+    };
+    let _ = report_stream_error(
+        adapter,
+        function,
+        &format!("json parse error: {parse_err}"),
+        format!(
+            "{params} line_bytes={} preview={}",
+            json_part.len(),
+            preview_payload(json_part)
+        ),
+    );
+}
+
 fn split_namespace_tool_name(qualified_name: &str) -> (String, Option<String>) {
     let name = qualified_name.trim();
     if name.starts_with("mcp__") {
@@ -500,6 +574,35 @@ fn split_namespace_tool_name(qualified_name: &str) -> (String, Option<String>) {
         }
     }
     (name.to_string(), None)
+}
+
+fn openai_chat_error_frame(
+    stream_id: &str,
+    created_ts: i64,
+    model: &str,
+    object: &str,
+    report: &StreamErrorReport,
+) -> String {
+    let error_chunk = json!({
+        "id": stream_id,
+        "object": object,
+        "created": created_ts,
+        "model": model,
+        "choices": [],
+        "error": {
+            "type": report.classified.error_type,
+            "message": report.client_message(),
+            "code": "stream_error",
+            "i18n_key": report.classified.i18n_key,
+            "function": report.function,
+            "call_site": report.call_site(),
+            "params": report.params
+        }
+    });
+    format!(
+        "data: {}\n\n",
+        serde_json::to_string(&error_chunk).unwrap_or_default()
+    )
 }
 
 fn inject_seq(mut event: Value, seq: &mut u64) -> Value {
@@ -587,6 +690,7 @@ where
         let mut message_output_index: u32 = 0;
         let mut reasoning_output_index: u32 = 0;
         let mut final_usage: Option<super::models::OpenAIUsage> = None;
+        let mut classified_stream_error: Option<StreamErrorReport> = None;
         let mut heartbeat_interval = tokio::time::interval(std::time::Duration::from_secs(15));
         heartbeat_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -775,7 +879,7 @@ where
                                                                     });
 
                                                                 if let Some(sig) = part.get("thoughtSignature").or(part.get("thought_signature")).and_then(|s| s.as_str()) {
-                                                                    crate::proxy::SignatureCache::global().cache_tool_signature(&call_id, sig.to_string());
+                                                                    crate::proxy::SignatureCache::global().cache_tool_signature(&session_id, &call_id, sig.to_string());
                                                                 }
                                                                 thinking_acc.record_tool_id(name, &call_id);
 
@@ -914,12 +1018,52 @@ where
                                                     }
                                                 }
                                             }
+                                        } else {
+                                            report_sse_json_parse(
+                                                "openai-responses",
+                                                "create_codex_sse_stream",
+                                                json_part,
+                                                format!(
+                                                    "model={} session={} response_id={} messages={} buffer_bytes={}",
+                                                    model,
+                                                    session_id,
+                                                    response_id,
+                                                    message_count,
+                                                    buffer.len()
+                                                ),
+                                            );
                                         }
                                     }
                                 }
                             }
                         }
-                        Some(Err(_)) => break,
+                        Some(Err(e)) => {
+                            let report = report_stream_error(
+                                "openai-responses",
+                                "create_codex_sse_stream",
+                                &e,
+                                format!(
+                                    "model={} session={} response_id={} messages={} buffer_bytes={}",
+                                    model,
+                                    session_id,
+                                    response_id,
+                                    message_count,
+                                    buffer.len()
+                                ),
+                            );
+                            let err_ev = json!({
+                                "type": "error",
+                                "code": report.classified.error_type,
+                                "message": report.client_message(),
+                                "function": report.function,
+                                "call_site": report.call_site(),
+                                "params": report.params,
+                            });
+                            classified_stream_error = Some(report);
+                            let err_ev = inject_seq(err_ev, &mut sequence_number);
+                            yield Ok::<Bytes, String>(codex_sse_frame(&err_ev));
+                            break;
+                        }
                         None => break,
                     }
                 }
@@ -1044,7 +1188,7 @@ where
         let final_outputs: Vec<serde_json::Value> = final_outputs_map.into_values().collect();
 
         let missing_actionable_output = !message_item_emitted && !has_seen_tool_calls;
-        let terminal_status = if missing_actionable_output {
+        let mut terminal_status = if missing_actionable_output {
             "incomplete"
         } else {
             match final_finish_reason.as_deref() {
@@ -1060,8 +1204,7 @@ where
                 _ => "completed",
             }
         };
-        let terminal_type = format!("response.{terminal_status}");
-        let incomplete_details = if terminal_status == "incomplete" {
+        let mut incomplete_details = if terminal_status == "incomplete" {
             let reason = match final_finish_reason.as_deref() {
                 Some("MAX_TOKENS") => "max_output_tokens",
                 Some("SAFETY")
@@ -1077,7 +1220,7 @@ where
         } else {
             Value::Null
         };
-        let terminal_error = if missing_actionable_output {
+        let mut terminal_error = if missing_actionable_output {
             json!({
                 "code": "empty_response",
                 "message": "Gemini stream ended without a final assistant message or tool call."
@@ -1090,6 +1233,18 @@ where
         } else {
             Value::Null
         };
+        if let Some(report) = classified_stream_error {
+            terminal_status = "failed";
+            incomplete_details = Value::Null;
+            terminal_error = json!({
+                "code": report.classified.error_type,
+                "message": report.client_message(),
+                "function": report.function,
+                "call_site": report.call_site(),
+                "params": report.params,
+            });
+        }
+        let terminal_type = format!("response.{terminal_status}");
         let completed_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -1190,6 +1345,61 @@ mod tests {
             .filter_map(|data| serde_json::from_str::<Value>(data).ok())
             .collect();
         (raw, events)
+    }
+
+    #[tokio::test]
+    async fn responses_midstream_body_cut_emits_classified_stream_error() {
+        let items: Vec<Result<Bytes, String>> = vec![
+            Ok(Bytes::from(
+                "data: {\"candidates\":[{\"content\":{\"parts\":[{\"thought\":true,\"text\":\"hi\"}]}}]}\n\n",
+            )),
+            Err(
+                "error reading a body from connection: connection closed before message completed"
+                    .to_string(),
+            ),
+        ];
+        let mut stream = create_codex_sse_stream(
+            Box::pin(stream::iter(items)),
+            "gemini-pro-agent".to_string(),
+            "test-codex-session".to_string(),
+            0,
+            0,
+            "resp-test-codex-session".to_string(),
+            None,
+            true,
+        );
+
+        let mut raw = String::new();
+        while let Some(item) = stream.next().await {
+            raw.push_str(&String::from_utf8_lossy(&item.expect("codex stream item")));
+        }
+        let events: Vec<Value> = raw
+            .lines()
+            .filter_map(|line| line.strip_prefix("data: "))
+            .filter_map(|data| serde_json::from_str::<Value>(data).ok())
+            .collect();
+
+        let error_ev = events
+            .iter()
+            .find(|event| event["type"] == "error")
+            .expect("classified error event");
+        assert_eq!(error_ev["code"], "stream_error");
+        let message = error_ev["message"].as_str().unwrap_or_default();
+        assert!(message.contains("Stream interrupted before completion, please retry"));
+        assert!(message.contains("fn=create_codex_sse_stream"));
+        assert!(message.contains("session=test-codex-session"));
+        assert!(message.contains("closed before message completed"));
+        assert!(
+            !message.contains("network or proxy"),
+            "mid-stream body cut must not be labeled as a connect/proxy failure"
+        );
+
+        let failed = events
+            .iter()
+            .find(|event| event["type"] == "response.failed")
+            .expect("failed response");
+        assert_eq!(failed["response"]["status"], "failed");
+        assert_eq!(failed["response"]["error"]["code"], "stream_error");
     }
 
     #[tokio::test]

@@ -21,13 +21,19 @@ use crate::proxy::mappers::claude::{
     transform_response, ClaudeRequest,
 };
 use crate::proxy::mappers::context_manager::ContextManager;
-use crate::proxy::mappers::estimation_calibrator::get_calibrator;
 use crate::proxy::mappers::gemini::SUMMARY_REQUEST_TIMEOUT_SECS;
 use crate::proxy::model_specs;
 use crate::proxy::server::AppState;
 use crate::proxy::upstream::client::mask_email;
 use axum::http::HeaderMap;
-use std::sync::{atomic::Ordering, Arc}; // [NEW]
+use dashmap::DashSet;
+use std::sync::{atomic::Ordering, Arc, LazyLock};
+
+/// 记录刚完成压缩总结的会话集合，提供单次续写接续免死标志 (One-Shot Post-Compaction Immunity)
+/// 彻底攻克“静态扫描消息导致一次压缩后终身免死无法再次压缩”的死穴 (Fixes #3563)
+/// 遵循纯粹的状态机单次消费逻辑：无论中间隔了多久（如电脑合盖休眠唤醒），只要第一条业务接续请求到来即刻核销清空，
+/// 绝不人为设置定时器，杜绝超时误杀！
+static COMPACTION_ONE_SHOT_SESSIONS: LazyLock<DashSet<String>> = LazyLock::new(DashSet::new);
 
 // ===== Task #6: OpenCode variants thinking config mapping =====
 // Helper structs for parsing thinking hints from raw JSON
@@ -431,6 +437,9 @@ pub async fn handle_messages(
     upstream_recorder: Option<
         axum::extract::Extension<crate::proxy::monitor::UpstreamRequestBodyHolder>,
     >,
+    user_identity: Option<
+        axum::extract::Extension<crate::proxy::middleware::auth::UserTokenIdentity>,
+    >,
     Json(body): Json<Value>,
 ) -> Response {
     // [FIX] 保存原始请求体的完整副本，用于日志记录
@@ -463,12 +472,6 @@ pub async fn handle_messages(
             trace_id
         );
     }
-
-    // Decide whether this request should be handled by z.ai (Anthropic passthrough) or the existing Google flow.
-    let zai = state.zai.read().await.clone();
-    let zai_enabled =
-        zai.enabled && !matches!(zai.dispatch_mode, crate::proxy::ZaiDispatchMode::Off);
-    let google_accounts = state.token_manager.len();
 
     // [CRITICAL REFACTOR] 优先解析请求以获取模型信息(用于智能兜底判断)
     let mut request: crate::proxy::mappers::claude::models::ClaudeRequest =
@@ -606,73 +609,22 @@ pub async fn handle_messages(
         .await;
     }
 
-    // [Issue #703 Fix] 智能兜底判断:需要归一化模型名用于配额保护检查
-    let normalized_model =
-        crate::proxy::common::model_mapping::normalize_to_standard_id(&request.model)
-            .unwrap_or_else(|| request.model.clone());
-
-    let use_zai = if !zai_enabled {
-        false
-    } else {
-        match zai.dispatch_mode {
-            crate::proxy::ZaiDispatchMode::Off => false,
-            crate::proxy::ZaiDispatchMode::Exclusive => true,
-            crate::proxy::ZaiDispatchMode::Fallback => {
-                if google_accounts == 0 {
-                    // 没有 Google 账号,使用兜底
-                    tracing::info!(
-                        "[{}] No Google accounts available, using fallback provider",
-                        trace_id
-                    );
-                    true
-                } else {
-                    // [Issue #703 Fix] 智能判断:检查是否有可用的 Google 账号
-                    let has_available = state
-                        .token_manager
-                        .has_available_account("claude", &normalized_model)
-                        .await;
-                    if !has_available {
-                        tracing::info!(
-                            "[{}] All Google accounts unavailable (rate-limited or quota-protected for {}), using fallback provider",
-                            trace_id,
-                            request.model
-                        );
-                    }
-                    !has_available
-                }
-            }
-            crate::proxy::ZaiDispatchMode::Pooled => {
-                // Treat z.ai as exactly one extra slot in the pool.
-                // No strict guarantees: it may get 0 requests if selection never hits.
-                let total = google_accounts.saturating_add(1).max(1);
-                let slot = state.provider_rr.fetch_add(1, Ordering::Relaxed) % total;
-                slot == 0
-            }
-        }
-    };
-
     // [Stage 1 Timing] 初始会话清洗计时
     let clean_start = std::time::Instant::now();
 
     // [CRITICAL FIX] 预先清理所有消息中的 cache_control 字段 (Issue #744)
-    // 必须在序列化之前处理，以确保 z.ai 和 Google Flow 都不受历史消息缓存标记干扰
     clean_cache_control_from_messages(&mut request.messages);
 
     // [FIX #813] 合并连续的同角色消息 (Consecutive User Messages)
-    // 这对于 z.ai (Anthropic 直接转发) 路径至关重要，因为原始结构必须符合协议
     merge_consecutive_messages(&mut request.messages);
 
     // Get model family for signature validation
-    let target_family = if use_zai {
-        Some("claude")
+    let mapped_model =
+        crate::proxy::common::model_mapping::map_claude_model_to_gemini(&request.model);
+    let target_family = if mapped_model.contains("gemini") {
+        Some("gemini")
     } else {
-        let mapped_model =
-            crate::proxy::common::model_mapping::map_claude_model_to_gemini(&request.model);
-        if mapped_model.contains("gemini") {
-            Some("gemini")
-        } else {
-            Some("claude")
-        }
+        Some("claude")
     };
 
     // [CRITICAL FIX] 过滤并修复 Thinking 块签名 (Enhanced with family check)
@@ -685,59 +637,6 @@ pub async fn handle_messages(
     // 若在此处注入 "[System: Tool execution completed...]" 等合成消息，会导致对话历史前缀在轮次间突变，
     // 进而彻底破坏 Google Gemini 上游的 Prompt Caching（缓存崩塌）。
 
-    let experimental_cfg = state.experimental.read().await;
-    let compression_level = if experimental_cfg.compression_level == "disabled" {
-        if experimental_cfg.enable_usage_scaling {
-            "high".to_string()
-        } else {
-            "disabled".to_string()
-        }
-    } else {
-        experimental_cfg.compression_level.clone()
-    };
-
-    if compression_level != "disabled" {
-        // [ACC-P RTK] Low, Medium, High 等级均对传入的工具返回日志执行静态 RTK 去噪折叠
-        for msg in &mut request.messages {
-            crate::proxy::mappers::context_manager::ContextManager::clean_tool_message(msg);
-        }
-
-        // [ACC-P Caveman] Medium, High 等级对除最近 4 条（~2轮）以外的旧对话常驻执行 Caveman 提纯
-        if compression_level == "medium" || compression_level == "high" {
-            let total_msgs = request.messages.len();
-            let start_protection_idx = total_msgs.saturating_sub(4);
-            for (i, msg) in request.messages.iter_mut().enumerate() {
-                if i >= start_protection_idx {
-                    continue;
-                }
-                if msg.role == "user" || msg.role == "assistant" {
-                    match &mut msg.content {
-                        crate::proxy::mappers::claude::models::MessageContent::String(s) => {
-                            let cleaned =
-                                crate::proxy::mappers::caveman_cleaner::CavemanCleaner::clean(s);
-                            if cleaned != *s {
-                                *s = cleaned;
-                            }
-                        }
-                        crate::proxy::mappers::claude::models::MessageContent::Array(blocks) => {
-                            for block in blocks {
-                                if let crate::proxy::mappers::claude::models::ContentBlock::Text {
-                                    text,
-                                } = block
-                                {
-                                    let cleaned = crate::proxy::mappers::caveman_cleaner::CavemanCleaner::clean(text);
-                                    if cleaned != *text {
-                                        *text = cleaned;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     // ===== [Issue #467 Fix] 拦截 Claude Code Warmup 请求 =====
     // Claude Code 会每 10 秒发送一次 warmup 请求来保持连接热身，
     // 这些请求会消耗大量配额。检测到 warmup 请求后直接返回模拟响应。
@@ -749,42 +648,132 @@ pub async fn handle_messages(
         return create_warmup_response(&request, request.stream);
     }
 
-    if use_zai {
-        // 重新序列化修复后的请求体
-        let mut new_body = match serde_json::to_value(&request) {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::error!("Failed to serialize fixed request for z.ai: {}", e);
-                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-            }
-        };
-
-        // Inject cache_control into the XML summary message if it is a Forked session
-        inject_cache_control_to_forked_summary(&mut new_body);
-
-        if let Some(ref recorder) = upstream_recorder {
-            recorder.set_value(&new_body);
-        }
-
-        return crate::proxy::providers::zai_anthropic::forward_anthropic_json(
-            &state,
-            axum::http::Method::POST,
-            "/v1/messages",
-            &headers,
-            new_body,
-            request.messages.len(), // [NEW v4.0.0] Pass message count
-        )
-        .await;
-    }
-
-    // Google Flow 继续使用 request 对象
-    // (后续代码不需要再次 filter_invalid_thinking_blocks)
-
     // [NEW] 获取上下文控制配置
     let experimental = state.experimental.read().await;
     let scaling_enabled = experimental.enable_usage_scaling;
-    let threshold_l1 = experimental.context_compression_threshold_l1;
-    let threshold_l3 = experimental.context_compression_threshold_l3;
+
+    // [全链路会话生命周期与自愈分流体系 (Pipeline First)]
+    // 提取会话唯一标识（优先提取产品专属会话头或内容锚点）
+    let session_key =
+        crate::proxy::thinking_store::stable_session_winner(&headers, Some(&original_body), None)
+            .unwrap_or_else(|| {
+                let anchor =
+                    crate::proxy::session_manager::SessionManager::extract_session_id(&request);
+                crate::proxy::thinking_store::derive_winner_session_id("anon", None, &anchor)
+            });
+
+    // 维持状态机容量
+    if COMPACTION_ONE_SHOT_SESSIONS.len() > 2000 {
+        COMPACTION_ONE_SHOT_SESSIONS.clear();
+    }
+
+    // 分流 A: 客户端原生发起的压缩总结请求 (Compaction Summary Request) -> 生命线直通放行，绝对不误杀
+    let is_compaction_header = headers
+        .get("x-stainless-helper")
+        .and_then(|h| h.to_str().ok())
+        .map_or(false, |v| v.contains("compaction"));
+
+    let is_compaction_request = is_compaction_header
+        || request.messages.last().map_or(false, |m| {
+            let text = match &m.content {
+                crate::proxy::mappers::claude::models::MessageContent::String(s) => s.as_str(),
+                crate::proxy::mappers::claude::models::MessageContent::Array(blocks) => blocks
+                    .iter()
+                    .rev()
+                    .find_map(|b| match b {
+                        crate::proxy::mappers::claude::models::ContentBlock::Text { text } => {
+                            Some(text.as_str())
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or(""),
+            };
+            crate::proxy::mappers::common_utils::is_compaction_request_text(text)
+        })
+        || request.system.as_ref().map_or(false, |sys| {
+            let sys_text = match sys {
+                crate::proxy::mappers::claude::models::SystemPrompt::String(s) => s.as_str(),
+                crate::proxy::mappers::claude::models::SystemPrompt::Array(arr) => {
+                    arr.first().map(|b| b.text.as_str()).unwrap_or("")
+                }
+            };
+            crate::proxy::mappers::common_utils::is_compaction_request_text(sys_text)
+        });
+
+    if is_compaction_request {
+        // [One-Shot Immunity] 为该会话发放单次免死标识，纯状态流转，用完即焚
+        COMPACTION_ONE_SHOT_SESSIONS.insert(session_key.clone());
+        tracing::info!(
+            "[{}] [Lifecycle] Compaction summary request detected for session {}, issued one-shot immunity flag",
+            trace_id, session_key
+        );
+    }
+
+    // 分流 B: 已完成压缩提纯的会话接续 (Post-Compaction Continuation)
+    // 采用纯单次消费型状态机 (One-Shot Immunity):
+    // 仅豁免紧随压缩完成后的第 1 次续写请求（防止同一次交互内连续收到 400 触发客户端熔断）。
+    // 一旦消费即刻从集合中彻底移除清空！后续轮次若再次膨胀超限，将正常进入第 2、第 3 轮自愈，彻底根除“一次压缩终身免死”！
+    let is_post_compaction = if COMPACTION_ONE_SHOT_SESSIONS.remove(&session_key).is_some() {
+        tracing::info!(
+            "[{}] [Lifecycle] Consumed one-shot post-compaction immunity for session {}, granted 1M passthrough",
+            trace_id, session_key
+        );
+        true
+    } else {
+        false
+    };
+
+    // 分流 C: 超限自愈假报警触发门禁 (必须自定义开启 + 双重确权)
+    // 铁律：普通 Agent 与未开启配置时，绝对不拦截，100% 享受 Gemini 百万超长上下文！
+    if experimental.enable_cowork_auto_compact && !is_compaction_request && !is_post_compaction {
+        let is_cowork = request.tools.as_ref().map_or(false, |tools| {
+            tools.iter().any(|t| {
+                let n = t.get_name();
+                n.starts_with("mcp__cowork") || n.starts_with("mcp__workspace")
+            })
+        });
+
+        if is_cowork {
+            let threshold = experimental.cowork_compact_threshold.max(50_000);
+            let est_tokens = crate::proxy::pipeline::estimate_tokens(&original_body);
+            if est_tokens >= threshold {
+                tracing::warn!(
+                    "[{}] [Cowork-Gatekeeper] Cowork session reached {} tokens >= threshold {}, triggering native reactive compact",
+                    trace_id,
+                    est_tokens,
+                    threshold
+                );
+                let err_msg = format!(
+                    "prompt is too long: {} tokens > {} maximum",
+                    est_tokens, threshold
+                );
+                return (
+                    StatusCode::BAD_REQUEST,
+                    [("content-type", "application/json")],
+                    Json(json!({
+                        "type": "error",
+                        "error": {
+                            "type": "invalid_request_error",
+                            "message": err_msg
+                        }
+                    })),
+                )
+                    .into_response();
+            }
+        }
+    }
+
+    if is_compaction_request {
+        tracing::info!(
+            "[{}] [Lifecycle] Compaction summary request detected, passing through to upstream",
+            trace_id
+        );
+    } else if is_post_compaction {
+        tracing::debug!(
+            "[{}] [Lifecycle] Post-compaction continuation session detected, granted upstream 1M immunity",
+            trace_id
+        );
+    }
 
     // 获取最新一条“有意义”的消息内容（用于日志记录和后台任务检测）
     // 策略：反向遍历，首先筛选出所有角色为 "user" 的消息，然后从中找到第一条非 "Warmup" 且非空的文本消息
@@ -935,9 +924,10 @@ pub async fn handle_messages(
         let norm_start = std::time::Instant::now();
 
         // 2. 模型路由解析
-        let mapped_model = crate::proxy::common::model_mapping::resolve_model_route(
+        let mapped_model = crate::proxy::common::model_mapping::resolve_model_route_with_effort(
             &request_for_body.model,
             &*state.custom_mapping.read().await,
+            effort_hint.as_deref(),
         );
         last_mapped_model = Some(mapped_model.clone());
 
@@ -958,27 +948,22 @@ pub async fn handle_messages(
             None,                       // body
         );
 
-        // 0. 尝试提取 session_id 用于粘性调度 (Phase 2/3)
-        // 使用 SessionManager 生成稳定的会话指纹，优先以显式会话头对齐跨协议 store_key
-        let explicit_sid = headers
-            .get("x-session-id")
-            .or_else(|| headers.get("x-jeikcode-session-id"))
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty());
-        let fallback_sid = if let Some(sid) = explicit_sid {
-            sid.to_string()
-        } else {
-            crate::proxy::session_manager::SessionManager::extract_session_id(&request_for_body)
-        };
-        let session_scope = crate::proxy::thinking_store::SessionScope::from_headers_and_body(
+        // 内容锚点只进思维库。账号粘性与上游 sessionId 用 affinity_key。
+        let anchor =
+            crate::proxy::session_manager::SessionManager::extract_session_id(&request_for_body);
+        let session_scope = crate::proxy::thinking_store::SessionScope::resolve(
             &headers,
             Some(&original_body),
-            fallback_sid,
+            None,
+            anchor,
+            user_identity
+                .as_ref()
+                .map(|identity| identity.token_id.as_str()),
         );
-        let session_id_str = session_scope.store_key.clone();
+        let store_key = session_scope.store_key.clone();
+        let affinity_key = session_scope.affinity_key.clone();
         let client_session_id = session_scope.client_id.clone();
-        let session_id = Some(session_id_str.as_str());
+        let session_id = Some(affinity_key.as_str());
 
         let (access_token, project_id, email, account_id, _wait_ms) = match token_manager
             .get_token(
@@ -1017,138 +1002,6 @@ pub async fn handle_messages(
         // 方案 A：移除后台任务静默降级策略，请求直通客户端指定的模型，与 OpenAI 协议保持一致
         let mut request_with_mapped = request_for_body.clone();
 
-        // ===== [3-Layer Progressive Compression + Calibrated Estimation] Context Management =====
-        // [ENHANCED] 整合 3.3.47 的三层压缩框架 + PR #925 的动态校准机制
-        // [NEW] 只有当 scaling_enabled 为 true 时才执行压缩逻辑 (联动机制)
-        // Layer 1 (60%): Tool message trimming - Does NOT break cache
-        // Layer 2 (75%): Thinking purification - Breaks cache but preserves signatures
-        // Layer 3 (90%): Fork conversation + XML summary - Ultimate optimization
-        let mut compression_applied = false;
-
-        if !retried_without_thinking && compression_level == "high" {
-            // 新增 scaling_enabled 联动判断
-            // 1. Determine context limit (Flash: ~1M, Pro: ~2M)
-            let context_limit = if mapped_model.contains("flash") {
-                1_000_000
-            } else {
-                2_000_000
-            };
-
-            // 2. [ENHANCED] 使用校准器提高估算准确度 (PR #925)
-            let raw_estimated = ContextManager::estimate_token_usage(&request_with_mapped);
-            let calibrator = get_calibrator();
-            let mut estimated_usage = calibrator.calibrate(raw_estimated);
-            let mut usage_ratio = estimated_usage as f32 / context_limit as f32;
-
-            info!(
-                "[{}] [ContextManager] Context pressure: {:.1}% (raw: {}, calibrated: {} / {}), Calibration factor: {:.2}",
-                trace_id, usage_ratio * 100.0, raw_estimated, estimated_usage, context_limit, calibrator.get_factor()
-            );
-
-            // ===== Layer 1: Tool Message Trimming (L1 threshold) =====
-            // Borrowed from Practical-Guide-to-Context-Engineering
-            // Advantage: Completely cache-friendly (only removes messages, doesn't modify content)
-            if usage_ratio > threshold_l1 && !compression_applied {
-                if ContextManager::trim_tool_messages(&mut request_with_mapped.messages, 5) {
-                    info!(
-                        "[{}] [Layer-1] Tool trimming triggered (usage: {:.1}%, threshold: {:.1}%)",
-                        trace_id,
-                        usage_ratio * 100.0,
-                        threshold_l1 * 100.0
-                    );
-                    compression_applied = true;
-
-                    // Re-estimate after trimming (with calibration)
-                    let new_raw = ContextManager::estimate_token_usage(&request_with_mapped);
-                    let new_usage = calibrator.calibrate(new_raw);
-                    let new_ratio = new_usage as f32 / context_limit as f32;
-
-                    info!(
-                        "[{}] [Layer-1] Compression result: {:.1}% → {:.1}% (saved {} tokens)",
-                        trace_id,
-                        usage_ratio * 100.0,
-                        new_ratio * 100.0,
-                        estimated_usage - new_usage
-                    );
-
-                    // If compression is sufficient, skip further layers
-                    if new_ratio < 0.7 {
-                        estimated_usage = new_usage;
-                        usage_ratio = new_ratio;
-                        // Success, no need for Layer 2
-                    } else {
-                        // Still high pressure, update for Layer 2
-                        usage_ratio = new_ratio;
-                        compression_applied = false; // Allow Layer 2 to run
-                    }
-                }
-            }
-
-            // ===== Layer 3: Fork Conversation + XML Summary (L3 threshold) =====
-            // Ultimate optimization: Generate structured summary and start fresh conversation
-            // Advantage: Completely cache-friendly (append-only), extreme compression ratio
-            if usage_ratio > threshold_l3 && !compression_applied {
-                info!(
-                    "[{}] [Layer-3] Context pressure ({:.1}%) exceeded threshold ({:.1}%), attempting Fork+Summary",
-                    trace_id, usage_ratio * 100.0, threshold_l3 * 100.0
-                );
-
-                // Clone token_manager Arc to avoid borrow issues
-                let token_manager_clone = token_manager.clone();
-
-                match try_compress_with_summary(
-                    &request_with_mapped,
-                    &trace_id,
-                    &token_manager_clone,
-                    &state.upstream,
-                )
-                .await
-                {
-                    Ok(forked_request) => {
-                        info!(
-                            "[{}] [Layer-3] Fork successful: {} → {} messages",
-                            trace_id,
-                            request_with_mapped.messages.len(),
-                            forked_request.messages.len()
-                        );
-
-                        request_with_mapped = forked_request;
-                        // Re-estimate after fork (with calibration)
-                        let new_raw = ContextManager::estimate_token_usage(&request_with_mapped);
-                        let new_usage = calibrator.calibrate(new_raw);
-                        let new_ratio = new_usage as f32 / context_limit as f32;
-
-                        info!(
-                            "[{}] [Layer-3] Compression result: {:.1}% → {:.1}% (saved {} tokens)",
-                            trace_id,
-                            usage_ratio * 100.0,
-                            new_ratio * 100.0,
-                            estimated_usage - new_usage
-                        );
-                    }
-                    Err(e) => {
-                        error!(
-                            "[{}] [Layer-3] Fork+Summary failed: {}, falling back to error response",
-                            trace_id, e
-                        );
-
-                        // Return friendly error to user
-                        return (
-                            StatusCode::BAD_REQUEST,
-                            Json(json!({
-                                "type": "error",
-                                "error": {
-                                    "type": "invalid_request_error",
-                                    "message": format!("Context too long and automatic compression failed: {}", e),
-                                    "suggestion": "Please use /compact or /clear command in Claude Code, or switch to a model with larger context window."
-                                }
-                            }))
-                        ).into_response();
-                    }
-                }
-            }
-        }
-
         // [FIX] Estimate AFTER purification to get accurate token count for calibrator learning
         let raw_estimated = ContextManager::estimate_token_usage(&request_with_mapped);
 
@@ -1164,7 +1017,8 @@ pub async fn handle_messages(
                 &project_id,
                 retried_without_thinking,
                 Some(account_id.as_str()),
-                &session_id_str,
+                &store_key,
+                &affinity_key,
                 token_obj.as_ref(),
             ) {
                 Ok((b, timing)) => {
@@ -1288,7 +1142,7 @@ pub async fn handle_messages(
             .call_v1_internal_with_headers(
                 method,
                 &access_token,
-                gemini_body,
+                gemini_body.clone(),
                 query,
                 extra_headers.clone(),
                 Some(account_id.as_str()),
@@ -1348,6 +1202,7 @@ pub async fn handle_messages(
 
         // 成功
         if status.is_success() {
+            token_manager.commit_session(&affinity_key, &account_id);
             // [智能限流] 请求成功，重置该账号的连续失败计数
             token_manager.mark_account_success(&email);
 
@@ -1376,6 +1231,23 @@ pub async fn handle_messages(
                     meta,
                 );
 
+                // [Auto-Heal] 纯思考空回复流式自愈门禁 (Pipeline First)
+                let auto_heal_ctx = crate::proxy::pipeline::auto_heal::ThinkingAutoHealContext {
+                    upstream: upstream.clone(),
+                    method,
+                    access_token: access_token.clone(),
+                    original_body: gemini_body.clone(),
+                    query_string: query,
+                    extra_headers: extra_headers.clone(),
+                    account_id: Some(account_id.clone()),
+                    trace_id: trace_id.clone(),
+                };
+                let gemini_stream =
+                    crate::proxy::pipeline::auto_heal::wrap_stream_with_empty_thinking_auto_heal(
+                        Box::pin(gemini_stream),
+                        auto_heal_ctx,
+                    );
+
                 let current_message_count = request_with_mapped.messages.len();
 
                 // [FIX #MCP] Extract registered tool names for MCP fuzzy matching
@@ -1392,7 +1264,7 @@ pub async fn handle_messages(
                     gemini_stream,
                     trace_id.clone(),
                     email.clone(),
-                    Some(session_id_str.clone()),
+                    Some(store_key.clone()),
                     scaling_enabled,
                     context_limit,
                     Some(raw_estimated), // [FIX] Pass estimated tokens for calibrator learning
@@ -1619,7 +1491,7 @@ pub async fn handle_messages(
 
                 // 转换
                 // [FIX #765] Pass session_id and model_name for signature caching
-                let s_id_owned = session_id.map(|s| s.to_string());
+                let s_id_owned = Some(store_key.clone());
                 // [FIX #3379] Extract registered tool names for non-streaming leakage recovery
                 let ns_registered_tool_names: Vec<String> = request_with_mapped
                     .tools
@@ -1753,16 +1625,13 @@ pub async fn handle_messages(
                     Some(&request_with_mapped.model),
                 )
                 .await;
-
-            token_manager
-                .unbind_session_and_clear_last_used(session_id)
-                .await;
-            if let Some(sid) = session_id {
-                debug!(
-                    "[{}] Unbound session {} from account {} due to status {}",
-                    trace_id, sid, email, status_code
-                );
-            }
+        }
+        if classification.abandons_sticky_account() {
+            token_manager.abandon_session(&affinity_key, &account_id);
+            debug!(
+                "[{}] Unbound session {} from account {} due to status {}",
+                trace_id, affinity_key, email, status_code
+            );
         }
 
         // 4. 处理 400 错误 (Thinking 签名失效 或 块顺序错误)
@@ -1832,9 +1701,7 @@ pub async fn handle_messages(
 
             // 精准定向净化 ThinkingStore 中当前 session 的异构污染签名，保留思考文本与健康历史签名，
             // 彻底防止重试阶段再次把坏签名还原回 contents
-            crate::proxy::thinking_store::ThinkingStore::global()
-                .purge_corrupted_signatures(&session_id_str, &mapped_model);
-            crate::proxy::SignatureCache::global().delete_session_signature(&client_session_id);
+            session_scope.purge_signatures(&mapped_model);
 
             // [FIX Prompt-Cache] 严禁在重试路径中注入合成消息 (close_tool_loop_for_thinking)！
             // 保持历史消息真实纯净，由 InboundThinkingPipeline 与 finalize_gemini_contents_thinking 统一兜底签名与占位。
@@ -1907,8 +1774,7 @@ pub async fn handle_messages(
         // 之后该 sessionId 的所有请求都 400 "input token count exceeds ... 1048576"。
         // 给 (账号, 对话) 的 sessionId 升代并立即重试:新 sessionId = 上游全新会话,对话无感恢复。
         if status_code == 400 && error_text.contains("exceeds the maximum number of tokens") {
-            let fingerprint = session_id_str.as_str();
-            let generation = crate::proxy::common::session::bump_session(&account_id, fingerprint);
+            let generation = crate::proxy::common::session::bump_session(&account_id, &store_key);
             tracing::warn!(
                 "[Claude] Upstream session token accumulation exceeded 1M on account {}. sessionId bumped to generation {}, retrying with a fresh upstream session.",
                 email, generation
@@ -2095,31 +1961,56 @@ pub async fn handle_list_models(State(state): State<AppState>) -> impl IntoRespo
     }))
 }
 
-/// 计算 tokens (占位符)
-pub async fn handle_count_tokens(
+/// Claude Models API: GET /v1/models/claude/{model}
+/// 检索指定模型的详细元数据
+pub async fn handle_retrieve_model(
     State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(body): Json<Value>,
-) -> Response {
-    let zai = state.zai.read().await.clone();
-    let zai_enabled =
-        zai.enabled && !matches!(zai.dispatch_mode, crate::proxy::ZaiDispatchMode::Off);
+    axum::extract::Path(model): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    use crate::proxy::common::model_mapping::find_dynamic_model;
 
-    if zai_enabled {
-        return crate::proxy::providers::zai_anthropic::forward_anthropic_json(
-            &state,
-            axum::http::Method::POST,
-            "/v1/messages/count_tokens",
-            &headers,
-            body,
-            0, // [NEW v4.0.0] Tokens count doesn't need rewind detection
+    let only_raw = *state.only_raw_quota_models.read().await;
+    if let Some(matched_id) = find_dynamic_model(
+        &state.custom_mapping,
+        Some(&state.token_manager),
+        only_raw,
+        &model,
+    )
+    .await
+    {
+        (
+            StatusCode::OK,
+            Json(json!({
+                "type": "model",
+                "id": matched_id.clone(),
+                "display_name": matched_id,
+                "created_at": "2024-10-22T00:00:00Z"
+            })),
         )
-        .await;
+            .into_response()
+    } else {
+        (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "type": "error",
+                "error": {
+                    "type": "not_found_error",
+                    "message": format!("model: {}", model)
+                }
+            })),
+        )
+            .into_response()
     }
+}
+
+/// 计算 tokens (Anthropic 官方 Messages Count Tokens API)
+/// 接入 Pipeline 协议无关通用估算引擎与全局高并发内容哈希缓存，
+/// 严格遵循官方 Schema 仅返回 input_tokens，彻底移除非标冗余 output_tokens 字段。
+pub async fn handle_count_tokens(_headers: HeaderMap, Json(body): Json<Value>) -> Response {
+    let input_tokens = crate::proxy::pipeline::estimate_tokens(&body);
 
     Json(json!({
-        "input_tokens": 0,
-        "output_tokens": 0
+        "input_tokens": input_tokens
     }))
     .into_response()
 }
@@ -2571,6 +2462,7 @@ async fn try_compress_with_summary(
         output_config: None,
         size: None,
         quality: None,
+        tool_choice: None,
     };
 
     debug!(
@@ -2650,6 +2542,7 @@ async fn try_compress_with_summary(
         output_config: original_request.output_config.clone(),
         size: original_request.size.clone(),
         quality: original_request.quality.clone(),
+        tool_choice: original_request.tool_choice.clone(),
     })
 }
 
@@ -2710,6 +2603,7 @@ mod warmup_tests {
             output_config: None,
             size: None,
             quality: None,
+            tool_choice: None,
         };
         assert!(is_warmup_request(&exact_req));
 
@@ -2732,6 +2626,7 @@ mod warmup_tests {
             output_config: None,
             size: None,
             quality: None,
+            tool_choice: None,
         };
         assert!(!is_warmup_request(&real_question_req));
 
@@ -2758,6 +2653,7 @@ mod warmup_tests {
             output_config: None,
             size: None,
             quality: None,
+            tool_choice: None,
         };
         assert!(!is_warmup_request(&tool_error_req));
     }

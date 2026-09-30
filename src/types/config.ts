@@ -16,9 +16,9 @@ export interface ProxyConfig {
     enable_logging: boolean;
     capture_health_logs?: boolean;
     log_retention?: LogRetentionConfig;
+    internal_error_log_retention?: InternalErrorLogRetentionConfig;
     debug_logging?: DebugLoggingConfig;
     upstream_proxy: UpstreamProxyConfig;
-    zai?: ZaiConfig;
     scheduling?: StickySessionConfig;
     experimental?: ExperimentalConfig;
     user_agent_override?: string;
@@ -28,6 +28,15 @@ export interface ProxyConfig {
     image_thinking_mode?: 'enabled' | 'disabled'; // [NEW] 图像思维模式开关
     only_raw_quota_models?: boolean; // [NEW] 是否只暴露真实配额模型
     proxy_pool?: ProxyPoolConfig;
+    multimodal?: MultimodalConfig;
+}
+
+export interface MultimodalConfig {
+    enable_sliding_window?: boolean;
+    strategy?: 'count' | 'memory';
+    max_fresh_images?: number;
+    strip_remote_urls?: boolean;
+    max_total_image_mb?: number;
 }
 
 export interface LogRetentionConfig {
@@ -36,6 +45,10 @@ export interface LogRetentionConfig {
     max_disk_mb?: number;
     max_rows: number;
     max_age_days?: number;
+}
+
+export interface InternalErrorLogRetentionConfig {
+    max_storage_mb: number;
 }
 
 
@@ -61,7 +74,7 @@ export interface ThinkingBudgetConfig {
     flash_mode?: ThinkingBudgetMode;
     flash_low?: number;       // 默认 1000
     flash_medium?: number;    // 默认 4000
-    flash_high?: number;      // 默认 10000
+    flash_high?: number;      // 默认 -1，走官方模型结构体
     flash_tiered?: number;    // 默认 -1
 
     // --- Gemini Pro 系列配置（官方仅 Low 与 High 两档） ---
@@ -110,31 +123,6 @@ export interface StickySessionConfig {
     max_wait_seconds: number;
 }
 
-export type ZaiDispatchMode = 'off' | 'exclusive' | 'pooled' | 'fallback';
-
-export interface ZaiMcpConfig {
-    enabled: boolean;
-    web_search_enabled: boolean;
-    web_reader_enabled: boolean;
-    vision_enabled: boolean;
-}
-
-export interface ZaiModelDefaults {
-    opus: string;
-    sonnet: string;
-    haiku: string;
-}
-
-export interface ZaiConfig {
-    enabled: boolean;
-    base_url: string;
-    api_key: string;
-    dispatch_mode: ZaiDispatchMode;
-    model_mapping?: Record<string, string>;
-    models: ZaiModelDefaults;
-    mcp: ZaiMcpConfig;
-}
-
 export interface ScheduledWarmupConfig {
     enabled: boolean;
     monitored_models: string[];
@@ -152,15 +140,13 @@ export interface PinnedQuotaModelsConfig {
 
 export interface ExperimentalConfig {
     enable_usage_scaling: boolean;
-    compression_level?: string;
-    context_compression_threshold_l1?: number;
-    context_compression_threshold_l2?: number;
-    context_compression_threshold_l3?: number;
     payload_storage_mode?: 'simple' | 'full';
     log_retention_days?: number;
     thinking_store_enabled?: boolean;
     thinking_retention_days?: number;
     thinking_max_memory_turns?: number;
+    enable_cowork_auto_compact?: boolean;
+    cowork_compact_threshold?: number;
 }
 
 export interface CircuitBreakerConfig {
@@ -182,6 +168,7 @@ export interface AppConfig {
     antigravity_cli_executable?: string; // [NEW] 手动指定的 Antigravity CLI (agy) 路径
     antigravity_args?: string[]; // [NEW] Antigravity 启动参数
     auto_launch?: boolean; // 开机自动启动
+    quiet_autostart?: boolean; // 开机自启时留在托盘。缺省视为开启
     auto_check_update?: boolean; // 自动检查更新
     update_check_interval?: number; // 更新检查间隔（小时）
     update_channel?: 'stable' | 'beta'; // 更新通道：正式版 vs 预览版

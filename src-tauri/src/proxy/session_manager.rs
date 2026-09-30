@@ -156,6 +156,11 @@ impl SessionManager {
                 return crate::proxy::thinking_store::sanitize_session_id(trimmed);
             }
         }
+        Self::openai_content_anchor(request)
+    }
+
+    /// 对话内容锚点。不采纳客户端显式 `session_id`，避免主子 agent 被收成同一个思维库。
+    pub fn openai_content_anchor(request: &OpenAIRequest) -> String {
         let mut hasher = Sha256::new();
 
         let mut content_found = false;
@@ -264,6 +269,11 @@ impl SessionManager {
                 return crate::proxy::thinking_store::sanitize_session_id(trimmed);
             }
         }
+        Self::gemini_content_anchor(request)
+    }
+
+    /// 对话内容锚点。不采纳 body 里的显式 `session_id`。
+    pub fn gemini_content_anchor(request: &Value) -> String {
         let mut hasher = Sha256::new();
 
         let mut content_found = false;
@@ -378,6 +388,7 @@ mod tests {
             output_config: None,
             size: None,
             quality: None,
+            tool_choice: None,
         };
 
         let req_project_b = ClaudeRequest {
@@ -400,6 +411,7 @@ mod tests {
             output_config: None,
             size: None,
             quality: None,
+            tool_choice: None,
         };
 
         let sid_a = SessionManager::extract_session_id(&req_project_a);
@@ -434,6 +446,7 @@ mod tests {
             output_config: None,
             size: None,
             quality: None,
+            tool_choice: None,
         };
 
         let req_pure_chat = ClaudeRequest {
@@ -454,6 +467,7 @@ mod tests {
             output_config: None,
             size: None,
             quality: None,
+            tool_choice: None,
         };
 
         let sid_tools = SessionManager::extract_session_id(&req_with_tools);
@@ -482,6 +496,7 @@ mod tests {
             output_config: None,
             size: None,
             quality: None,
+            tool_choice: None,
         };
 
         let mut req_turn2 = req_turn1.clone();
@@ -530,6 +545,7 @@ mod tests {
             output_config: None,
             size: None,
             quality: None,
+            tool_choice: None,
         };
         let sid_claude = SessionManager::extract_session_id(&claude_req);
         assert!(sid_claude.starts_with("sid-"));
@@ -580,6 +596,7 @@ mod tests {
             output_config: None,
             size: None,
             quality: None,
+            tool_choice: None,
         };
         let sid_real = SessionManager::extract_session_id(&claude_user_req);
         assert!(sid_real.starts_with("sid-"));

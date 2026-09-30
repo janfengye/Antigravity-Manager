@@ -65,6 +65,7 @@ pub fn ensure_main_window(app: &AppHandle) -> Result<WebviewWindow, String> {
 
 /// 退出轻量模式：确保主窗口存在，并将其显示、聚焦
 pub fn exit_lightweight_mode(app: &AppHandle) -> Result<WebviewWindow, String> {
+    crate::modules::startup_quiet::clear();
     let window = ensure_main_window(app)?;
 
     let _ = window.show();
@@ -82,13 +83,25 @@ pub fn exit_lightweight_mode(app: &AppHandle) -> Result<WebviewWindow, String> {
 
 /// 进入轻量模式：保存当前窗口位置与尺寸，彻底销毁 WebView 进程以释放 100MB+ 常驻内存
 pub fn enter_lightweight_mode(app: &AppHandle) -> Result<(), String> {
+    release_main_window(app, true)
+}
+
+/// 开机免打扰进入轻量模式。此时窗口还是本次启动的初始尺寸，不能覆盖上次记住的位置。
+pub fn enter_lightweight_mode_without_saving(app: &AppHandle) -> Result<(), String> {
+    release_main_window(app, false)
+}
+
+fn release_main_window(app: &AppHandle, save_state: bool) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("main") {
-        tracing::info!("[Lightweight] 正在进入轻量模式，保存窗口状态并销毁 WebView...");
+        tracing::info!(
+            "[Lightweight] 正在进入轻量模式，销毁 WebView（保存窗口状态: {}）...",
+            save_state
+        );
 
-        // 1. 保存窗口状态
-        let _ = app.save_window_state(StateFlags::all().difference(StateFlags::VISIBLE));
+        if save_state {
+            let _ = app.save_window_state(StateFlags::all().difference(StateFlags::VISIBLE));
+        }
 
-        // 2. 销毁窗口与渲染器
         let _ = window.destroy();
 
         // 3. macOS 切换为附属模式，避免在 Dock 栏残留

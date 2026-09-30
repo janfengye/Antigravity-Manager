@@ -161,7 +161,21 @@
     "quota_tight_short": "Tight",
     "rolling_5h": "5h Rolling:",
     "weekly_7d": "7d Weekly:",
-    "zero_weekly_warning": "{{count}} active account(s) circuit-broken due to zero weekly quota (rated 0%)"
+    "zero_weekly_warning": "{{count}} active account(s) circuit-broken due to zero weekly quota (rated 0%)",
+    "view_mode_weighted": "Weighted",
+    "view_mode_5h": "5h Rolling",
+    "view_mode_weekly": "7d Weekly",
+    "view_mode_title_weighted": "Weighted Effective: Overall health considering tier weights & bidirectional bucket constraints",
+    "view_mode_title_5h": "5h Rolling: Burst quota within 5 hours (capped by weekly ceiling)",
+    "view_mode_title_weekly": "7d Weekly: Macro weekly budget (throttled by 5h cooling valve)",
+    "constrained_by_weekly": "Capped by Weekly",
+    "constrained_by_weekly_desc": "5h rolling is {{raw5h}}%, but constrained by weekly budget {{rawWeekly}}%",
+    "cooling_5h": "5h Cooling",
+    "cooling_5h_desc": "Weekly budget has {{rawWeekly}}%, but current 5h window is exhausted and cooling down",
+    "weekly_exhausted_badge": "Weekly Zero",
+    "mini_tag_constrained": "Capped",
+    "mini_tag_cooling": "Cooling",
+    "mini_tag_exhausted": "Zero"
   },
   "accounts": {
     "account": "Account",
@@ -420,6 +434,10 @@
       "auto_launch_enabled": "Enabled",
       "auto_launch_disabled": "Disabled",
       "auto_launch_desc": "Automatically launch Antigravity Tools when system starts",
+      "quiet_autostart": "Quiet Startup (Stay in Tray)",
+      "quiet_autostart_desc": "When the app is launched at login, keep the main window hidden. If Lightweight Mode is also on, the webview is released immediately. Opening the app yourself still shows the window. If the system tray is unavailable, the window is shown instead.",
+      "quiet_autostart_enabled": "Quiet startup enabled",
+      "quiet_autostart_disabled": "Quiet startup disabled",
       "auto_check_update": "Auto Check for Updates",
       "auto_check_update_desc": "Automatically check for new versions on startup",
       "auto_check_update_enabled": "Auto check enabled",
@@ -859,10 +877,13 @@
       "enable_logging_hint": "Record history for debugging (Minor perf cost)",
       "log_retention_title": "Request log retention",
       "log_retention_body_hours": "Request body age (hours)",
-      "log_retention_storage_gb": "Log storage limit (GB)",
-      "log_retention_storage_gb_desc": "When reaching limit, sliding window evicts oldest 30% logs to accommodate new entries",
+      "log_retention_storage_gb": "Request log limit (GB)",
+      "log_retention_storage_gb_desc": "Default 1GB; when full, evict the oldest 30% and keep appending",
       "log_retention_current_usage": "Current database disk usage",
       "log_retention_rows": "Maximum log rows",
+      "internal_error_log_storage_mb": "Internal error log limit (MB)",
+      "internal_error_log_storage_mb_desc": "Default 500MB; failures only. When full, evict the oldest 30% and keep appending. Account data is not affected.",
+      "internal_error_log_current_usage": "Current usage",
       "upstream_proxy": {
         "title": "Global Upstream Proxy (Global Proxy)",
         "desc": "When enabled, all external requests (API Proxy, Token Refresh, Quota Check, Update Check) will be routed through this proxy.",
@@ -1092,6 +1113,12 @@
       },
       "prompt_multimodal": {
         "title": "Global Prompt & Multimodal Settings"
+      },
+      "multimodal_settings": {
+        "title": "Multimodal Settings"
+      },
+      "agent_settings": {
+        "title": "Specific Agent Settings"
       }
     },
     "cloudflared": {
@@ -1420,6 +1447,33 @@
         "clear_success": "OpenClaw configuration cleared successfully",
         "clear_error": "Failed to clear OpenClaw configuration: {{error}}"
       }
+    },
+    "model_config": {
+      "title": "Model Config"
+    },
+    "multimodal": {
+      "banner_title": "Multimodal Interaction & Longevity Governance (Pipeline First)",
+      "banner_desc": "Designed for long-horizon multimodal agents (Codex, Claude Code, Cursor) that frequently inspect screenshots and files. Provides protocol-agnostic sliding-window freshness and memory explosion safeguards, preventing 400 errors and token inflation from accumulated historical images.",
+      "sliding_window_title": "Multimodal History Freshness Sliding Window",
+      "opt_in_tag": "Recommended for Long-Horizon Agents (Disabled by default)",
+      "sliding_window_desc": "Disabled by default (100% transparent forwarding). When enabled, the gateway preserves full multimodal embeddings for the latest N images, stripping Base64 from older history and replacing them with structured placeholders.",
+      "max_fresh_images_label": "Max Fresh Images in Window",
+      "max_fresh_images_hint": "Retains full visual multimodal embeddings for the latest N images. Older images have their Base64 stripped and replaced by placeholders. Set 0 for unlimited image count (bounded only by total capacity).",
+      "unit_images": "images",
+      "strip_remote_urls_label": "Also strip historical remote / OSS image direct links",
+      "strip_remote_urls_hint": "Disabled by default (only strips heavy Base64 payloads, preserving lightweight HTTP/HTTPS URLs). When checked, historical remote direct links are also replaced with placeholders to maximize token savings.",
+      "max_total_mb_title": "Cumulative Decoded Image Memory Limit",
+      "hard_safety_tag": "Physical Safety Redline (Always Active)",
+      "max_total_mb_desc": "Maximum decoded volume of all retained multimodal images in a single request (default 32MB). If retained images still exceed this limit, LRU eviction drops the oldest historical images first, always protecting the current latest turn!",
+      "hot_reload_hint": "Settings take effect immediately upon saving without restarting proxy service.",
+      "save_btn": "Save Multimodal Settings",
+      "strategy_select_label": "Freshness Strategy Mode (Choose one independent strategy)",
+      "strategy_count_title": "Count-Based Freshness",
+      "strategy_count_desc": "Preserves the latest N images regardless of size. Intuitive and strictly maps to conversation turns.",
+      "strategy_memory_title": "Memory-Based Freshness",
+      "strategy_memory_desc": "Scans backward from latest turn by Base64 volume. Retains images within budget, evicts older ones.",
+      "memory_budget_label": "Cumulative Memory Freshness Limit",
+      "memory_budget_hint": "Sets total decoded Base64 volume budget. Scans backward from latest turn; images within budget are kept, earlier excess images are replaced with placeholders."
     }
   },
   "monitor": {
@@ -1449,6 +1503,7 @@
       "images": "Images",
       "capture_health": "Capture Health",
       "capture_health_tip": "Disabled by default: skips all successful GET requests (incl. /v1/models polling and /health probes) and does not persist them; failed requests are always recorded; enable to record & save everything",
+      "internal_error_log": "Internal errors at {{path}}, sliding window",
       "reset": "Reset",
       "by_account": "Filter by account",
       "all_accounts": "All Accounts"
@@ -1481,7 +1536,7 @@
       "payload_empty": "No data",
       "concise_mode": "Concise Mode",
       "full_mode": "Full Mode",
-      "concise_desc": "Tool arguments and verbose metadata are omitted, highlighting thinking, tokens, and messages",
+      "concise_desc": "Keeps the outbound payload hierarchy, with id, model, thinking config, system prompt, conversation, and tools first. Bulky inline data is omitted.",
       "search_placeholder": "Search payload...",
       "search_placeholder_with_shortcut": "Search payload... (Enter next, Shift+Enter prev)",
       "case_sensitive": "Match Case",
@@ -1544,8 +1599,9 @@
       "toggle_button": "Log Storage & Maintenance Settings",
       "button_text": "Log Settings",
       "title": "Log Retention & Maintenance Settings",
-      "subtitle": "Centrally manage request retention days, sliding thought window, and disk space reclamation",
-      "retention_title": "Request Log Retention Policy",
+      "subtitle": "Manage sliding-window capacity for request logs and internal error logs",
+      "retention_title": "Request Logs (Sliding Window)",
+      "internal_error_title": "Internal Error Logs (Sliding Window)",
       "payload_thinking_title": "Payload Storage & Thought Retention",
       "maintenance_title": "Log Maintenance & Space Cleanup",
       "save_retention": "Save Retention Policy",
@@ -1616,7 +1672,7 @@
       "timeout_error": "Request timeout, please check your network connection",
       "connection_error": "Connection failed, please check your network or proxy settings",
       "decode_error": "Network unstable, data transmission interrupted. Try: 1) Check network 2) Switch proxy 3) Retry",
-      "stream_error": "Stream transmission error, please retry later",
+      "stream_error": "Stream interrupted before completion, please retry",
       "unknown_error": "Unknown error occurred, please retry later"
     }
   },

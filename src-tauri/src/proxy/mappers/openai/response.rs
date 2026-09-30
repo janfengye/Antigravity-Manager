@@ -110,8 +110,13 @@ pub fn transform_openai_response(
                             .or(part.get("thought_signature"))
                             .and_then(|s| s.as_str())
                         {
-                            crate::proxy::SignatureCache::global()
-                                .cache_tool_signature(&id, sig.to_string());
+                            if let Some(sid) = session_id {
+                                crate::proxy::SignatureCache::global().cache_tool_signature(
+                                    sid,
+                                    &id,
+                                    sig.to_string(),
+                                );
+                            }
                         }
 
                         tool_calls.push(ToolCall {

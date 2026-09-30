@@ -31,7 +31,7 @@ const RETRY_DELAY_SECS: u64 = 30;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct QuotaResponse {
-    models: std::collections::HashMap<String, ModelInfo>,
+    models: std::collections::HashMap<String, crate::models::OfficialModelInfo>,
     #[serde(rename = "deprecatedModelIds")]
     deprecated_model_ids: Option<std::collections::HashMap<String, DeprecatedModelInfo>>,
 }
@@ -40,35 +40,6 @@ struct QuotaResponse {
 struct DeprecatedModelInfo {
     #[serde(rename = "newModelId")]
     new_model_id: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct ModelInfo {
-    #[serde(rename = "quotaInfo")]
-    quota_info: Option<QuotaInfo>,
-    #[serde(rename = "displayName")]
-    display_name: Option<String>,
-    #[serde(rename = "supportsImages")]
-    supports_images: Option<bool>,
-    #[serde(rename = "supportsThinking")]
-    supports_thinking: Option<bool>,
-    #[serde(rename = "thinkingBudget")]
-    thinking_budget: Option<i32>,
-    recommended: Option<bool>,
-    #[serde(rename = "maxTokens")]
-    max_tokens: Option<i32>,
-    #[serde(rename = "maxOutputTokens")]
-    max_output_tokens: Option<i32>,
-    #[serde(rename = "supportedMimeTypes")]
-    supported_mime_types: Option<std::collections::HashMap<String, bool>>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct QuotaInfo {
-    #[serde(rename = "remainingFraction")]
-    remaining_fraction: Option<f64>,
-    #[serde(rename = "resetTime")]
-    reset_time: Option<String>,
 }
 
 // ---- retrieveUserQuotaSummary 响应反序列化结构 ----
@@ -392,6 +363,9 @@ pub async fn fetch_quota_with_cache(
                 // Use debug level for detailed info to avoid console noise
                 tracing::debug!("Quota API returned {} models", quota_response.models.len());
 
+                // 动态更新官方全量模型结构体目录缓存
+                crate::models::OfficialModelCatalog::update(quota_response.models.clone());
+
                 for (name, info) in quota_response.models {
                     if let Some(quota_info) = info.quota_info {
                         let percentage = quota_info
@@ -415,10 +389,11 @@ pub async fn fetch_quota_with_cache(
                                 display_name: info.display_name,
                                 supports_images: info.supports_images,
                                 supports_thinking: info.supports_thinking,
-                                thinking_budget: info.thinking_budget,
+                                thinking_budget: info.thinking_budget.map(|v| v as i32),
                                 recommended: info.recommended,
-                                max_tokens: info.max_tokens,
-                                max_output_tokens: info.max_output_tokens,
+                                max_tokens: info.max_tokens.map(|v| v as i32),
+                                max_output_tokens: info.max_output_tokens.map(|v| v as i32),
+                                model: Some(info.model),
                                 supported_mime_types: info.supported_mime_types,
                             };
                             quota_data.add_model(model_quota);
@@ -741,16 +716,16 @@ pub async fn warmup_model_directly(
                 true
             } else {
                 let text = response.text().await.unwrap_or_default();
-                crate::modules::logger::log_warn(&format!(
-                    "[Warmup] ✗ {} for {} (was {}%): HTTP {} - {}",
+                crate::modules::logger::log_error(&format!(
+                    "[Warmup] ✗ {} for {} (was {}%): HTTP {} - {} (非服务端故障)",
                     model_name, email, percentage, status, text
                 ));
                 false
             }
         }
         Err(e) => {
-            crate::modules::logger::log_warn(&format!(
-                "[Warmup] ✗ {} for {} (was {}%): {}",
+            crate::modules::logger::log_error(&format!(
+                "[Warmup] ✗ {} for {} (was {}%): {} (网络请求异常，非服务端故障)",
                 model_name, email, percentage, e
             ));
             false
@@ -883,45 +858,51 @@ pub async fn warm_up_all_accounts() -> Result<String, String> {
 
             tokio::spawn(async move {
                 let mut success = 0;
-                let batch_size = 3;
                 let now_ts = chrono::Utc::now().timestamp();
 
-                for (batch_idx, batch) in warmup_items.chunks(batch_size).enumerate() {
-                    let mut handles = Vec::new();
+                // 按账号组织预热任务：同一账号内的多个模型必须串行执行并保持安全间隔（1.5s），
+                // 彻底杜绝因同 Token 并发涌入触发 Google 上游单会话并发互斥与 Cloud Armor WAF 403 频控拦截；
+                // 不同账号之间并发执行以保障处理效率。
+                let mut account_tasks: std::collections::HashMap<
+                    String,
+                    Vec<(String, String, String, String, String, i32)>,
+                > = std::collections::HashMap::new();
 
-                    for (id, email, model, token, pid, pct) in batch.iter() {
-                        let id = id.clone();
-                        let email = email.clone();
-                        let model = model.clone();
-                        let token = token.clone();
-                        let pid = pid.clone();
-                        let pct = *pct;
+                for item in warmup_items {
+                    account_tasks.entry(item.1.clone()).or_default().push(item);
+                }
 
-                        let handle = tokio::spawn(async move {
-                            let result =
+                let mut account_handles = Vec::new();
+                for (_email, items) in account_tasks {
+                    let handle = tokio::spawn(async move {
+                        let mut local_success = 0;
+                        let item_count = items.len();
+                        for (idx, (id, email, model, token, pid, pct)) in
+                            items.into_iter().enumerate()
+                        {
+                            let ok =
                                 warmup_model_directly(&token, &model, &pid, &email, pct, Some(&id))
                                     .await;
-                            (result, email, model)
-                        });
-                        handles.push(handle);
-                    }
-
-                    for handle in handles {
-                        match handle.await {
-                            Ok((true, email, model)) => {
-                                success += 1;
+                            if ok {
+                                local_success += 1;
                                 let history_key = format!("{}:{}:100", email, model);
                                 crate::modules::scheduler::record_warmup_history(
                                     &history_key,
                                     now_ts,
                                 );
                             }
-                            _ => {}
+                            if idx + 1 < item_count {
+                                tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+                            }
                         }
-                    }
+                        local_success
+                    });
+                    account_handles.push(handle);
+                }
 
-                    if batch_idx < (warmup_items.len() + batch_size - 1) / batch_size - 1 {
-                        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                for handle in account_handles {
+                    if let Ok(count) = handle.await {
+                        success += count;
                     }
                 }
 
