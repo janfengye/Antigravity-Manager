@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> Professional Account Management & Protocol Proxy System for AI Services (v4.8.8)
+> Professional Account Management & Protocol Proxy System for AI Services (v4.8.9)
 
 <div align="center">
   <img src="public/icon.png" width="100" height="100" alt="Antigravity Tools Logo">
@@ -11,7 +11,7 @@
       <img src="https://img.shields.io/github/v/release/lbjlaq/Antigravity-Manager?color=blue&style=flat-square" alt="GitHub release">
     </a>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.8.8-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.8.9-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -483,7 +483,7 @@ In clients that support OpenAI protocol (e.g., Cherry Studio), you can configure
 
 ## 📝 Changelog
 
-> Latest version **v4.8.8** (2026-10-01): Completely refactored the account pool priority sorting algorithm, removing the non-transitive 10-minute fuzzy threshold and introducing deterministic account ID tie-breaking to eliminate Rust slice sort panics and empty replies in dense account pools (Empty reply from server, Fixes #3570, thanks to @Xyloz3n).
+> Latest version **v4.8.9** (2026-10-01): Penetrated underlying hyper protocol stack to inject periodic HTTP/2 PING frames (`keep_alive_interval: 3s`, `keep_alive_timeout: 10s`, `keep_alive_while_idle: true`), unified `base_client_builder` across default and proxy pool clients, and tightened TCP keepalive to 3s to permanently prevent L7 proxy idle truncation and stream drops during deep-thinking or long code generation (Fixes #2195, #1796, #2013, thanks to @EricZhou05).
 
 👉 **[View Full Changelog → CHANGELOG_EN.md](CHANGELOG_EN.md)**
 
