@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> 专业级 AI 账号管理与协议代理系统 (v4.8.9)
+> 专业级 AI 账号管理与协议代理系统 (v4.9.0)
 
 <div align="center">
   <img src="public/icon.png" width="100" height="100" alt="Antigravity Tools Logo">
@@ -11,7 +11,7 @@
       <img src="https://img.shields.io/github/v/release/lbjlaq/Antigravity-Manager?color=blue&style=flat-square" alt="GitHub release">
     </a>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.8.9-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.9.0-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Frontend-React-61DAFB?style=flat-square" alt="React">
     <img src="https://img.shields.io/badge/License-CC--BY--NC--SA--4.0-lightgrey?style=flat-square" alt="License">
@@ -493,7 +493,7 @@ response = client.chat.completions.create(
 
 ## 📝 更新日志
 
-> 最新版本 **v4.8.9**（2026-10-01）：穿透底层 hyper 协议栈注入周期性 HTTP/2 PING 保活帧（3 秒心跳、10 秒超时、空闲保持），重构统一 `base_client_builder` 消除默认客户端与代理池配置漂移，并将 TCP Keepalive 探测缩短为 3 秒，彻底根治深度思考与长代码生成静默期触发中间代理 L7 空闲截断导致的流式腰斩与 Token 浪费（Fixes #2195, #1796, #2013，感谢 @EricZhou05）。
+> 最新版本 **v4.9.0**（2026-10-01）：修复 `monitor.rs` 签名回填路径中思考片段原生按字节切片切在多字节字符中间导致的 Rust worker `char boundary panic`，改用 `safe_truncate_str` 自动对齐 UTF-8 字符边界，彻底根治下游连接中断（`socket hang up` / `Empty reply from server`）与请求日志静默丢失（Fixes #3573，感谢 @a3339530357）。
 
 👉 **[查看完整更新日志 CHANGELOG.md →](CHANGELOG.md)**
 
