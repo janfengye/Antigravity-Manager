@@ -3,14 +3,6 @@ use rusqlite::Connection;
 use std::path::PathBuf;
 
 fn get_antigravity_path(target_ide: Option<&str>) -> Option<PathBuf> {
-    if let Ok(config) = crate::modules::config::load_app_config() {
-        if let Some(path_str) = config.antigravity_executable {
-            let path = PathBuf::from(path_str);
-            if path.exists() {
-                return Some(path);
-            }
-        }
-    }
     crate::modules::process::get_antigravity_executable_path(target_ide)
 }
 
@@ -42,13 +34,10 @@ pub fn get_all_candidate_db_paths(target_ide: Option<&str>) -> Vec<PathBuf> {
     }
 
     let folder_names: &[&str] = if target_ide == Some("ide") {
-        &["Antigravity IDE", "Antigravity"]
-    } else if target_ide == Some("code") || target_ide == Some("cursor") {
-        &["Antigravity", "Antigravity IDE"]
-    } else if target_ide == Some("classic") {
-        &["Antigravity"]
+        &["Antigravity IDE"]
     } else {
-        &["Antigravity", "Antigravity IDE"]
+        // target_ide = None 或 classic / code / cursor: 严格使用 Antigravity，严禁回退至 Antigravity IDE
+        &["Antigravity"]
     };
 
     #[cfg(target_os = "macos")]

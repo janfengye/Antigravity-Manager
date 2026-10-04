@@ -122,12 +122,9 @@ pub fn parse_and_migrate_config(content: &str) -> Result<(AppConfig, bool), Stri
             }
         }
 
-        // 3.9 及以上仍由通配规则转到对应 tiered。已有自定义目标时不覆盖。
-        if !custom_mapping.contains_key("gemini-3.x-flash") {
-            custom_mapping.insert(
-                "gemini-3.x-flash".to_string(),
-                serde_json::Value::String("3.x-flash-tiered".to_string()),
-            );
+        // 清理已废弃的旧内置规则 gemini-3.x-flash（已由纯数据驱动 DynamicTierRouter 取代）
+        if custom_mapping.contains_key("gemini-3.x-flash") {
+            custom_mapping.remove("gemini-3.x-flash");
             modified = true;
         }
 

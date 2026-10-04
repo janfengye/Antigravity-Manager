@@ -51,8 +51,7 @@ pub fn resolve_effective_target(
         is_ide = false;
     } else if let Some(exe_str) = ide_exe_path {
         // 原生经典版不存在，检查是否存在 IDE 可执行文件
-        let path_lower = exe_str.to_lowercase();
-        if path_lower.contains("antigravity ide") || path_lower.contains("antigravity-ide") {
+        if process::is_antigravity_ide_str(exe_str) {
             is_ide = true;
         }
     }
@@ -259,7 +258,7 @@ impl SystemIntegration for DesktopIntegration {
         // 1. 智能决策：判断目标是 Antigravity IDE (VS Code 定制版) 还是 Antigravity 经典版 (原生桌面端)
         let classic_running = process::is_antigravity_running(None);
         let ide_running = process::is_antigravity_running(Some("ide"));
-        let classic_exe = process::get_antigravity_executable_path(None);
+        let classic_exe = process::get_antigravity_executable_path(Some("classic"));
         let ide_exe = process::get_antigravity_executable_path(Some("ide"));
         let ide_exe_str = ide_exe.as_ref().map(|p| p.to_string_lossy().to_string());
 
@@ -1302,6 +1301,17 @@ mod tests {
         );
         assert!(is_ide);
         assert_eq!(effective, Some("ide"));
+
+        // 测试下划线命名 antigravity_ide
+        let (is_ide_underscore, effective_underscore) = resolve_effective_target(
+            None,
+            false,
+            false,
+            false,
+            Some("/usr/local/bin/antigravity_ide"),
+        );
+        assert!(is_ide_underscore);
+        assert_eq!(effective_underscore, Some("ide"));
     }
 
     #[test]

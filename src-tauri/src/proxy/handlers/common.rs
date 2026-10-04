@@ -13,7 +13,7 @@ use tracing::{debug, info};
 // ===== 统一重试与退避策略 =====
 
 /// 重试策略枚举
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RetryStrategy {
     /// 不重试，直接返回错误
     NoRetry,
@@ -218,45 +218,63 @@ pub fn determine_retry_strategy_adaptive(
                 retry_after,
             );
 
-            // 2. 真正的硬配额耗尽检测：仅当没有提供重试延迟且包含确定性枯竭关键字时判定
-            // 绝不能将普通的 RESOURCE_EXHAUSTED 状态字作为硬配额耗尽！
-            let is_hard_quota_exhausted = parsed_delay.is_none()
-                && (lower.contains("quota_exhausted")
-                    || lower.contains("exceeded your current quota")
-                    || lower.contains("insufficient_quota")
-                    || lower.contains("credits")
-                    || lower.contains("zero_quota")
-                    || lower.contains("weekly quota"));
-
-            if is_hard_quota_exhausted {
-                return RetryStrategy::FixedDelay(Duration::from_millis(50));
-            }
-
-            // 3. 单账号模式 (pool_size <= 1)：无法切号，等待是唯一选择
+            // 2. 单账号模式 (pool_size <= 1)：无法切号，若未曾 GraceRetry 则等待，否则降级为固定退避或放弃
+            // 【核心防线】单账号判定必须严格位于任何快切或硬配额判定之前，严禁 50ms 闪电空转刷死
             if pool_size <= 1 {
                 if let Some(delay) = parsed_delay {
                     let actual_ms = delay.actual_wait_ms();
-                    if actual_ms <= 30_000 {
+                    if actual_ms <= 30_000 && allow_grace_retry {
                         tracing::info!(
                             "[Retry] Single account 429: quotaResetDelay detected ({}ms), applying GraceRetry",
                             actual_ms
                         );
                         return RetryStrategy::GraceRetry(Duration::from_millis(actual_ms));
                     } else {
-                        return RetryStrategy::FixedDelay(Duration::from_millis(30_000));
+                        return RetryStrategy::FixedDelay(Duration::from_millis(
+                            actual_ms.min(30_000),
+                        ));
                     }
-                } else {
-                    // 没有给出明确延迟时的保底退避 (单账号等待 3s~5s，杜绝 50ms 闪电耗尽重试)
+                } else if allow_grace_retry {
+                    // 没有给出明确延迟时的保底退避 (单账号等待 3s~10s，杜绝 50ms 闪电耗尽重试)
                     let backoff_ms = (3000 * (attempt + 1) as u64).min(10_000);
                     tracing::info!(
                         "[Retry] Single account 429 without explicit delay: backing off {}ms",
                         backoff_ms
                     );
                     return RetryStrategy::GraceRetry(Duration::from_millis(backoff_ms));
+                } else {
+                    let backoff_ms = (3000 * (attempt + 1) as u64).min(10_000);
+                    return RetryStrategy::FixedDelay(Duration::from_millis(backoff_ms));
                 }
             }
 
-            // 4. 多账号模式 (pool_size > 1)
+            // 3. 多账号模式 (pool_size > 1)：
+            // 账号级硬配额枯竭检测：仅当没有提供重试延迟且包含确定性枯竭关键字时判定
+            // 正确包含 Google RPC 标准状态字与经典配额耗尽提示：
+            // RESOURCE_EXHAUSTED / Resource has been exhausted / Quota exceeded / quota_exhausted 等
+            let is_hard_quota_exhausted = parsed_delay.is_none()
+                && (lower.contains("quota_exhausted")
+                    || lower.contains("exceeded your current quota")
+                    || lower.contains("insufficient_quota")
+                    || lower.contains("credits")
+                    || lower.contains("zero_quota")
+                    || lower.contains("weekly quota")
+                    || lower.contains("resource has been exhausted")
+                    || lower.contains("resource_exhausted")
+                    || lower.contains("quota exceeded"));
+
+            // 请求级 429 防穿透保护 (无明确重置时间且非账号硬配额耗尽)：
+            // [FIX #3506] 若在完整尝试完全池所有账号 (attempt >= pool_size) 后依然遭遇请求级 429，
+            // 判定为该请求特定 Payload / IP 流控导致，立即终止进一步轮换，防止第二轮继续打穿全池导致全池锁定
+            let is_request_level_429 = parsed_delay.is_none() && !is_hard_quota_exhausted;
+            if is_request_level_429 && attempt >= pool_size {
+                tracing::warn!(
+                    "[Retry] Request-level 429 persisted across all {} accounts in pool without explicit delay; aborting further rotation to protect account pool.",
+                    pool_size
+                );
+                return RetryStrategy::NoRetry;
+            }
+
             let is_first_round = attempt < pool_size;
             if is_first_round {
                 // Round 1 (第一轮)：全池闪电快切，毫秒级逃逸至其他健康账号
@@ -567,11 +585,14 @@ pub fn build_token_error_headers<'a>(
     headers
 }
 
+/// 判定是否属于偶发性/瞬态 Token 获取错误（例如超时、锁争抢、系统繁忙）
+pub fn is_transient_token_error(err: &str) -> bool {
+    let lower = err.to_ascii_lowercase();
+    lower.contains("timeout") || lower.contains("too busy") || lower.contains("deadlock")
+}
+
 /// 判断是否为模型不存在/不支持的错误
-pub fn is_model_not_found_error(status: u16, body: &str) -> bool {
-    if status == 404 {
-        return true;
-    }
+pub fn is_model_not_found_error(_status: u16, body: &str) -> bool {
     let lower = body.to_lowercase();
     lower.contains("model not found")
         || lower.contains("unknown model")
@@ -997,5 +1018,22 @@ mod retry_after_tests {
             .as_str()
             .unwrap()
             .contains("非服务端故障"));
+    }
+
+    #[test]
+    fn test_is_transient_token_error() {
+        assert!(is_transient_token_error(
+            "Token acquisition timeout (15s) - system too busy or deadlock detected"
+        ));
+        assert!(is_transient_token_error(
+            "Token acquisition timeout (5s) - system too busy or deadlock detected"
+        ));
+        assert!(is_transient_token_error("System too busy"));
+        assert!(is_transient_token_error("Potential deadlock detected"));
+        assert!(!is_transient_token_error("Token pool is empty"));
+        assert!(!is_transient_token_error(
+            "invalid_grant: refresh token revoked"
+        ));
+        assert!(!is_transient_token_error("No available account with quota"));
     }
 }

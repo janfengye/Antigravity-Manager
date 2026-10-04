@@ -1,8 +1,8 @@
 //! Linux GDK / WebKit startup policy.
 //!
-//! niri / Hyprland / sway always expose an Xwayland `DISPLAY`. The old
-//! "Wayland + DISPLAY ⇒ force GDK_BACKEND=x11" rule then sends WebKitGTK
-//! down a path that draws a black window (issue #3388).
+//! niri / Hyprland / sway and KDE Plasma always expose an Xwayland `DISPLAY`.
+//! The old "Wayland + DISPLAY ⇒ force GDK_BACKEND=x11" rule then sends WebKitGTK
+//! down a path that draws a black window or freezes frame updates (issues #3388, #3581).
 //!
 //! This module is std-only so the decision table can be tested with
 //! `rustc --test src/linux_graphics.rs` without building the Tauri crate.
@@ -15,6 +15,13 @@ pub fn desktop_is_wlroots_family(xdg_current_desktop: &str) -> bool {
     xdg_current_desktop.split(':').any(|part| {
         let name = part.trim().to_ascii_lowercase();
         WLROOTS_FAMILY_DESKTOPS.iter().any(|known| name == *known)
+    })
+}
+
+pub fn desktop_is_kde(xdg_current_desktop: &str) -> bool {
+    xdg_current_desktop.split(':').any(|part| {
+        let name = part.trim().to_ascii_lowercase();
+        name == "kde" || name == "plasma"
     })
 }
 
@@ -35,9 +42,13 @@ pub fn should_force_x11_backend(
     if force_wayland {
         return false;
     }
-    // Historical GTK Wayland shm workaround for GNOME/KDE. Skip compositors
-    // that always expose Xwayland — forcing X11 there makes WebKit go black.
-    is_wayland && has_x11_display && !desktop_is_wlroots_family(xdg_current_desktop)
+    // Historical GTK Wayland shm workaround for GNOME/legacy desktops.
+    // Skip wlroots compositors and modern KDE Plasma — forcing X11 (Xwayland)
+    // there causes WebKitGTK to draw a black window or freeze frames (issues #3388, #3581).
+    is_wayland
+        && has_x11_display
+        && !desktop_is_wlroots_family(xdg_current_desktop)
+        && !desktop_is_kde(xdg_current_desktop)
 }
 
 pub fn should_disable_webkit_dmabuf(
@@ -49,13 +60,16 @@ pub fn should_disable_webkit_dmabuf(
     if already_set || !is_wayland {
         return false;
     }
-    nvidia_loaded || desktop_is_wlroots_family(xdg_current_desktop)
+    nvidia_loaded
+        || desktop_is_wlroots_family(xdg_current_desktop)
+        || desktop_is_kde(xdg_current_desktop)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        desktop_is_wlroots_family, should_disable_webkit_dmabuf, should_force_x11_backend,
+        desktop_is_kde, desktop_is_wlroots_family, should_disable_webkit_dmabuf,
+        should_force_x11_backend,
     };
 
     #[test]
@@ -70,7 +84,25 @@ mod tests {
         for desktop in ["GNOME", "ubuntu:GNOME", "KDE", "XFCE", ""] {
             assert!(
                 !desktop_is_wlroots_family(desktop),
-                "{desktop} must keep the historical GNOME/KDE X11 fallback",
+                "{desktop} should not be treated as wlroots-family",
+                desktop = desktop
+            );
+        }
+    }
+
+    #[test]
+    fn kde_matches_known_desktops() {
+        for desktop in ["KDE", "plasma", "KDE:plasma", "ubuntu:KDE"] {
+            assert!(
+                desktop_is_kde(desktop),
+                "{desktop} should be recognized as KDE",
+                desktop = desktop
+            );
+        }
+        for desktop in ["GNOME", "ubuntu:GNOME", "niri", "sway", "XFCE", ""] {
+            assert!(
+                !desktop_is_kde(desktop),
+                "{desktop} should not be recognized as KDE",
                 desktop = desktop
             );
         }
@@ -80,6 +112,16 @@ mod tests {
     fn niri_with_xwayland_display_does_not_force_x11() {
         assert!(!should_force_x11_backend(
             false, false, false, true, true, "niri"
+        ));
+    }
+
+    #[test]
+    fn kde_with_xwayland_display_does_not_force_x11() {
+        assert!(!should_force_x11_backend(
+            false, false, false, true, true, "KDE"
+        ));
+        assert!(!should_force_x11_backend(
+            false, false, false, true, true, "plasma"
         ));
     }
 
@@ -100,6 +142,9 @@ mod tests {
         assert!(!should_force_x11_backend(
             true, true, false, true, true, "GNOME"
         ));
+        assert!(!should_force_x11_backend(
+            true, false, false, true, true, "KDE"
+        ));
     }
 
     #[test]
@@ -110,15 +155,24 @@ mod tests {
     }
 
     #[test]
-    fn force_x11_wins_even_on_niri() {
+    fn force_x11_wins_even_on_niri_and_kde() {
         assert!(should_force_x11_backend(
             false, true, false, true, true, "niri"
+        ));
+        assert!(should_force_x11_backend(
+            false, true, false, true, true, "KDE"
         ));
     }
 
     #[test]
     fn webkit_dmabuf_disabled_on_niri_wayland() {
         assert!(should_disable_webkit_dmabuf(false, true, false, "niri"));
+    }
+
+    #[test]
+    fn webkit_dmabuf_disabled_on_kde_wayland() {
+        assert!(should_disable_webkit_dmabuf(false, true, false, "KDE"));
+        assert!(should_disable_webkit_dmabuf(false, true, false, "plasma"));
     }
 
     #[test]
@@ -134,10 +188,12 @@ mod tests {
     #[test]
     fn webkit_dmabuf_respects_user_override() {
         assert!(!should_disable_webkit_dmabuf(true, true, true, "niri"));
+        assert!(!should_disable_webkit_dmabuf(true, true, true, "KDE"));
     }
 
     #[test]
     fn webkit_dmabuf_not_touched_on_x11_session() {
         assert!(!should_disable_webkit_dmabuf(false, false, true, "niri"));
+        assert!(!should_disable_webkit_dmabuf(false, false, true, "KDE"));
     }
 }

@@ -43,6 +43,7 @@ where
     let mut content_parts: Vec<Value> = Vec::new(); // To accumulate parts
     let mut usage_metadata: Option<Value> = None;
     let mut finish_reason: Option<String> = None;
+    let mut line_buffer = bytes::BytesMut::new();
 
     while let Some(chunk_result) = stream.next().await {
         let chunk = chunk_result.map_err(|e| {
@@ -54,10 +55,13 @@ where
             )
             .client_message()
         })?;
-        let text = std::str::from_utf8(&chunk).unwrap_or(""); // Ignore invalid utf8 for simplicity or handle better
 
-        for line in text.lines() {
-            let line = line.trim();
+        line_buffer.extend_from_slice(&chunk);
+
+        while let Some(pos) = line_buffer.iter().position(|&b| b == b'\n') {
+            let line_raw = line_buffer.split_to(pos + 1);
+            let line_str = String::from_utf8_lossy(&line_raw);
+            let line = line_str.trim();
             if line.starts_with("data: ") {
                 let json_part = line.trim_start_matches("data: ").trim();
                 if json_part == "[DONE]" {

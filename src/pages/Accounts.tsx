@@ -44,6 +44,7 @@ function Accounts() {
     accounts,
     currentAccount,
     fetchAccounts,
+    fetchCurrentAccount,
     addAccount,
     deleteAccount,
     deleteAccounts,
@@ -240,7 +241,8 @@ function Accounts() {
 
   useEffect(() => {
     fetchAccounts();
-  }, []);
+    fetchCurrentAccount();
+  }, [fetchAccounts, fetchCurrentAccount]);
 
   // Reset pagination when view mode changes to avoid empty pages or confusion
   useEffect(() => {

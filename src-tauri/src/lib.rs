@@ -127,12 +127,14 @@ fn credential_state(value: &str) -> &'static str {
 fn nvidia_proprietary_loaded() -> bool {
     std::path::Path::new("/dev/nvidia0").exists()
         || std::path::Path::new("/proc/driver/nvidia/version").exists()
+        || std::path::Path::new("/sys/module/nvidia").exists()
 }
 
 #[cfg(target_os = "linux")]
 fn configure_linux_graphics() {
     use linux_graphics::{
-        desktop_is_wlroots_family, should_disable_webkit_dmabuf, should_force_x11_backend,
+        desktop_is_kde, desktop_is_wlroots_family, should_disable_webkit_dmabuf,
+        should_force_x11_backend,
     };
 
     let is_wayland = is_wayland_session();
@@ -153,14 +155,17 @@ fn configure_linux_graphics() {
         has_x11_display,
         &desktop,
     ) {
-        // Force X11 backend under GNOME/KDE Wayland to avoid a GTK shm crash.
+        // Force X11 backend under GNOME/legacy Wayland to avoid a GTK shm crash.
         std::env::set_var("GDK_BACKEND", "x11");
         warn!(
             "Forcing GDK_BACKEND=x11 for stability on Wayland. Set ANTIGRAVITY_FORCE_WAYLAND=1 to keep Wayland backend."
         );
-    } else if is_wayland && !gdk_already_set && desktop_is_wlroots_family(&desktop) {
+    } else if is_wayland
+        && !gdk_already_set
+        && (desktop_is_wlroots_family(&desktop) || desktop_is_kde(&desktop))
+    {
         info!(
-            "Keeping native Wayland GDK backend on {} (Xwayland DISPLAY is not a reason to force X11).",
+            "Keeping native Wayland GDK backend on {} (avoiding Xwayland WebKitGTK frame freeze / black window).",
             desktop
         );
     }
@@ -831,6 +836,10 @@ pub fn run() {
             commands::query_transit_info,
             // Patch commands
             commands::patch_agy_binary,
+            commands::list_claude_installations,
+            commands::check_claude_cowork_patch,
+            commands::apply_claude_cowork_patch,
+            commands::revert_claude_cowork_patch,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

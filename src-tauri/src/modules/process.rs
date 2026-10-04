@@ -13,6 +13,19 @@ fn get_current_exe_path() -> Option<std::path::PathBuf> {
         .and_then(|p| p.canonicalize().ok())
 }
 
+/// 判断字符串是否匹配 Antigravity IDE 特征（严格包含空格、中划线与下划线三种命名变体）
+pub fn is_antigravity_ide_str(s: &str) -> bool {
+    let lower = s.to_lowercase();
+    lower.contains("antigravity ide")
+        || lower.contains("antigravity-ide")
+        || lower.contains("antigravity_ide")
+}
+
+/// 判断文件路径是否指向 Antigravity IDE 实例
+pub fn is_antigravity_ide_path(p: &std::path::Path) -> bool {
+    is_antigravity_ide_str(&p.to_string_lossy())
+}
+
 /// Helper to extract executable paths of Antigravity IDE instances
 /// Uses config path as primary, and falls back to cmd() arg scanning (works on macOS/Linux)
 fn get_ide_exe_paths(system: &System) -> std::collections::HashSet<String> {
@@ -38,7 +51,7 @@ fn get_ide_exe_paths(system: &System) -> std::collections::HashSet<String> {
             .collect::<Vec<String>>()
             .join(" ");
 
-        if args_str.contains("antigravity ide") || args_str.contains("antigravity-ide") {
+        if is_antigravity_ide_str(&args_str) {
             if let Some(exe_path) = process.exe().and_then(|p| p.to_str()) {
                 immune_exe_paths.insert(exe_path.to_lowercase());
             }
@@ -224,20 +237,16 @@ pub fn is_antigravity_running(target_ide: Option<&str>) -> bool {
 
         // Check if the process matches target_ide
         let is_ide_match = if target_ide == Some("ide") {
-            exe_path.contains("antigravity ide")
-                || exe_path.contains("antigravity-ide")
-                || name.contains("antigravity ide")
-                || name.contains("antigravity-ide")
+            is_antigravity_ide_str(&exe_path)
+                || is_antigravity_ide_str(&name)
                 || ide_exe_paths.contains(&exe_path)
         } else {
             if ide_exe_paths.contains(&exe_path) {
                 false // Explicitly immune (it is an IDE)
             } else {
                 (exe_path.contains("antigravity") || name.contains("antigravity"))
-                    && !exe_path.contains("antigravity ide")
-                    && !exe_path.contains("antigravity-ide")
-                    && !name.contains("antigravity ide")
-                    && !name.contains("antigravity-ide")
+                    && !is_antigravity_ide_str(&exe_path)
+                    && !is_antigravity_ide_str(&name)
             }
         };
 
@@ -447,20 +456,16 @@ fn get_antigravity_pids(target_ide: Option<&str>) -> Vec<u32> {
 
         // Check if the process matches target_ide
         let is_ide_match = if target_ide == Some("ide") {
-            exe_path.contains("antigravity ide")
-                || exe_path.contains("antigravity-ide")
-                || name.contains("antigravity ide")
-                || name.contains("antigravity-ide")
+            is_antigravity_ide_str(&exe_path)
+                || is_antigravity_ide_str(&name)
                 || ide_exe_paths.contains(&exe_path)
         } else {
             if ide_exe_paths.contains(&exe_path) {
                 false // Explicitly immune (it is an IDE)
             } else {
                 (exe_path.contains("antigravity") || name.contains("antigravity"))
-                    && !exe_path.contains("antigravity ide")
-                    && !exe_path.contains("antigravity-ide")
-                    && !name.contains("antigravity ide")
-                    && !name.contains("antigravity-ide")
+                    && !is_antigravity_ide_str(&exe_path)
+                    && !is_antigravity_ide_str(&name)
             }
         };
 
@@ -496,8 +501,7 @@ pub fn sweep_orphan_language_servers() {
 
         if (name.contains("language_server") || exe_path.contains("language_server"))
             && exe_path.contains("antigravity")
-            && !exe_path.contains("antigravity ide")
-            && !exe_path.contains("antigravity-ide")
+            && !is_antigravity_ide_str(&exe_path)
         {
             let pid_u32 = pid.as_u32();
             crate::modules::logger::log_info(&format!(
@@ -1236,8 +1240,7 @@ pub fn start_antigravity_with_fallback_path(
     #[cfg(target_os = "macos")]
     {
         // Improvement: Use output() to wait for open command completion and capture "app not found" error
-        let detected = get_antigravity_executable_path(target_ide)
-            .or_else(|| get_antigravity_executable_path(None));
+        let detected = get_antigravity_executable_path(target_ide);
 
         let app_target = if let Some(ref d) = detected {
             d.to_string_lossy().to_string()
@@ -1284,8 +1287,7 @@ pub fn start_antigravity_with_fallback_path(
     #[cfg(not(target_os = "macos"))]
     {
         // Windows/Linux Auto-detection and Startup
-        let detected = get_antigravity_executable_path(target_ide)
-            .or_else(|| get_antigravity_executable_path(None));
+        let detected = get_antigravity_executable_path(target_ide);
 
         if let Some(detected_path) = detected {
             let mut cmd = Command::new(&detected_path);
@@ -1373,16 +1375,11 @@ fn get_process_info(target_ide: Option<&str>) -> (Option<std::path::PathBuf>, Op
 
             // Is the process a match for target_ide?
             let is_ide_match = if target_ide == Some("ide") {
-                exe_path.contains("antigravity ide")
-                    || exe_path.contains("antigravity-ide")
-                    || name.contains("antigravity ide")
-                    || name.contains("antigravity-ide")
+                is_antigravity_ide_str(&exe_path) || is_antigravity_ide_str(&name)
             } else {
                 (exe_path.contains("antigravity") || name.contains("antigravity"))
-                    && !exe_path.contains("antigravity ide")
-                    && !exe_path.contains("antigravity-ide")
-                    && !name.contains("antigravity ide")
-                    && !name.contains("antigravity-ide")
+                    && !is_antigravity_ide_str(&exe_path)
+                    && !is_antigravity_ide_str(&name)
             };
 
             if is_ide_match && !is_helper {
@@ -1524,14 +1521,8 @@ pub fn get_antigravity_executable_path(target_ide: Option<&str>) -> Option<std::
 fn check_standard_locations(target_ide: Option<&str>) -> Option<std::path::PathBuf> {
     let folder_names: &[&str] = if target_ide == Some("ide") {
         &["Antigravity IDE"]
-    } else if target_ide == Some("code")
-        || target_ide == Some("cursor")
-        || target_ide == Some("classic")
-    {
-        &["Antigravity"]
     } else {
-        // target_ide = None: 优先查找 Antigravity 经典版，回退查找 Antigravity IDE
-        &["Antigravity", "Antigravity IDE"]
+        &["Antigravity"]
     };
 
     #[cfg(target_os = "macos")]
@@ -1555,19 +1546,17 @@ fn check_standard_locations(target_ide: Option<&str>) -> Option<std::path::PathB
         // PATH 探测 (macOS)
         let exe_names: &[&str] = if target_ide == Some("ide") {
             &["antigravity-ide", "antigravity_ide"]
-        } else if target_ide == Some("classic")
-            || target_ide == Some("code")
-            || target_ide == Some("cursor")
-        {
-            &["antigravity"]
         } else {
-            &["antigravity", "antigravity-ide", "antigravity_ide"]
+            &["antigravity"]
         };
         if let Ok(path_var) = std::env::var("PATH") {
             for p in std::env::split_paths(&path_var) {
                 for exe in exe_names {
                     let p_cmd = p.join(exe);
                     if p_cmd.exists() {
+                        if target_ide != Some("ide") && is_antigravity_ide_path(&p_cmd) {
+                            continue;
+                        }
                         return Some(p_cmd);
                     }
                 }
@@ -1655,24 +1644,17 @@ fn check_standard_locations(target_ide: Option<&str>) -> Option<std::path::PathB
                 "antigravity-ide.exe",
                 "antigravity_ide.exe",
             ]
-        } else if target_ide == Some("classic")
-            || target_ide == Some("code")
-            || target_ide == Some("cursor")
-        {
-            &["Antigravity.exe", "antigravity.exe"]
         } else {
-            &[
-                "Antigravity.exe",
-                "antigravity.exe",
-                "Antigravity IDE.exe",
-                "antigravity-ide.exe",
-            ]
+            &["Antigravity.exe", "antigravity.exe"]
         };
         if let Ok(path_var) = std::env::var("PATH") {
             for p in std::env::split_paths(&path_var) {
                 for exe in path_exe_names {
                     let p_cmd = p.join(exe);
                     if p_cmd.exists() {
+                        if target_ide != Some("ide") && is_antigravity_ide_path(&p_cmd) {
+                            continue;
+                        }
                         return Some(p_cmd);
                     }
                 }
@@ -1695,6 +1677,9 @@ fn check_standard_locations(target_ide: Option<&str>) -> Option<std::path::PathB
                     for p in std::env::split_paths(&path_var) {
                         let p_cmd = p.join(exe_name);
                         if p_cmd.exists() {
+                            if target_ide != Some("ide") && is_antigravity_ide_path(&p_cmd) {
+                                continue;
+                            }
                             return Some(p_cmd);
                         }
                     }
@@ -1908,5 +1893,27 @@ mod tests {
         assert!(!cleaned.contains(&"--subclient_type".to_string()));
         assert!(cleaned.contains(&"--user-data-dir=/tmp/test".to_string()));
         assert!(cleaned.contains(&"/path/to/project".to_string()));
+    }
+
+    #[test]
+    fn test_check_standard_locations_isolation() {
+        // [FIX #3253] 经典版与默认探测绝不能匹配 Antigravity IDE
+        if let Some(path) = check_standard_locations(Some("classic")) {
+            let path_str = path.to_string_lossy();
+            assert!(
+                !is_antigravity_ide_str(&path_str),
+                "Classic search must never return Antigravity IDE path: {:?}",
+                path
+            );
+        }
+
+        if let Some(path) = check_standard_locations(None) {
+            let path_str = path.to_string_lossy();
+            assert!(
+                !is_antigravity_ide_str(&path_str),
+                "Default search must never fall back to Antigravity IDE path: {:?}",
+                path
+            );
+        }
     }
 }

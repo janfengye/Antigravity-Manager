@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> 专业级 AI 账号管理与协议代理系统 (v4.9.1)
+> 专业级 AI 账号管理与协议代理系统 (v4.9.4)
 
 <div align="center">
   <img src="public/icon.png" width="100" height="100" alt="Antigravity Tools Logo">
@@ -11,7 +11,7 @@
       <img src="https://img.shields.io/github/v/release/lbjlaq/Antigravity-Manager?color=blue&style=flat-square" alt="GitHub release">
     </a>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.9.1-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.9.4-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -488,7 +488,7 @@ response = client.chat.completions.create(
 
 ## 📝 更新日志
 
-> 最新版本 **v4.9.1**（2026-10-02）：修复 `gemini-3.1-flash-lite` 误重定向至已故 2.5 系列导致 503 报错的严重问题并恢复健康直传，将后台摘要压缩任务重定向至存活轻量模型，从公开目录清理 2.5 全系列并平滑重定向至 `gemini-3.6-flash-medium`（Fixes #3577，感谢 @Xyloz3n）；收紧下游 SSE 流式思考心跳至 3 秒防止长推理提前断开连接（PR #3578，感谢 @EricZhou05）。
+> 最新版本 **v4.9.4**（2026-10-04）：引入自适应思考预算协商状态机与意图识别架构，废除过早 return 旁路，从协议根源上彻底解决 `maxOutputTokens <= thinkingBudget` 引发的 Google 400 违背报错；首创 6 倍反差极速意图识别（当思考预算 `t >= 6 * m` 时自动压缩预算秒回，杜绝轻量问答被深度思考拖慢），常规深度推理在官方容量足够时优先智能扩充总输出预算以保全用户思考智商，超大预算触顶时收敛留出 1024 正文空间兜底（PR #3599，感谢 @cubelikeplayDaniel）；全面继承 4.9.3 底层 HTTP/2 稳态重构与 Chrome 123 基线回归，终结长任务自杀断流。
 
 👉 **[查看完整更新日志 CHANGELOG.md →](CHANGELOG.md)**
 

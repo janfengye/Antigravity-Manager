@@ -168,10 +168,63 @@ where
     deserializer.deserialize_any(Visitor)
 }
 
+/// 官方已知的分档后缀标识符
+pub const KNOWN_TIER_SUFFIXES: &[&str] = &[
+    "tiered",
+    "max",
+    "xhigh",
+    "high",
+    "medium",
+    "default",
+    "low",
+    "extra-low",
+    "lite",
+];
+
 /// 官方模型目录管理器（支持动态解析与运行时增量更新）
 pub struct OfficialModelCatalog;
 
 impl OfficialModelCatalog {
+    /// 从官方模型目录中动态收集属于指定 base 模型的所有可用档位后缀（如 ["tiered", "high", "medium", "low"]）
+    pub fn collect_tiers_for_base(base: &str) -> Vec<String> {
+        let base_lower = base.trim().to_lowercase();
+        let mut found = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+
+        // 1. 探测已知标准档位标识符（支持别名解析与映射匹配）
+        for tier in KNOWN_TIER_SUFFIXES {
+            let candidate = format!("{}-{}", base_lower, tier);
+            if Self::get(&candidate).is_some() {
+                if seen.insert(tier.to_string()) {
+                    found.push(tier.to_string());
+                }
+            }
+        }
+
+        // 2. 动态扫描目录中任意以 `{base}-` 开头的新型档位
+        if let Ok(lock) = DYNAMIC_CATALOG.read() {
+            let prefix = format!("{}-", base_lower);
+            for key in lock.keys() {
+                let k_lower = key.to_lowercase();
+                if let Some(suffix) = k_lower.strip_prefix(&prefix) {
+                    let s = suffix.trim();
+                    if !s.is_empty()
+                        && !s.contains('@')
+                        && !s.contains('/')
+                        && !s.contains(':')
+                        && s.chars().all(|c| c.is_alphanumeric() || c == '-')
+                    {
+                        if seen.insert(s.to_string()) {
+                            found.push(s.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        found
+    }
+
     /// 运行时动态更新官方模型目录 (由 fetchAvailableModels 接口返回数据触发)
     pub fn update(models: HashMap<String, OfficialModelInfo>) {
         if let Ok(mut lock) = DYNAMIC_CATALOG.write() {
@@ -269,6 +322,7 @@ mod tests {
     #[test]
     fn flexible_string_accepts_string_number_and_null() {
         #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
         struct Sample {
             #[serde(default, deserialize_with = "de_flexible_string")]
             thinking_level: Option<String>,

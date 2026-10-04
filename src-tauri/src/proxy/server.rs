@@ -5,13 +5,12 @@ use axum::{
     extract::{DefaultBodyLimit, Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{Html, IntoResponse, Json, Response},
-    routing::{any, delete, get, post},
+    routing::{delete, get, post},
     Router,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex, OnceLock};
 use tokio::sync::{watch, RwLock};
 use tracing::{debug, error};
@@ -529,6 +528,10 @@ impl AxumServer {
 
         // Start health check loop
         proxy_pool_manager.clone().start_health_check_loop();
+
+        // 启动 TokenManager 后台维护（主动预刷新与限流自动清理）
+        token_manager.start_auto_cleanup().await;
+
         let security_state = Arc::new(RwLock::new(security_config));
         let experimental_state = Arc::new(RwLock::new(experimental_config));
         let debug_logging_state = Arc::new(RwLock::new(debug_logging));
