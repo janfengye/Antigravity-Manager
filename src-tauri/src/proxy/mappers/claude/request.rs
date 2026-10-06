@@ -1815,8 +1815,7 @@ fn build_generation_config(
         .output_config
         .as_ref()
         .and_then(|c| c.effort.as_ref())
-        .or_else(|| claude_req.thinking.as_ref().and_then(|t| t.effort.as_ref()))
-        .or_else(|| tb_config.effort.as_ref());
+        .or_else(|| claude_req.thinking.as_ref().and_then(|t| t.effort.as_ref()));
 
     let client_effort = effort.map(|s| s.as_str());
     let client_budget = claude_req

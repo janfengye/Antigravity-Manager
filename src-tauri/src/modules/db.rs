@@ -34,7 +34,7 @@ pub fn get_all_candidate_db_paths(target_ide: Option<&str>) -> Vec<PathBuf> {
     }
 
     let folder_names: &[&str] = if target_ide == Some("ide") {
-        &["Antigravity IDE"]
+        &["Antigravity IDE", "antigravity-ide", "antigravity_ide"]
     } else {
         // target_ide = None 或 classic / code / cursor: 严格使用 Antigravity，严禁回退至 Antigravity IDE
         &["Antigravity"]
@@ -277,4 +277,47 @@ pub fn write_service_machine_id(
     ));
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ide_candidate_db_paths_includes_all_naming_variants() {
+        let ide_candidates = get_all_candidate_db_paths(Some("ide"));
+        let path_strings: Vec<String> = ide_candidates
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+
+        // 验证候选路径包含三种标准命名变体：空格、中划线与下划线
+        let has_space_variant = path_strings.iter().any(|s| s.contains("Antigravity IDE"));
+        let has_kebab_variant = path_strings.iter().any(|s| s.contains("antigravity-ide"));
+        let has_snake_variant = path_strings.iter().any(|s| s.contains("antigravity_ide"));
+
+        assert!(
+            has_space_variant,
+            "IDE candidates must include 'Antigravity IDE'"
+        );
+        assert!(
+            has_kebab_variant,
+            "IDE candidates must include kebab-case 'antigravity-ide'"
+        );
+        assert!(
+            has_snake_variant,
+            "IDE candidates must include snake-case 'antigravity_ide'"
+        );
+
+        // 验证严格隔离：针对 IDE 目标绝不包含纯经典版 'Antigravity/User/globalStorage' 路径
+        for p in &path_strings {
+            let is_classic = p.ends_with("Antigravity/User/globalStorage/state.vscdb")
+                || p.ends_with("Antigravity\\User\\globalStorage\\state.vscdb");
+            assert!(
+                !is_classic,
+                "IDE candidate paths must not contain classic Antigravity path: {}",
+                p
+            );
+        }
+    }
 }

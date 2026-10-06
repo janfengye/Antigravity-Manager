@@ -54,6 +54,10 @@ fn classify_rate_limit_reason(error_body: &str) -> crate::proxy::rate_limit::Rat
 }
 
 const IMAGE_ACCOUNT_RESELECT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
+/// project_id 探测失败/超时时的回退值
+const DEFAULT_PROJECT_ID: &str = "bamboo-precept-lgxtn";
+/// project_id 探测失败后的负缓存时长
+const PROJECT_ID_NEGATIVE_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(300);
 
 async fn wait_for_image_account_change(
     changes: &mut tokio::sync::watch::Receiver<u64>,
@@ -155,6 +159,12 @@ pub struct TokenManager {
     // [NEW] 记录账号连续 invalid_grant 失败次数，防止单次偶发网络抖动误停用账号
     invalid_grant_failures: Arc<DashMap<String, u32>>,
 
+    // 按账号分配的 project_id 探测锁，与 refresh_locks 分离，避免被后台 OAuth 刷新阻塞而误触超时
+    project_id_locks: Arc<DashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+
+    // project_id 探测失败的负缓存 (account_id -> 失败时刻)，TTL 内直接回退默认值，避免每次请求承受探测延迟
+    project_id_failures: Arc<DashMap<String, std::time::Instant>>,
+
     /// 支持优雅关闭时主动 abort 后台任务
     auto_cleanup_handle: Arc<tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
     proactive_refresh_handle: Arc<tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
@@ -194,6 +204,8 @@ impl TokenManager {
             )),
             refresh_locks: Arc::new(DashMap::new()),
             invalid_grant_failures: Arc::new(DashMap::new()),
+            project_id_locks: Arc::new(DashMap::new()),
+            project_id_failures: Arc::new(DashMap::new()),
             auto_cleanup_handle: Arc::new(tokio::sync::Mutex::new(None)),
             proactive_refresh_handle: Arc::new(tokio::sync::Mutex::new(None)),
             cancel_token: CancellationToken::new(),
@@ -482,12 +494,16 @@ impl TokenManager {
                     let is_grant_error =
                         e.contains("\"invalid_grant\"") || e.contains("invalid_grant");
                     if is_grant_error {
-                        let mut fail_count = self
-                            .invalid_grant_failures
-                            .entry(account_id.to_string())
-                            .or_insert(0);
-                        *fail_count += 1;
-                        let current_fails = *fail_count;
+                        // 计数后立即释放 DashMap 分片写锁：后续 disable_account().await 与
+                        // remove() 会再次访问同一分片，持锁跨越将导致自死锁
+                        let current_fails = {
+                            let mut fail_count = self
+                                .invalid_grant_failures
+                                .entry(account_id.to_string())
+                                .or_insert(0);
+                            *fail_count += 1;
+                            *fail_count
+                        };
                         if current_fails >= 2 {
                             tracing::error!(
                                 "账号 {} 连续 {} 次确认为 invalid_grant，正式执行停用",
@@ -545,8 +561,12 @@ impl TokenManager {
             }
         }
 
-        let refresh_mu = self
-            .refresh_locks
+        if self.is_project_id_negatively_cached(account_id) {
+            return DEFAULT_PROJECT_ID.to_string();
+        }
+
+        let resolve_mu = self
+            .project_id_locks
             .entry(account_id.to_string())
             .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
             .clone();
@@ -556,9 +576,12 @@ impl TokenManager {
         let write_path = account_path.to_path_buf();
 
         let resolve_op = async {
-            let _guard = refresh_mu.lock().await;
+            let _guard = resolve_mu.lock().await;
 
-            // 获取锁后进行 Double-Check
+            // 获取锁后进行 Double-Check (含负缓存：等锁期间其他请求可能刚刚探测失败)
+            if self.is_project_id_negatively_cached(&acct_id) {
+                return DEFAULT_PROJECT_ID.to_string();
+            }
             let current_access_token = if let Some(entry) = self.tokens.get(&acct_id) {
                 if let Some(ref pid) = entry.project_id {
                     let trimmed = pid.trim();
@@ -575,6 +598,7 @@ impl TokenManager {
             match fetch_fut.await {
                 Ok(pid) => {
                     let trimmed = pid.trim().to_string();
+                    self.project_id_failures.remove(&acct_id);
                     if let Some(mut entry) = self.tokens.get_mut(&acct_id) {
                         entry.project_id = Some(trimmed.clone());
                     }
@@ -603,7 +627,9 @@ impl TokenManager {
                         e,
                         acct_id
                     );
-                    "bamboo-precept-lgxtn".to_string()
+                    self.project_id_failures
+                        .insert(acct_id.clone(), std::time::Instant::now());
+                    DEFAULT_PROJECT_ID.to_string()
                 }
             }
         };
@@ -616,9 +642,23 @@ impl TokenManager {
                     timeout_duration,
                     account_id
                 );
-                "bamboo-precept-lgxtn".to_string()
+                self.project_id_failures
+                    .insert(account_id.to_string(), std::time::Instant::now());
+                DEFAULT_PROJECT_ID.to_string()
             }
         }
+    }
+
+    /// project_id 负缓存是否仍在 TTL 内；过期条目顺带清理
+    fn is_project_id_negatively_cached(&self, account_id: &str) -> bool {
+        let expired = match self.project_id_failures.get(account_id) {
+            Some(failed_at) => failed_at.elapsed() >= PROJECT_ID_NEGATIVE_CACHE_TTL,
+            None => return false,
+        };
+        if expired {
+            self.project_id_failures.remove(account_id);
+        }
+        !expired
     }
 
     /// 从主应用账号目录加载所有账号
@@ -714,6 +754,10 @@ impl TokenManager {
         }
         self.health_scores.remove(account_id);
         self.rate_limit_tracker.clear(account_id);
+        self.refresh_locks.remove(account_id);
+        self.invalid_grant_failures.remove(account_id);
+        self.project_id_locks.remove(account_id);
+        self.project_id_failures.remove(account_id);
         self.session_accounts.retain(|_, v| v != account_id);
         if let Ok(mut preferred) = self.preferred_account_id.try_write() {
             if preferred.as_deref() == Some(account_id) {
@@ -1326,20 +1370,27 @@ impl TokenManager {
         let account: serde_json::Value = serde_json::from_str(&content).ok()?;
         let models = account.get("quota")?.get("models")?.as_array()?;
 
+        let mut legacy_claude_quota = None;
         for model in models {
             if let Some(name) = model.get("name").and_then(|v| v.as_str()) {
-                if crate::proxy::common::model_mapping::normalize_to_standard_id(name)
-                    .unwrap_or_else(|| name.to_string())
-                    == model_name
-                {
+                let norm = crate::proxy::common::model_mapping::normalize_to_standard_id(name)
+                    .unwrap_or_else(|| name.to_string());
+                if norm == model_name {
                     return model
+                        .get("percentage")
+                        .and_then(|v| v.as_i64())
+                        .map(|p| p as i32);
+                }
+                // 向后兼容：若查询特定 Claude 家族 (如 claude-opus) 且尚未精确命中，当存在历史统一的 "claude" 配额时暂存作为兜底
+                if model_name.starts_with("claude-") && (norm == "claude" || name == "claude") {
+                    legacy_claude_quota = model
                         .get("percentage")
                         .and_then(|v| v.as_i64())
                         .map(|p| p as i32);
                 }
             }
         }
-        None
+        legacy_claude_quota
     }
 
     fn get_available_models_from_json(account_path: &PathBuf) -> Option<HashSet<String>> {
@@ -2621,10 +2672,6 @@ impl TokenManager {
                                         )
                                         && !(quota_protection_enabled
                                             && t.protected_models.contains(&normalized_target))
-                                        && !self.rate_limit_tracker.is_rate_limited(
-                                            &t.account_id,
-                                            Some(&normalized_target),
-                                        )
                                 });
 
                                 if let Some(t) = final_token {
@@ -2640,7 +2687,33 @@ impl TokenManager {
                                 }
                             }
                         } else {
-                            return Err(format!("All accounts limited. Wait {}s.", wait_sec));
+                            // [FIX #3506] 当最小等待时间 > 2s 时，不进行阻塞式 sleep 缓冲（避免客户端请求超时）。
+                            // 但若全池仅被瞬态速率限制（RateLimitExceeded）锁定而无周配额耗尽硬伤时，
+                            // 立即执行 Layer 2 乐观重置清除瞬态流控标记，严禁直接返回 503 导致整池雪崩瘫痪。
+                            tracing::warn!(
+                                "All accounts limited with wait {}s > 2s. Attempting optimistic reset for transient rate limits...",
+                                wait_sec
+                            );
+                            self.rate_limit_tracker.clear_for_optimistic_reset();
+                            let final_token = tokens_snapshot.iter().find(|t| {
+                                !attempted.contains(&t.account_id)
+                                    && !self
+                                        .rate_limit_tracker
+                                        .is_rate_limited(&t.account_id, Some(&normalized_target))
+                                    && !(quota_protection_enabled
+                                        && t.protected_models.contains(&normalized_target))
+                            });
+
+                            if let Some(t) = final_token {
+                                tracing::info!(
+                                    "✅ Optimistic reset successful for wait {}s! Rescued available account: {}",
+                                    wait_sec,
+                                    t.email
+                                );
+                                t.clone()
+                            } else {
+                                return Err(format!("All accounts limited. Wait {}s.", wait_sec));
+                            }
                         }
                     } else {
                         return Err("All accounts failed or unhealthy.".to_string());
@@ -3099,7 +3172,10 @@ impl TokenManager {
     /// 在请求成功完成后调用，将该账号的失败计数归零，
     /// 下次失败时从最短的锁定时间开始（智能限流）。
     pub fn mark_account_success(&self, account_id: &str) {
-        self.rate_limit_tracker.mark_success(account_id);
+        let resolved_id = self
+            .email_to_account_id(account_id)
+            .unwrap_or_else(|| account_id.to_string());
+        self.rate_limit_tracker.mark_success(&resolved_id);
     }
 
     /// 检查是否有可用的 Google 账号
@@ -4367,6 +4443,82 @@ mod tests {
                 ]}
             ]}
         })
+    }
+
+    #[test]
+    fn project_id_negative_cache_honors_ttl() {
+        let manager = TokenManager::new(PathBuf::new());
+        assert!(!manager.is_project_id_negatively_cached("acct"));
+
+        manager
+            .project_id_failures
+            .insert("acct".to_string(), std::time::Instant::now());
+        assert!(manager.is_project_id_negatively_cached("acct"));
+
+        let expired_at = std::time::Instant::now()
+            .checked_sub(PROJECT_ID_NEGATIVE_CACHE_TTL + Duration::from_secs(1))
+            .unwrap();
+        manager
+            .project_id_failures
+            .insert("acct".to_string(), expired_at);
+        assert!(!manager.is_project_id_negatively_cached("acct"));
+        assert!(!manager.project_id_failures.contains_key("acct"));
+    }
+
+    #[tokio::test]
+    async fn project_id_negative_cache_short_circuits_without_waiting_on_locks() {
+        let manager = TokenManager::new(PathBuf::new());
+        manager
+            .project_id_failures
+            .insert("acct".to_string(), std::time::Instant::now());
+
+        // 同时占住 OAuth 刷新锁与 project_id 探测锁：命中负缓存时不得等待任何一把锁
+        let refresh_mu = Arc::new(tokio::sync::Mutex::new(()));
+        manager
+            .refresh_locks
+            .insert("acct".to_string(), refresh_mu.clone());
+        let resolve_mu = Arc::new(tokio::sync::Mutex::new(()));
+        manager
+            .project_id_locks
+            .insert("acct".to_string(), resolve_mu.clone());
+        let _refresh_guard = refresh_mu.lock().await;
+        let _resolve_guard = resolve_mu.lock().await;
+
+        let pid = tokio::time::timeout(
+            Duration::from_millis(200),
+            manager.resolve_project_id_with_timeout(
+                "acct",
+                "token",
+                std::path::Path::new("/nonexistent/acct.json"),
+                Duration::from_secs(5),
+            ),
+        )
+        .await
+        .expect("negative cache hit must not block");
+        assert_eq!(pid, DEFAULT_PROJECT_ID);
+    }
+
+    #[test]
+    fn remove_account_clears_per_account_lock_and_failure_state() {
+        let manager = TokenManager::new(PathBuf::new());
+        let id = "acct".to_string();
+        manager
+            .refresh_locks
+            .insert(id.clone(), Arc::new(tokio::sync::Mutex::new(())));
+        manager.invalid_grant_failures.insert(id.clone(), 1);
+        manager
+            .project_id_locks
+            .insert(id.clone(), Arc::new(tokio::sync::Mutex::new(())));
+        manager
+            .project_id_failures
+            .insert(id.clone(), std::time::Instant::now());
+
+        manager.remove_account(&id);
+
+        assert!(!manager.refresh_locks.contains_key(&id));
+        assert!(!manager.invalid_grant_failures.contains_key(&id));
+        assert!(!manager.project_id_locks.contains_key(&id));
+        assert!(!manager.project_id_failures.contains_key(&id));
     }
 
     #[tokio::test]
@@ -6283,6 +6435,175 @@ mod tests {
         assert_eq!(
             fallback_token, "token1",
             "账号 2 发生单模型临时熔断后，调度器必须自动避开账号 2"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_optimistic_reset_rescues_all_accounts_transiently_rate_limited() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let manager = TokenManager::new(temp_dir.path().to_path_buf());
+
+        let mut quotas = HashMap::new();
+        quotas.insert("gemini-3-pro-high".to_string(), 100);
+        let mut limits = HashMap::new();
+        limits.insert("gemini-3-pro-high".to_string(), 64000);
+
+        let token1 = ProxyToken {
+            account_id: "acc_transient_1".to_string(),
+            access_token: "token1".to_string(),
+            refresh_token: "refresh1".to_string(),
+            expires_in: 3600,
+            timestamp: chrono::Utc::now().timestamp() + 3600,
+            email: "acc1@example.com".to_string(),
+            account_path: temp_dir.path().join("acc1.json"),
+            project_id: None,
+            subscription_tier: Some("PRO".to_string()),
+            remaining_quota: Some(100),
+            priority: 0,
+            protected_models: HashSet::new(),
+            health_score: 1.0,
+            reset_time: None,
+            validation_blocked: false,
+            validation_blocked_until: 0,
+            validation_url: None,
+            model_quotas: quotas,
+            model_limits: limits,
+        };
+
+        std::fs::write(
+            &token1.account_path,
+            serde_json::json!({"disabled": false}).to_string(),
+        )
+        .unwrap();
+
+        manager.tokens.insert(token1.account_id.clone(), token1);
+
+        // 模拟遭遇单次 429 导致账号被锁定 5 秒 (wait_sec = 5 > 2s)
+        manager.rate_limit_tracker.parse_from_error(
+            "acc_transient_1",
+            429,
+            None,
+            r#"{"error":{"code":429,"message":"Resource has been exhausted (e.g. check quota)."}}"#,
+            Some("gemini-3-pro-high".to_string()),
+            &[60, 300],
+        );
+
+        assert!(manager
+            .rate_limit_tracker
+            .is_rate_limited("acc_transient_1", Some("gemini-3-pro-high")));
+        let wait = manager
+            .rate_limit_tracker
+            .get_remaining_wait("acc_transient_1", Some("gemini-3-pro-high"));
+        assert!(
+            wait > 2,
+            "Wait must be > 2s to test Layer 2 optimistic reset trigger"
+        );
+
+        // [Issue #3506 核心断言] 发起新请求时，TokenManager 检测到全池受限但仅为瞬态 RateLimitExceeded，
+        // 必须成功触发乐观重置并解救账号，严禁直接抛出 503 "All accounts limited"
+        let res = manager
+            .get_token("gemini", false, None, "gemini-3.1-pro-high")
+            .await;
+        assert!(
+            res.is_ok(),
+            "Optimistic reset must rescue transiently rate limited account instead of returning 503 error"
+        );
+        let (token_str, _, _, _, _) = res.unwrap();
+        assert_eq!(token_str, "token1");
+    }
+
+    #[tokio::test]
+    async fn test_mark_account_success_resolves_email_and_resets_tracker() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let manager = TokenManager::new(temp_dir.path().to_path_buf());
+
+        let token = ProxyToken {
+            account_id: "acc_tracked_1".to_string(),
+            access_token: "token1".to_string(),
+            refresh_token: "refresh1".to_string(),
+            expires_in: 3600,
+            timestamp: chrono::Utc::now().timestamp() + 3600,
+            email: "dev@example.com".to_string(),
+            account_path: temp_dir.path().join("acc.json"),
+            project_id: None,
+            subscription_tier: Some("PRO".to_string()),
+            remaining_quota: Some(100),
+            priority: 0,
+            protected_models: HashSet::new(),
+            health_score: 1.0,
+            reset_time: None,
+            validation_blocked: false,
+            validation_blocked_until: 0,
+            validation_url: None,
+            model_quotas: HashMap::new(),
+            model_limits: HashMap::new(),
+        };
+
+        manager.tokens.insert(token.account_id.clone(), token);
+
+        // 记录失败导致锁定与递增 failure_counts
+        manager.rate_limit_tracker.parse_from_error(
+            "acc_tracked_1",
+            429,
+            None,
+            r#"{"error":{"code":429,"message":"Resource exhausted"}}"#,
+            None,
+            &[60, 300],
+        );
+
+        assert!(manager
+            .rate_limit_tracker
+            .is_rate_limited("acc_tracked_1", None));
+
+        // 关键断言：即使上游调用者传入的是 email，mark_account_success 也必须能将其防御性解析为 account_id 并清除限制
+        manager.mark_account_success("dev@example.com");
+
+        assert!(
+            !manager.rate_limit_tracker.is_rate_limited("acc_tracked_1", None),
+            "Calling mark_account_success with email must resolve to account_id and clear tracker limit"
+        );
+    }
+
+    #[test]
+    fn test_sticky_session_failover_abandon_and_commit() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let manager = TokenManager::new(temp_dir.path().to_path_buf());
+
+        let session_id = "test-session-123";
+        let acc1 = "acc_failing";
+        let acc2 = "acc_healthy";
+
+        // 初始绑定到 acc1
+        manager.commit_session(session_id, acc1);
+        assert_eq!(
+            manager.session_accounts.get(session_id).unwrap().as_str(),
+            acc1
+        );
+
+        // CAS 放弃会话：如果不是 acc1，不能被误解绑
+        let abandoned_wrong = manager.abandon_session(session_id, "different_acc");
+        assert!(
+            !abandoned_wrong,
+            "CAS check must reject mismatching account"
+        );
+        assert_eq!(
+            manager.session_accounts.get(session_id).unwrap().as_str(),
+            acc1
+        );
+
+        // 匹配 acc1 时正常解除粘性
+        let abandoned_correct = manager.abandon_session(session_id, acc1);
+        assert!(
+            abandoned_correct,
+            "CAS check must succeed and unbind matching account"
+        );
+        assert!(manager.session_accounts.get(session_id).is_none());
+
+        // 故障转移到 acc2 成功后 commit
+        manager.commit_session(session_id, acc2);
+        assert_eq!(
+            manager.session_accounts.get(session_id).unwrap().as_str(),
+            acc2
         );
     }
 }

@@ -546,6 +546,58 @@ mod tests {
             Some(-1)
         );
 
+        // 5.1 具名后缀绝对优先级测试：
+        // 即使用户/客户端传入了 client_effort = "high"，具名模型 gemini-3.8-flash-medium 也必须返回 medium (4000) 或用户配的 medium！
+        assert_eq!(
+            resolve_custom_budget(
+                "gemini-3.8-flash-medium",
+                Some("high"),
+                None,
+                &tb_default,
+                None
+            ),
+            Some(4000)
+        );
+        assert_eq!(
+            resolve_custom_budget(
+                "gemini-3.8-flash-low",
+                Some("high"),
+                None,
+                &tb_default,
+                None
+            ),
+            Some(1000)
+        );
+
+        // 5.2 具名模型的 Default 模式回退测试：
+        // 当 flash_mode 为 Default 时，resolve_custom_budget 必须返回 None，以便回落至官方模型目录
+        let mut tb_system_default = tb_default.clone();
+        tb_system_default.flash_mode = ThinkingBudgetMode::Default;
+        assert_eq!(
+            resolve_custom_budget(
+                "gemini-3.8-flash-medium",
+                None,
+                None,
+                &tb_system_default,
+                None
+            ),
+            None
+        );
+        assert_eq!(
+            resolve_custom_budget("gemini-3.8-flash-low", None, None, &tb_system_default, None),
+            None
+        );
+        assert_eq!(
+            resolve_custom_budget(
+                "gemini-3.8-flash-high",
+                None,
+                None,
+                &tb_system_default,
+                None
+            ),
+            None
+        );
+
         // 6. Inbound pipeline 配置测试：-1 预算正确注入且 maxOutputTokens 不被截断
         let mut gc = json!({});
         InboundThinkingPipeline::configure_inbound_thinking(

@@ -217,15 +217,15 @@ fn test_adaptive_retry_multi_account_round_2_large_gap_rotates_if_more_than_two_
 }
 
 #[test]
-fn test_adaptive_retry_request_level_429_aborts_after_full_pool_rotation() {
+fn test_adaptive_retry_request_level_429_aborts_early_to_protect_remaining_accounts() {
     use crate::proxy::handlers::common::determine_retry_strategy_adaptive;
     // 请求级速率限制（无具体配额枯竭关键字，无明确重置时间）
     let request_level_429 =
         r#"{"error":{"code":429,"message":"Rate limit exceeded: too many concurrent requests."}}"#;
 
     let pool_size = 3;
-    // Round 1 (attempt 0, 1, 2): 允许全池 3 个账号各快速逃逸尝试一次 (50ms)
-    for attempt in 0..pool_size {
+    // 允许前 2 个账号快切逃逸尝试 (attempt 0, 1: 50ms)
+    for attempt in 0..2 {
         let s = determine_retry_strategy_adaptive(
             429,
             request_level_429,
@@ -243,25 +243,24 @@ fn test_adaptive_retry_request_level_429_aborts_after_full_pool_rotation() {
         );
     }
 
-    // attempt 3 (已完整尝试完整个 3 账号池): 判定为请求级流控扩散，终止第二轮重复轮换，保护账号池
+    // attempt 2: 达到请求级 429 逃逸上限 (min(pool_size, 2) = 2)，终止进一步轮换，保护第 3 个账号
     let s_abort =
-        determine_retry_strategy_adaptive(429, request_level_429, None, false, true, 3, pool_size);
+        determine_retry_strategy_adaptive(429, request_level_429, None, false, true, 2, pool_size);
     assert_eq!(s_abort, RetryStrategy::NoRetry);
 }
 
 #[test]
-fn test_adaptive_retry_google_resource_exhausted_rotates_full_pool_and_backs_off() {
+fn test_adaptive_retry_explicit_hard_quota_rotates_full_pool_and_backs_off() {
     use crate::proxy::handlers::common::determine_retry_strategy_adaptive;
-    // Google Gemini / Vertex 官方标准配额耗尽返回
-    let google_quota_429 =
-        r#"{"error":{"code":429,"message":"Resource has been exhausted (e.g. check quota)."}}"#;
+    // 明确的账号级硬配额耗尽返回（包含确切的配额耗尽关键字）
+    let hard_quota_429 = r#"{"error":{"code":429,"message":"You have exceeded your current quota. Please check your plan and billing details."}}"#;
 
     let pool_size = 3;
     // Round 1 (attempt 0, 1, 2): 账号级额度枯竭，全池快切寻找有额度账号
     for attempt in 0..pool_size {
         let s = determine_retry_strategy_adaptive(
             429,
-            google_quota_429,
+            hard_quota_429,
             None,
             false,
             true,
@@ -278,11 +277,48 @@ fn test_adaptive_retry_google_resource_exhausted_rotates_full_pool_and_backs_off
 
     // Round 2 (attempt 3): 全池账号均耗尽，激活第二轮温和退避 (2000ms)，绝不误杀为 NoRetry
     let s_round2 =
-        determine_retry_strategy_adaptive(429, google_quota_429, None, false, true, 3, pool_size);
+        determine_retry_strategy_adaptive(429, hard_quota_429, None, false, true, 3, pool_size);
     assert_eq!(
         s_round2,
         RetryStrategy::FixedDelay(Duration::from_millis(2000)),
         "Round 2 attempt 3 should enter gentle linear backoff"
+    );
+}
+
+#[test]
+fn test_adaptive_retry_google_resource_exhausted_aborts_early_to_protect_pool() {
+    use crate::proxy::handlers::common::determine_retry_strategy_adaptive;
+    // [Issue #3506] Google Gemini / Vertex 官方标准 429 报错（无明确重置时间与配额周期）
+    let google_quota_429 =
+        r#"{"error":{"code":429,"message":"Resource has been exhausted (e.g. check quota)."}}"#;
+
+    let pool_size = 5;
+    // Attempt 0: 允许首个账号尝试后快切
+    let s0 =
+        determine_retry_strategy_adaptive(429, google_quota_429, None, false, true, 0, pool_size);
+    assert_eq!(
+        s0,
+        RetryStrategy::FixedDelay(Duration::from_millis(50)),
+        "Attempt 0 should fast rotate"
+    );
+
+    // Attempt 1: 允许第 2 个账号尝试后快切
+    let s1 =
+        determine_retry_strategy_adaptive(429, google_quota_429, None, false, true, 1, pool_size);
+    assert_eq!(
+        s1,
+        RetryStrategy::FixedDelay(Duration::from_millis(50)),
+        "Attempt 1 should fast rotate"
+    );
+
+    // Attempt 2: 连续 2 个账号遭遇无明确延迟的通用 429，判定为请求级流控或恶性 Payload，
+    // 必须立即熔断返回 NoRetry，保护剩余 3 个健康账号不被级联锁定为 RateLimitExceeded
+    let s2 =
+        determine_retry_strategy_adaptive(429, google_quota_429, None, false, true, 2, pool_size);
+    assert_eq!(
+        s2,
+        RetryStrategy::NoRetry,
+        "Attempt 2 must abort to protect remaining accounts in pool from cascade lockout"
     );
 }
 

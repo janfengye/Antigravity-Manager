@@ -25,6 +25,13 @@ pub fn desktop_is_kde(xdg_current_desktop: &str) -> bool {
     })
 }
 
+pub fn desktop_is_gnome(xdg_current_desktop: &str) -> bool {
+    xdg_current_desktop.split(':').any(|part| {
+        let name = part.trim().to_ascii_lowercase();
+        name == "gnome"
+    })
+}
+
 pub fn should_force_x11_backend(
     gdk_backend_already_set: bool,
     force_x11: bool,
@@ -42,13 +49,15 @@ pub fn should_force_x11_backend(
     if force_wayland {
         return false;
     }
-    // Historical GTK Wayland shm workaround for GNOME/legacy desktops.
-    // Skip wlroots compositors and modern KDE Plasma — forcing X11 (Xwayland)
-    // there causes WebKitGTK to draw a black window or freeze frames (issues #3388, #3581).
+    // Historical GTK Wayland shm workaround for legacy environments.
+    // Modern Wayland compositors (wlroots, KDE Plasma, GNOME, etc.) run WebKitGTK natively.
+    // Forcing X11 (Xwayland) there causes WebKitGTK to draw a black window, freeze frame updates,
+    // or fail transparent window composition (issues #3388, #3581, #3605).
     is_wayland
         && has_x11_display
         && !desktop_is_wlroots_family(xdg_current_desktop)
         && !desktop_is_kde(xdg_current_desktop)
+        && !desktop_is_gnome(xdg_current_desktop)
 }
 
 pub fn should_disable_webkit_dmabuf(
@@ -63,12 +72,13 @@ pub fn should_disable_webkit_dmabuf(
     nvidia_loaded
         || desktop_is_wlroots_family(xdg_current_desktop)
         || desktop_is_kde(xdg_current_desktop)
+        || desktop_is_gnome(xdg_current_desktop)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        desktop_is_kde, desktop_is_wlroots_family, should_disable_webkit_dmabuf,
+        desktop_is_gnome, desktop_is_kde, desktop_is_wlroots_family, should_disable_webkit_dmabuf,
         should_force_x11_backend,
     };
 
@@ -109,6 +119,24 @@ mod tests {
     }
 
     #[test]
+    fn gnome_matches_known_desktops() {
+        for desktop in ["GNOME", "ubuntu:GNOME", "GNOME:classic"] {
+            assert!(
+                desktop_is_gnome(desktop),
+                "{desktop} should be recognized as GNOME",
+                desktop = desktop
+            );
+        }
+        for desktop in ["KDE", "plasma", "niri", "sway", "XFCE", ""] {
+            assert!(
+                !desktop_is_gnome(desktop),
+                "{desktop} should not be recognized as GNOME",
+                desktop = desktop
+            );
+        }
+    }
+
+    #[test]
     fn niri_with_xwayland_display_does_not_force_x11() {
         assert!(!should_force_x11_backend(
             false, false, false, true, true, "niri"
@@ -126,14 +154,24 @@ mod tests {
     }
 
     #[test]
-    fn gnome_wayland_with_display_still_forces_x11() {
-        assert!(should_force_x11_backend(
+    fn gnome_with_xwayland_display_does_not_force_x11() {
+        assert!(!should_force_x11_backend(
             false,
             false,
             false,
             true,
             true,
             "ubuntu:GNOME"
+        ));
+        assert!(!should_force_x11_backend(
+            false, false, false, true, true, "GNOME"
+        ));
+    }
+
+    #[test]
+    fn legacy_desktop_with_display_still_forces_x11() {
+        assert!(should_force_x11_backend(
+            false, false, false, true, true, "XFCE"
         ));
     }
 
@@ -155,12 +193,15 @@ mod tests {
     }
 
     #[test]
-    fn force_x11_wins_even_on_niri_and_kde() {
+    fn force_x11_wins_even_on_niri_kde_and_gnome() {
         assert!(should_force_x11_backend(
             false, true, false, true, true, "niri"
         ));
         assert!(should_force_x11_backend(
             false, true, false, true, true, "KDE"
+        ));
+        assert!(should_force_x11_backend(
+            false, true, false, true, true, "GNOME"
         ));
     }
 
@@ -181,8 +222,14 @@ mod tests {
     }
 
     #[test]
-    fn webkit_dmabuf_left_alone_on_gnome_amd() {
-        assert!(!should_disable_webkit_dmabuf(false, true, false, "GNOME"));
+    fn webkit_dmabuf_disabled_on_gnome_wayland() {
+        assert!(should_disable_webkit_dmabuf(false, true, false, "GNOME"));
+        assert!(should_disable_webkit_dmabuf(
+            false,
+            true,
+            false,
+            "ubuntu:GNOME"
+        ));
     }
 
     #[test]

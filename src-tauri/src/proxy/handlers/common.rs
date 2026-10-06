@@ -250,27 +250,31 @@ pub fn determine_retry_strategy_adaptive(
 
             // 3. 多账号模式 (pool_size > 1)：
             // 账号级硬配额枯竭检测：仅当没有提供重试延迟且包含确定性枯竭关键字时判定
-            // 正确包含 Google RPC 标准状态字与经典配额耗尽提示：
-            // RESOURCE_EXHAUSTED / Resource has been exhausted / Quota exceeded / quota_exhausted 等
+            // 包含明确的账号额度/周期枯竭字样（如 exceeded your current quota / insufficient_quota / weekly quota / credits 等）
+            // 注意：Google 标准通用 429 的 "resource has been exhausted (e.g. check quota)" 属于无明确延迟的通用流控/TPM拒绝，
+            // 严禁归入硬配额，否则将导致全池快速轮换遍历并引发全池 30 秒级联锁定 (#3506)。
             let is_hard_quota_exhausted = parsed_delay.is_none()
-                && (lower.contains("quota_exhausted")
-                    || lower.contains("exceeded your current quota")
+                && (lower.contains("exceeded your current quota")
                     || lower.contains("insufficient_quota")
                     || lower.contains("credits")
                     || lower.contains("zero_quota")
                     || lower.contains("weekly quota")
-                    || lower.contains("resource has been exhausted")
-                    || lower.contains("resource_exhausted")
-                    || lower.contains("quota exceeded"));
+                    || lower.contains("daily quota")
+                    || lower.contains("per day")
+                    || (lower.contains("quota_exhausted")
+                        && !lower.contains("resource has been exhausted")));
 
             // 请求级 429 防穿透保护 (无明确重置时间且非账号硬配额耗尽)：
-            // [FIX #3506] 若在完整尝试完全池所有账号 (attempt >= pool_size) 后依然遭遇请求级 429，
-            // 判定为该请求特定 Payload / IP 流控导致，立即终止进一步轮换，防止第二轮继续打穿全池导致全池锁定
+            // [FIX #3506] 若遭遇无明确重置时间的请求级 429，最多允许尝试 2 个账号快切逃逸（min(pool_size, 2)）。
+            // 连续 2 个账号失败说明该请求为恶性 Payload、超大 Token 或 IP/提供商级流控，
+            // 必须立即终止进一步轮换，严禁打穿全池导致全池健康账号被锁入 RateLimitExceeded。
             let is_request_level_429 = parsed_delay.is_none() && !is_hard_quota_exhausted;
-            if is_request_level_429 && attempt >= pool_size {
+            let request_level_429_max_attempts = pool_size.min(2);
+            if is_request_level_429 && attempt >= request_level_429_max_attempts {
                 tracing::warn!(
-                    "[Retry] Request-level 429 persisted across all {} accounts in pool without explicit delay; aborting further rotation to protect account pool.",
-                    pool_size
+                    "[Retry] Request-level 429 persisted across {} attempts without explicit delay; aborting further rotation to protect remaining {} accounts.",
+                    attempt,
+                    pool_size.saturating_sub(attempt)
                 );
                 return RetryStrategy::NoRetry;
             }

@@ -2388,6 +2388,8 @@ pub async fn handle_chat_completions(
         let status = response.status();
         if status.is_success() {
             token_manager.commit_session(&affinity_key, &account_id);
+            // [智能限流] 请求成功，重置该账号的连续失败计数
+            token_manager.mark_account_success(&account_id);
             // 5. 处理流式 vs 非流式
             if actual_stream {
                 use axum::body::Body;
@@ -4152,7 +4154,7 @@ pub async fn handle_completions(
         if status.is_success() {
             token_manager.commit_session(&affinity_key, &account_id);
             // [智能限流] 请求成功，重置该账号的连续失败计数
-            token_manager.mark_account_success(&email);
+            token_manager.mark_account_success(&account_id);
 
             if list_response {
                 use axum::body::Body;

@@ -1317,6 +1317,16 @@ pub fn list_accounts() -> Result<Vec<Account>, String> {
     Ok(accounts)
 }
 
+/// Resolve persisted CLI credentials without changing any client's login state.
+pub fn find_agy_account(accounts: Vec<Account>, refresh_token: &str) -> Result<Account, String> {
+    accounts
+        .into_iter()
+        .find(|account| !refresh_token.is_empty() && account.token.refresh_token == refresh_token)
+        .ok_or_else(|| {
+            "The agy keyring credentials do not match a managed account; import the current login before syncing.".into()
+        })
+}
+
 /// Add account
 pub fn add_account(
     email: String,

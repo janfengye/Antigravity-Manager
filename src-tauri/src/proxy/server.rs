@@ -3417,12 +3417,16 @@ async fn admin_sync_account_from_db(
         )
     })?;
     let current_target = index.current_target_ide.as_deref();
-    if current_target == Some("agy") {
-        return Ok(Json(None));
-    }
+    let is_agy = current_target == Some("agy");
 
     // 逻辑参考自 sync_account_from_db command
-    let db_refresh_token = match migration::get_refresh_token_from_db(current_target) {
+    let credential = if is_agy {
+        crate::modules::integration::read_from_system_keyring_only()
+            .map(|state| state.refresh_token)
+    } else {
+        migration::get_refresh_token_from_db(current_target)
+    };
+    let db_refresh_token = match credential {
         Ok(token) => token,
         Err(_e) => {
             return Ok(Json(None));
@@ -3441,14 +3445,25 @@ async fn admin_sync_account_from_db(
         }
     }
 
-    let account = migration::import_from_db(current_target)
-        .await
-        .map_err(|e| {
+    let account = if is_agy {
+        let accounts = account::list_accounts().map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse { error: e }),
             )
         })?;
+        account::find_agy_account(accounts, &db_refresh_token)
+            .map_err(|e| (StatusCode::BAD_REQUEST, Json(ErrorResponse { error: e })))?
+    } else {
+        migration::import_from_db(current_target)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse { error: e }),
+                )
+            })?
+    };
 
     let account_id = account.id.clone();
     account::set_current_account_id_with_target(&account_id, current_target).map_err(|e| {

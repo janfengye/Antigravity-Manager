@@ -517,6 +517,11 @@ impl DynamicTierRouter {
             clean.clone()
         };
 
+        // 1.5 过滤非活跃或未达基准线的模型（淘汰模型由系统映射重定向接管，不在此动态衍生）
+        if !crate::proxy::common::model_mapping::is_model_compliant_with_baseline(&base) {
+            return None;
+        }
+
         // 2. 动态收集属于该 base 模型的所有可用档位后缀
         let available_tiers = crate::models::OfficialModelCatalog::collect_tiers_for_base(&base);
 
@@ -584,7 +589,8 @@ pub fn resolve_bare_flash_route(model: &str, client_effort: Option<&str>) -> Opt
 pub fn normalize_client_thinking_level(effort: &str) -> Option<&'static str> {
     let clean = effort.trim().to_lowercase().replace('_', "-");
     match clean.as_str() {
-        "low" | "extra-low" | "min" | "minimal" | "lite" => Some("LOW"),
+        "low" | "extra-low" | "min" | "minimal" | "lite" | "flash-lite" | "disabled" | "off"
+        | "none" => Some("LOW"),
         "medium" | "normal" | "standard" => Some("MEDIUM"),
         "high" | "xhigh" | "x-high" | "max" | "extreme" => Some("HIGH"),
         _ => None,
@@ -661,17 +667,26 @@ pub fn resolve_custom_budget(
             return None;
         }
         let eff = client_effort.map(|s| s.trim().to_lowercase().replace('_', "-"));
-        let is_low = matches!(eff.as_deref(), Some("low") | Some("extra-low"))
-            || lower.contains("-low")
-            || lower.contains("haiku");
-        let is_med = matches!(eff.as_deref(), Some("medium") | Some("default"))
+        let has_explicit_suffix = lower.contains("-low")
+            || lower.contains("haiku")
             || lower.contains("-med")
-            || lower.contains("-medium");
-        let is_high = matches!(
-            eff.as_deref(),
-            Some("high") | Some("max") | Some("xhigh") | Some("x-high")
-        ) || lower.contains("-high")
+            || lower.contains("-medium")
+            || lower.contains("-high")
             || lower.contains("-max");
+
+        let is_low = lower.contains("-low")
+            || lower.contains("haiku")
+            || (!has_explicit_suffix && matches!(eff.as_deref(), Some("low") | Some("extra-low")));
+        let is_med = lower.contains("-med")
+            || lower.contains("-medium")
+            || (!has_explicit_suffix && matches!(eff.as_deref(), Some("medium") | Some("default")));
+        let is_high = lower.contains("-high")
+            || lower.contains("-max")
+            || (!has_explicit_suffix
+                && matches!(
+                    eff.as_deref(),
+                    Some("high") | Some("max") | Some("xhigh") | Some("x-high")
+                ));
 
         if is_low {
             if tb_config.claude_low > 0 {
@@ -711,9 +726,14 @@ pub fn resolve_custom_budget(
             return None;
         }
         let eff = client_effort.map(|s| s.trim().to_lowercase().replace('_', "-"));
+        let has_explicit_suffix = lower.contains("-low")
+            || lower.ends_with("-low")
+            || lower.contains("-high")
+            || lower.ends_with("-high");
+
         let is_low = lower.contains("-low")
             || lower.ends_with("-low")
-            || matches!(eff.as_deref(), Some("low") | Some("extra-low"));
+            || (!has_explicit_suffix && matches!(eff.as_deref(), Some("low") | Some("extra-low")));
 
         if is_low {
             if tb_config.pro_low > 0 {
@@ -775,43 +795,52 @@ pub fn resolve_custom_budget(
                 }
             }
         } else {
-            // [NON-TIERED FLASH] 具名非 Tiered 模型（如 gemini-3.8-flash-high, gemini-3.8-flash-low 等）：
-            // 根据模型自身后缀或 client_effort 匹配档位配置：
-            // 如果用户填写了自定义预算，则按自定义预算填写；如果没填或填了 -1，则走官方默认值！
+            // [NON-TIERED FLASH] 具名非 Tiered 模型（如 gemini-3.8-flash-high, gemini-3.8-flash-low, gemini-3.8-flash-medium 等）：
+            // 1. 若网关配置为 Default 默认模式，返回 None，交由 configure_inbound_thinking 回落到官方模型结构体默认值
+            if tb_config.flash_mode == ThinkingBudgetMode::Default {
+                return None;
+            }
+
+            // 2. 根据模型自身后缀或 client_effort 匹配档位配置：
+            // 模型名后缀（-low, -medium, -high）具有绝对最高优先级，仅在 bare 裸模型时才使用 client_effort 映射！
             let is_bare = is_bare_gemini_v3_flash(model);
             let eff_level = client_effort.and_then(normalize_client_thinking_level);
-            let is_high = if is_bare {
-                matches!(eff_level, Some("HIGH"))
-            } else {
-                lower.contains("-high")
-                    || lower.ends_with("-high")
-                    || lower.contains("-max")
-                    || lower.contains("agent")
-                    || matches!(eff_level, Some("HIGH"))
-            };
-            let is_low = if is_bare {
-                matches!(eff_level, Some("LOW"))
-            } else {
-                lower.contains("-low")
-                    || lower.ends_with("-low")
-                    || lower.contains("-extra-low")
-                    || matches!(eff_level, Some("LOW"))
-            };
 
-            if is_high {
-                if tb_config.flash_high > 0 {
-                    Some(tb_config.flash_high as i64)
-                } else {
-                    Some(-1) // 官方 high 默认值 -1
-                }
-            } else if is_low {
+            let is_low = lower.contains("-low")
+                || lower.ends_with("-low")
+                || lower.contains("-extra-low")
+                || (is_bare && matches!(eff_level, Some("LOW")));
+
+            let is_medium = lower.contains("-medium")
+                || lower.ends_with("-medium")
+                || (is_bare && matches!(eff_level, Some("MEDIUM")));
+
+            let is_high = lower.contains("-high")
+                || lower.ends_with("-high")
+                || lower.contains("-max")
+                || lower.contains("agent")
+                || (is_bare && matches!(eff_level, Some("HIGH")));
+
+            if is_low {
                 if tb_config.flash_low > 0 {
                     Some(tb_config.flash_low as i64)
                 } else {
                     Some(1000) // 官方 low 默认值 1000
                 }
+            } else if is_medium {
+                if tb_config.flash_medium > 0 {
+                    Some(tb_config.flash_medium as i64)
+                } else {
+                    Some(4000) // 官方 medium 默认值 4000
+                }
+            } else if is_high {
+                if tb_config.flash_high > 0 {
+                    Some(tb_config.flash_high as i64)
+                } else {
+                    Some(-1) // 官方 high 默认值 -1
+                }
             } else {
-                // Medium / 默认平衡档位
+                // 未指定任何档位的默认平衡档位 (Medium)
                 if tb_config.flash_medium > 0 {
                     Some(tb_config.flash_medium as i64)
                 } else {
@@ -1131,6 +1160,9 @@ mod tests {
         assert_eq!(normalize_client_thinking_level("x-high"), Some("HIGH"));
         assert_eq!(normalize_client_thinking_level("flash_lite"), Some("LOW"));
         assert_eq!(normalize_client_thinking_level("lite"), Some("LOW"));
+        assert_eq!(normalize_client_thinking_level("disabled"), Some("LOW"));
+        assert_eq!(normalize_client_thinking_level("off"), Some("LOW"));
+        assert_eq!(normalize_client_thinking_level("none"), Some("LOW"));
         assert_eq!(normalize_client_thinking_level("medium"), Some("MEDIUM"));
 
         // 权重梯队兼容下划线

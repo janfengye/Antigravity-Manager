@@ -315,6 +315,7 @@ pub struct ClaudeInstallationInfo {
     pub path: String,
     pub is_patched: bool,
     pub is_patchable: bool,
+    pub is_8k: bool,
     pub size_mb: f64,
 }
 
@@ -323,6 +324,8 @@ pub struct ClaudePatchStatus {
     pub file_path: String,
     pub is_patched: bool,
     pub is_patchable: bool,
+    pub is_8k: bool,
+    pub is_legacy: bool,
     pub message: String,
     pub available_installations: Vec<ClaudeInstallationInfo>,
 }
@@ -477,7 +480,7 @@ fn scan_all_claude_installations() -> Vec<ClaudeInstallationInfo> {
 
         // 3. 去重并提取补丁状态
         let patched_re = regex::bytes::Regex::new(
-            r"function\s+[a-zA-Z0-9_$]+\([a-zA-Z0-9_$]+,[a-zA-Z0-9_$]+,[a-zA-Z0-9_$]+\)\{return 0;\}"
+            r"function\s+[a-zA-Z0-9_$]+\([a-zA-Z0-9_$]+,[a-zA-Z0-9_$]+,[a-zA-Z0-9_$]+\)\{(return 0;|.*?s>=(8000|35000).*?\})"
         ).ok();
 
         let origin_re = regex::bytes::Regex::new(
@@ -487,16 +490,21 @@ fn scan_all_claude_installations() -> Vec<ClaudeInstallationInfo> {
         for (ver, app_path, bin_path, is_prod) in candidates {
             if let Ok(meta) = fs::metadata(&bin_path) {
                 let sz_mb = meta.len() as f64 / (1024.0 * 1024.0);
-                let (is_patched, is_patchable) = if let Ok(data) = fs::read(&bin_path) {
+                let (is_patched, is_patchable, is_8k) = if let Ok(data) = fs::read(&bin_path) {
                     let patched = patched_re.as_ref().map_or(false, |r| r.is_match(&data));
+                    let is_8k = if patched {
+                        data.windows(8).any(|w| w == b"s>=8000)")
+                    } else {
+                        false
+                    };
                     let patchable = if patched {
                         true
                     } else {
                         origin_re.as_ref().map_or(false, |r| r.is_match(&data))
                     };
-                    (patched, patchable)
+                    (patched, patchable, is_8k)
                 } else {
-                    (false, false)
+                    (false, false, false)
                 };
 
                 results.push((
@@ -507,6 +515,7 @@ fn scan_all_claude_installations() -> Vec<ClaudeInstallationInfo> {
                         path: app_path.to_string_lossy().to_string(),
                         is_patched,
                         is_patchable,
+                        is_8k,
                         size_mb: (sz_mb * 10.0).round() / 10.0,
                     },
                 ));
@@ -590,19 +599,25 @@ pub async fn check_claude_cowork_patch(
     let path = resolve_claude_binary_path(file_path)?;
     let data = fs::read(&path).map_err(|e| format!("读取文件失败: {}", e))?;
 
-    // 1. 检查是否已经注入过补丁 (支持 return 0; 或精准 35k 上下文预算模式)
+    // 1. 检查是否已经注入过补丁 (支持 return 0; 或 8k/35k 精准上下文预算模式)
     let patched_re = regex::bytes::Regex::new(
-        r"function\s+[a-zA-Z0-9_$]+\([a-zA-Z0-9_$]+,[a-zA-Z0-9_$]+,[a-zA-Z0-9_$]+\)\{(return 0;|.*?s>=35000.*?\})"
+        r"function\s+[a-zA-Z0-9_$]+\([a-zA-Z0-9_$]+,[a-zA-Z0-9_$]+,[a-zA-Z0-9_$]+\)\{(return 0;|.*?s>=(8000|35000).*?\})"
     ).map_err(|e| e.to_string())?;
 
     if patched_re.is_match(&data) {
+        let is_8k = data.windows(8).any(|w| w == b"s>=8000)");
+        let desc = if is_8k {
+            "已成功注入 8k 深度归档补丁 (保留最新 8k 活跃消息上下文，超出历史 100% 浓缩归档，压缩率与净空大幅提升)"
+        } else {
+            "检测到旧版补丁 (35k/return 0)，建议点击「一键注入补丁」平滑升级为 8k 深度归档以获得超 60% 压缩率"
+        };
         return Ok(ClaudePatchStatus {
             file_path: path.to_string_lossy().to_string(),
             is_patched: true,
             is_patchable: true,
-            message:
-                "已成功注入 35k 深度归档补丁 (保留最新 35k 活跃上下文，超出历史 100% 浓缩归档)"
-                    .into(),
+            is_8k,
+            is_legacy: !is_8k,
+            message: desc.into(),
             available_installations: all_installs,
         });
     }
@@ -617,6 +632,8 @@ pub async fn check_claude_cowork_patch(
             file_path: path.to_string_lossy().to_string(),
             is_patched: false,
             is_patchable: true,
+            is_8k: false,
+            is_legacy: false,
             message: "检测到官方原生修剪算法，可安全注入 135 字节等长微创补丁".into(),
             available_installations: all_installs,
         });
@@ -626,6 +643,8 @@ pub async fn check_claude_cowork_patch(
         file_path: path.to_string_lossy().to_string(),
         is_patched: false,
         is_patchable: false,
+        is_8k: false,
+        is_legacy: false,
         message: "未匹配到目标修剪特征，当前版本结构可能已变更".into(),
         available_installations: all_installs,
     })
@@ -639,18 +658,36 @@ pub async fn apply_claude_cowork_patch(file_path: Option<String>) -> Result<Stri
 
     let data = fs::read(&path).map_err(|e| format!("读取文件失败: {}", e))?;
 
-    // 1. 检查是否已打补丁
-    let patched_re = regex::bytes::Regex::new(
-        r"function\s+[a-zA-Z0-9_$]+\([a-zA-Z0-9_$]+,[a-zA-Z0-9_$]+,[a-zA-Z0-9_$]+\)\{(return 0;|.*?s>=35000.*?\})"
+    // 1. 检查是否已打 8k 深度归档补丁
+    let patched_8k_re = regex::bytes::Regex::new(
+        r"function\s+[a-zA-Z0-9_$]+\([a-zA-Z0-9_$]+,[a-zA-Z0-9_$]+,[a-zA-Z0-9_$]+\)\{(return 0;|.*?s>=8000.*?\})"
     ).map_err(|e| e.to_string())?;
-    if patched_re.is_match(&data) {
-        return Ok("该文件已处于 35k 深度归档补丁生效状态，无需重复注入".into());
+    if patched_8k_re.is_match(&data) {
+        return Ok("该文件已处于 8k 深度归档补丁生效状态，无需重复注入".into());
     }
 
     // 2. 匹配原生特征并提取变量名
     let origin_re = regex::bytes::Regex::new(
         r"function\s+([a-zA-Z0-9_$]+)\(([a-zA-Z0-9_$]+),([a-zA-Z0-9_$]+),([a-zA-Z0-9_$]+)\)\{let\s+[a-zA-Z0-9_$]+=0,[a-zA-Z0-9_$]+=0;for\(let\s+[a-zA-Z0-9_$]+=[a-zA-Z0-9_$]+-1;[a-zA-Z0-9_$]+>=0;[a-zA-Z0-9_$]+--\)if\([a-zA-Z0-9_$]+\+=[a-zA-Z0-9_$]+\[[a-zA-Z0-9_$]+\],[a-zA-Z0-9_$]+\+\+,[a-zA-Z0-9_$]+>=[a-zA-Z0-9_$]+\)break;if\([a-zA-Z0-9_$]+>=[a-zA-Z0-9_$]+-1\)return\s+Math\.max\(1,Math\.floor\([a-zA-Z0-9_$]+/2\)\);return\s+[a-zA-Z0-9_$]+\}"
     ).map_err(|e| e.to_string())?;
+
+    let mut data = data;
+    if !origin_re.is_match(&data) {
+        // 若当前文件打了旧版 35k 补丁，尝试自动从备份还原原始二进制以完成 8k 升级
+        if let Some(backup_path) = find_existing_backup_path(&path) {
+            if let Ok(orig_data) = fs::read(&backup_path) {
+                if origin_re.is_match(&orig_data) {
+                    data = orig_data;
+                } else {
+                    return Err("未找到修剪算法特征，无法应用补丁".into());
+                }
+            } else {
+                return Err("未找到修剪算法特征，且无法读取备份文件".into());
+            }
+        } else {
+            return Err("未找到修剪算法特征，无法应用补丁".into());
+        }
+    }
 
     let Some(caps) = origin_re.captures(&data) else {
         return Err("未找到修剪算法特征，无法应用补丁".into());
@@ -666,8 +703,8 @@ pub async fn apply_claude_cowork_patch(file_path: Option<String>) -> Result<Stri
     let p2 = std::str::from_utf8(caps.get(3).unwrap().as_bytes()).unwrap();
     let p3 = std::str::from_utf8(caps.get(4).unwrap().as_bytes()).unwrap();
 
-    // 构造严格等长替换字节流 (直接钉死为 35k 活跃上下文预算，保持严格等长与 0 偏移漂移)
-    let prefix = format!("function {}({},{},{}){{let s=0,g=0;for(let h={}-1;h>=0;h--)if(s+={}[h],g++,s>=35000)break;return g;}}/*", fn_name, p1, p2, p3, p2, p1);
+    // 构造严格等长替换字节流 (精准设置为 8k 活跃消息预算，提升压缩率并保持严格等长与 0 偏移漂移)
+    let prefix = format!("function {}({},{},{}){{let s=0,g=0;for(let h={}-1;h>=0;h--)if(s+={}[h],g++,s>=8000)break;return g;}}/*", fn_name, p1, p2, p3, p2, p1);
     let suffix = "*/";
     if prefix.len() + suffix.len() > matched_len {
         return Err("构造补丁长度超限".into());
@@ -760,21 +797,35 @@ pub async fn apply_claude_cowork_patch(file_path: Option<String>) -> Result<Stri
     // 5. macOS ad-hoc 代码重签名（若属于 App Bundle，需连带进行 Deep 重签名以满足系统 Gatekeeper 规范）
     #[cfg(target_os = "macos")]
     {
+        let rollback = || {
+            let _ = fs::copy(&backup_path, &path);
+            #[cfg(unix)]
+            {
+                if let Ok(metadata) = fs::metadata(&path) {
+                    let mut perms = metadata.permissions();
+                    perms.set_mode(0o755);
+                    let _ = fs::set_permissions(&path, perms);
+                }
+            }
+        };
+
         // 5.1 签名核心可执行二进制
         let output = std::process::Command::new("/usr/bin/codesign")
-            .args(&["--force", "--sign", "-", "--", &actual_path])
+            .args(["--force", "--sign", "-", "--", &actual_path])
             .output();
         match output {
             Ok(out) if out.status.success() => {}
             Ok(out) => {
+                rollback();
                 let err_msg = String::from_utf8_lossy(&out.stderr);
                 return Err(format!(
-                    "补丁已写入，但二进制 codesign 重签名失败: {}",
+                    "补丁已写入，但二进制 codesign 重签名失败（已自动回滚备份以防 AMFI 崩溃）: {}",
                     err_msg
                 ));
             }
             Err(e) => {
-                return Err(format!("执行 codesign 命令失败: {}", e));
+                rollback();
+                return Err(format!("执行 codesign 命令失败（已自动回滚备份）: {}", e));
             }
         }
 
@@ -782,19 +833,24 @@ pub async fn apply_claude_cowork_patch(file_path: Option<String>) -> Result<Stri
         if let Some(bundle_path) = find_enclosing_app_bundle(&path) {
             let bundle_str = bundle_path.to_string_lossy().to_string();
             let bundle_output = std::process::Command::new("/usr/bin/codesign")
-                .args(&["--force", "--deep", "--sign", "-", "--", &bundle_str])
+                .args(["--force", "--deep", "--sign", "-", "--", &bundle_str])
                 .output();
             match bundle_output {
                 Ok(out) if out.status.success() => {}
                 Ok(out) => {
+                    rollback();
                     let err_msg = String::from_utf8_lossy(&out.stderr);
                     return Err(format!(
-                        "二进制已签名，但 App Bundle deep 重签名失败: {}",
+                        "二进制已签名，但 App Bundle deep 重签名失败（已自动回滚备份）: {}",
                         err_msg
                     ));
                 }
                 Err(e) => {
-                    return Err(format!("执行 App Bundle codesign 命令失败: {}", e));
+                    rollback();
+                    return Err(format!(
+                        "执行 App Bundle codesign 命令失败（已自动回滚备份）: {}",
+                        e
+                    ));
                 }
             }
         }
@@ -826,21 +882,174 @@ pub async fn revert_claude_cowork_patch(file_path: Option<String>) -> Result<Str
 
         #[cfg(target_os = "macos")]
         {
+            // 备份文件本身保留了官方开发者证书与原版签名，严禁执行 ad-hoc 覆盖以避免剥离官方证书与 Keychain 授权
             let _ = std::process::Command::new("/usr/bin/codesign")
-                .args(&["--force", "--sign", "-", "--", &actual_path])
+                .args(["--verify", "--verbose=2", "--", &actual_path])
                 .output();
-
-            if let Some(bundle_path) = find_enclosing_app_bundle(&path) {
-                let bundle_str = bundle_path.to_string_lossy().to_string();
-                let _ = std::process::Command::new("/usr/bin/codesign")
-                    .args(&["--force", "--deep", "--sign", "-", "--", &bundle_str])
-                    .output();
-            }
         }
         return Ok("已成功从备份还原原生二进制！".into());
     }
 
     Err("未找到备份文件，无法执行一键还原".into())
+}
+
+/// 内部辅助函数：检查 Claude Desktop 进程是否正在运行
+fn is_claude_running_internal(file_path: Option<&str>) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        // 1. 优先通过 AppleScript 检查 Claude.app 实例状态
+        let out = std::process::Command::new("/usr/bin/osascript")
+            .args(["-e", "application \"Claude\" is running"])
+            .output();
+        if let Ok(output) = out {
+            if output.status.success() {
+                let s = String::from_utf8_lossy(&output.stdout)
+                    .trim()
+                    .to_lowercase();
+                if s == "true" {
+                    return true;
+                }
+            }
+        }
+
+        // 2. 深度扫描系统进程列表，匹配 Claude 路径及子进程
+        let mut sys = sysinfo::System::new();
+        sys.refresh_processes(sysinfo::ProcessesToUpdate::All);
+        let target_bundle = file_path
+            .map(std::path::PathBuf::from)
+            .and_then(|p| find_enclosing_app_bundle(&p))
+            .map(|p| p.to_string_lossy().to_string().to_lowercase());
+
+        for (_pid, proc_) in sys.processes() {
+            let exe = proc_
+                .exe()
+                .map(|e| e.to_string_lossy().to_string().to_lowercase())
+                .unwrap_or_default();
+
+            if exe.contains("/applications/claude.app/")
+                || exe.contains("claude.app/contents/macos/")
+            {
+                return true;
+            }
+            if let Some(ref tb) = target_bundle {
+                if exe.contains(tb) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = file_path;
+        false
+    }
+}
+
+/// 检查 Claude Desktop 客户端是否正在运行
+#[tauri::command]
+pub async fn is_claude_desktop_running(file_path: Option<String>) -> Result<bool, String> {
+    tokio::task::spawn_blocking(move || is_claude_running_internal(file_path.as_deref()))
+        .await
+        .map_err(|e| format!("检查 Claude 运行状态任务失败: {}", e))
+}
+
+/// 优雅退出并清理 Claude Desktop 进程
+#[tauri::command]
+pub async fn close_claude_desktop(file_path: Option<String>) -> Result<bool, String> {
+    tokio::task::spawn_blocking(move || {
+        #[cfg(target_os = "macos")]
+        {
+            // 1. 优先通过 AppleScript 优雅退出 Claude
+            let _ = std::process::Command::new("/usr/bin/osascript")
+                .args(["-e", "tell application \"Claude\" to quit"])
+                .output();
+
+            // 最多等待 3 秒等待进程优雅退出
+            let start = std::time::Instant::now();
+            while start.elapsed() < std::time::Duration::from_millis(3000) {
+                if !is_claude_running_internal(file_path.as_deref()) {
+                    return Ok(true);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+
+            // 2. 超时未完全退出的，定位残留 PIDs 并发送 SIGTERM/SIGKILL 强制终止
+            let mut sys = sysinfo::System::new();
+            sys.refresh_processes(sysinfo::ProcessesToUpdate::All);
+            let target_bundle = file_path
+                .as_ref()
+                .map(|p| std::path::PathBuf::from(p))
+                .and_then(|p| find_enclosing_app_bundle(&p))
+                .map(|p| p.to_string_lossy().to_string().to_lowercase());
+
+            let mut pids_to_kill = Vec::new();
+            for (pid, proc_) in sys.processes() {
+                let exe = proc_
+                    .exe()
+                    .map(|e| e.to_string_lossy().to_string().to_lowercase())
+                    .unwrap_or_default();
+                let is_claude = exe.contains("/applications/claude.app/")
+                    || exe.contains("claude.app/contents/macos/")
+                    || target_bundle.as_ref().map_or(false, |tb| exe.contains(tb));
+
+                if is_claude {
+                    pids_to_kill.push(*pid);
+                }
+            }
+
+            for pid in pids_to_kill {
+                let _ = std::process::Command::new("/bin/kill")
+                    .args(["-9", &pid.to_string()])
+                    .output();
+            }
+
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            Ok(true)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = file_path;
+            Ok(true)
+        }
+    })
+    .await
+    .map_err(|e| format!("退出 Claude 失败: {}", e))?
+}
+
+/// 重新启动 Claude Desktop 客户端
+#[tauri::command]
+pub async fn launch_claude_desktop(file_path: Option<String>) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        #[cfg(target_os = "macos")]
+        {
+            let mut opened = false;
+            if let Some(ref fp) = file_path {
+                let path = std::path::PathBuf::from(fp);
+                if let Some(bundle) = find_enclosing_app_bundle(&path) {
+                    if bundle.exists() {
+                        let _ = std::process::Command::new("/usr/bin/open")
+                            .arg(&bundle)
+                            .output();
+                        opened = true;
+                    }
+                }
+            }
+            if !opened {
+                let _ = std::process::Command::new("/usr/bin/open")
+                    .args(["-a", "Claude"])
+                    .output();
+            }
+            Ok(())
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = file_path;
+            Ok(())
+        }
+    })
+    .await
+    .map_err(|e| format!("启动 Claude 失败: {}", e))?
 }
 
 #[cfg(test)]
@@ -994,5 +1203,29 @@ mod tests {
         println!(
             "\n================================================================================\n"
         );
+    }
+
+    #[test]
+    fn test_patch_pattern_matches_8k_and_35k_and_origin() {
+        let origin_code = b"function testFn(p1,p2,p3){let s=0,g=0;for(let h=p2-1;h>=0;h--)if(s+=p1[h],g++,s>=p3)break;if(g>=p2-1)return Math.max(1,Math.floor(p2/2));return g}";
+        let patched_8k_code = b"function testFn(p1,p2,p3){let s=0,g=0;for(let h=p2-1;h>=0;h--)if(s+=p1[h],g++,s>=8000)break;return g;}/*                    */";
+        let patched_35k_code = b"function testFn(p1,p2,p3){let s=0,g=0;for(let h=p2-1;h>=0;h--)if(s+=p1[h],g++,s>=35000)break;return g;}/*                   */";
+        let patched_ret0_code = b"function testFn(p1,p2,p3){return 0;}/*                                                                                     */";
+
+        let origin_re = regex::bytes::Regex::new(
+            r"function\s+([a-zA-Z0-9_$]+)\(([a-zA-Z0-9_$]+),([a-zA-Z0-9_$]+),([a-zA-Z0-9_$]+)\)\{let\s+[a-zA-Z0-9_$]+=0,[a-zA-Z0-9_$]+=0;for\(let\s+[a-zA-Z0-9_$]+=[a-zA-Z0-9_$]+-1;[a-zA-Z0-9_$]+>=0;[a-zA-Z0-9_$]+--\)if\([a-zA-Z0-9_$]+\+=[a-zA-Z0-9_$]+\[[a-zA-Z0-9_$]+\],[a-zA-Z0-9_$]+\+\+,[a-zA-Z0-9_$]+>=[a-zA-Z0-9_$]+\)break;if\([a-zA-Z0-9_$]+>=[a-zA-Z0-9_$]+-1\)return\s+Math\.max\(1,Math\.floor\([a-zA-Z0-9_$]+/2\)\);return\s+[a-zA-Z0-9_$]+\}"
+        ).unwrap();
+
+        let patched_re = regex::bytes::Regex::new(
+            r"function\s+[a-zA-Z0-9_$]+\([a-zA-Z0-9_$]+,[a-zA-Z0-9_$]+,[a-zA-Z0-9_$]+\)\{(return 0;|.*?s>=(8000|35000).*?\})"
+        ).unwrap();
+
+        assert!(origin_re.is_match(origin_code));
+        assert!(!origin_re.is_match(patched_8k_code));
+
+        assert!(patched_re.is_match(patched_8k_code));
+        assert!(patched_re.is_match(patched_35k_code));
+        assert!(patched_re.is_match(patched_ret0_code));
+        assert!(!patched_re.is_match(origin_code));
     }
 }

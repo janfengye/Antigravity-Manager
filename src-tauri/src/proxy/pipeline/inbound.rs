@@ -1081,16 +1081,6 @@ impl InboundThinkingPipeline {
                             "includeThoughts": true,
                             "thinkingBudget": budget
                         });
-                        // 确保 maxOutputTokens 大于 thinkingBudget 避免 400
-                        let min_overhead = 8192;
-                        let current_max = generation_config
-                            .get("maxOutputTokens")
-                            .and_then(Value::as_i64)
-                            .unwrap_or(65536);
-                        if current_max <= budget as i64 {
-                            generation_config["maxOutputTokens"] =
-                                json!(budget as i64 + min_overhead);
-                        }
                     } else if let Some(raw_effort) =
                         client_effort.map(str::trim).filter(|s| !s.is_empty())
                     {
@@ -1185,18 +1175,6 @@ impl InboundThinkingPipeline {
                     });
                 } else {
                     tc["thinkingBudget"] = json!(budget);
-
-                    // 确保 maxOutputTokens 大于 thinkingBudget 避免 400 (仅当 budget > 0 时)
-                    if budget > 0 {
-                        let min_overhead = 8192;
-                        let current_max = generation_config
-                            .get("maxOutputTokens")
-                            .and_then(Value::as_i64)
-                            .unwrap_or(65536);
-                        if current_max <= budget {
-                            generation_config["maxOutputTokens"] = json!(budget + min_overhead);
-                        }
-                    }
                 }
             } else if is_tiered {
                 // Tiered 模型未指定具体数字 budget 且官方结构体无 thinking_budget 时：纯自适应模式
