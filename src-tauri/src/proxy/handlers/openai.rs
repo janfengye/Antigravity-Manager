@@ -1080,6 +1080,64 @@ data: {"type":"response.failed","response":{"status":"failed","error":{"code":"u
     }
 
     #[test]
+    fn chat_responses_compat_preserves_multiturn_roles_in_input_array() {
+        let converted = convert_codex_to_openai_request(json!({
+            "model": "gemini-2.5-pro",
+            "instructions": "Stay in character.",
+            "input": [
+                {"role": "user", "content": "Who are you?"},
+                {"role": "assistant", "content": "I am Character A."},
+                {"role": "user", "content": "Describe the room."},
+                {"role": "assistant", "content": "There is a table."},
+                {"role": "user", "content": "What color is the window?"}
+            ]
+        }));
+
+        assert_eq!(
+            converted["messages"],
+            json!([
+                {"role": "system", "content": "Stay in character."},
+                {"role": "user", "content": "Who are you?"},
+                {"role": "assistant", "content": "I am Character A."},
+                {"role": "user", "content": "Describe the room."},
+                {"role": "assistant", "content": "There is a table."},
+                {"role": "user", "content": "What color is the window?"}
+            ])
+        );
+        assert!(converted.get("input").is_none());
+        assert!(converted.get("instructions").is_none());
+
+        let request: OpenAIRequest =
+            serde_json::from_value(converted).expect("converted Chat request");
+        let (upstream, _, _, _) =
+            transform_openai_request(&request, "test-project", "gemini-2.5-pro", None);
+        let roles = upstream["request"]["contents"]
+            .as_array()
+            .expect("Gemini contents")
+            .iter()
+            .map(|content| content["role"].as_str().expect("content role"))
+            .collect::<Vec<_>>();
+        assert_eq!(roles, ["user", "model", "user", "model", "user"]);
+    }
+
+    #[test]
+    fn chat_responses_compat_keeps_string_input() {
+        let converted = convert_codex_to_openai_request(json!({
+            "model": "gemini-2.5-pro",
+            "instructions": "Answer briefly.",
+            "input": "What is the next step?"
+        }));
+
+        assert_eq!(
+            converted["messages"],
+            json!([
+                {"role": "system", "content": "Answer briefly."},
+                {"role": "user", "content": "What is the next step?"}
+            ])
+        );
+    }
+
+    #[test]
     fn responses_tool_output_image_is_sent_as_inline_data() {
         let converted = convert_codex_to_openai_request(json!({
             "model": "gemini-3.7-flash-high",
@@ -1777,57 +1835,17 @@ pub async fn handle_chat_completions(
         crate::proxy::payload_audit::reorder_payload_fields(&debug_value_without_inline_data(&body))
     });
 
-    // [NEW] 自动检测并转换 Responses 格式
-    // 如果请求包含 instructions 或 input 但没有 messages，则认为是 Responses 格式
+    // [FIX] 自动检测并转换 Responses 格式
+    // 如果请求包含 instructions 或 input 但没有 messages，则认为是 Responses 格式。
+    // 必须复用完整转换器，不能把 input 数组序列化成一条 user 文本，否则会
+    // 丢失 system/user/assistant 的角色边界，导致 Gemini 重放整段历史而不是
+    // 继续最新一轮对话。
     let is_responses_format = !body.get("messages").is_some()
         && (body.get("instructions").is_some() || body.get("input").is_some());
 
     if is_responses_format {
-        debug!("Detected Responses API format, converting to Chat Completions format");
-
-        // 转换 instructions 为 system message
-        if let Some(instructions) = body.get("instructions").and_then(|v| v.as_str()) {
-            if !instructions.is_empty() {
-                let system_msg = json!({
-                    "role": "system",
-                    "content": instructions
-                });
-
-                // 初始化 messages 数组
-                if !body.get("messages").is_some() {
-                    body["messages"] = json!([]);
-                }
-
-                // 将 system message 插入到开头
-                if let Some(messages) = body.get_mut("messages").and_then(|v| v.as_array_mut()) {
-                    messages.insert(0, system_msg);
-                }
-            }
-        }
-
-        // 转换 input 为 user message（如果存在）
-        if let Some(input) = body.get("input") {
-            let user_msg = if input.is_string() {
-                json!({
-                    "role": "user",
-                    "content": input.as_str().unwrap_or("")
-                })
-            } else {
-                // input 是数组格式，暂时简化处理
-                json!({
-                    "role": "user",
-                    "content": input.to_string()
-                })
-            };
-
-            if let Some(messages) = body.get_mut("messages").and_then(|v| v.as_array_mut()) {
-                messages.push(user_msg);
-            }
-        }
-
-        if let Some(obj) = body.as_object_mut() {
-            obj.remove("instructions");
-        }
+        debug!("Detected Responses API format, converting with structured role preservation");
+        body = convert_codex_to_openai_request(body);
     }
 
     let normalized_interaction_ledger = body.get("_interaction_ledger").cloned();
@@ -6755,9 +6773,18 @@ fn convert_codex_to_openai_request(mut body: Value) -> Value {
     let input_items = body
         .as_object_mut()
         .and_then(|obj| obj.remove("input"))
-        .and_then(|value| match value {
-            Value::Array(items) => Some(items),
-            _ => None,
+        .map(|value| match value {
+            Value::Array(items) => items,
+            Value::String(text) => vec![json!({
+                "type": "message",
+                "role": "user",
+                "content": text
+            })],
+            other => vec![json!({
+                "type": "message",
+                "role": "user",
+                "content": other
+            })],
         })
         .unwrap_or_default();
 
