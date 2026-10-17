@@ -25,9 +25,24 @@ pub fn normalize_and_sanitize_tool_args(tool_name: &str, args: &mut Value) {
 
 pub fn resolve_shell_tool_name(
     model_tool_name: &str,
-    _client_tool_names: &std::collections::HashSet<String>,
+    client_tool_names: &std::collections::HashSet<String>,
 ) -> String {
-    // 纯透传工具名称，不进行任何改写
+    if client_tool_names.contains(model_tool_name) {
+        return model_tool_name.to_string();
+    }
+    // [FIX #3224] 工具调用智能名称映射：当客户端注册了 bash/shell，但模型调用了 local_shell_call 时自动对齐
+    if model_tool_name == "local_shell_call"
+        || model_tool_name == "shell_command"
+        || model_tool_name == "shell"
+    {
+        if client_tool_names.contains("bash") {
+            return "bash".to_string();
+        } else if client_tool_names.contains("shell") {
+            return "shell".to_string();
+        } else if client_tool_names.contains("local_shell_call") {
+            return "local_shell_call".to_string();
+        }
+    }
     model_tool_name.to_string()
 }
 
@@ -487,6 +502,26 @@ mod tests {
         assert_eq!(args["description"], "Custom description");
         assert_eq!(args["arbitrary_field"], 123);
         assert!(!args.as_object().unwrap().contains_key("command"));
+    }
+
+    #[test]
+    fn test_resolve_shell_tool_name_aligns_local_shell_call_issue_3224() {
+        let mut client_tools = std::collections::HashSet::new();
+        client_tools.insert("bash".to_string());
+        client_tools.insert("read".to_string());
+        client_tools.insert("edit".to_string());
+
+        // 当客户端只注册了 bash 工具，而模型返回了 local_shell_call / shell 时，自动映射为 bash (Fixes #3224)
+        assert_eq!(
+            resolve_shell_tool_name("local_shell_call", &client_tools),
+            "bash"
+        );
+        assert_eq!(
+            resolve_shell_tool_name("shell_command", &client_tools),
+            "bash"
+        );
+        assert_eq!(resolve_shell_tool_name("shell", &client_tools), "bash");
+        assert_eq!(resolve_shell_tool_name("read", &client_tools), "read");
     }
 
     #[test]

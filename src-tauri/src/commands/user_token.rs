@@ -1,4 +1,6 @@
-use crate::modules::user_token_db::{self, TokenIpBinding, UserToken};
+use crate::modules::user_token_db::{
+    self, TokenIpBinding, UserToken, UserTokenDetailedStats, UserTokenRankItem,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -105,4 +107,23 @@ pub async fn get_user_token_summary() -> Result<UserTokenStats, String> {
         total_users: users.len(),
         today_requests: 0, // TODO: Implement daily stats query
     })
+}
+
+/// 获取单个令牌的详细用量统计（走势、模型分布、IP）
+#[tauri::command]
+pub async fn get_user_token_stats(
+    id: String,
+    time_range: Option<String>,
+) -> Result<UserTokenDetailedStats, String> {
+    let range = time_range.unwrap_or_else(|| "7d".to_string());
+    user_token_db::get_token_detailed_stats(&id, &range)
+}
+
+/// 获取用户 Token 消耗排行榜
+#[tauri::command]
+pub async fn get_user_tokens_ranking(
+    time_range: Option<String>,
+) -> Result<Vec<UserTokenRankItem>, String> {
+    let range = time_range.unwrap_or_else(|| "all".to_string());
+    user_token_db::get_user_tokens_ranking(&range)
 }

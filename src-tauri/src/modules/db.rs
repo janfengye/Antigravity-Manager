@@ -74,6 +74,16 @@ pub fn get_all_candidate_db_paths(target_ide: Option<&str>) -> Vec<PathBuf> {
     paths
 }
 
+/// 扫描本地所有 Antigravity 数据库候选路径（同时覆盖经典款 Antigravity 与 Antigravity IDE）
+pub fn get_all_antigravity_db_paths() -> Vec<PathBuf> {
+    let mut all_paths = Vec::new();
+    all_paths.extend(get_all_candidate_db_paths(Some("classic")));
+    all_paths.extend(get_all_candidate_db_paths(Some("ide")));
+    let mut seen = std::collections::HashSet::new();
+    all_paths.retain(|p| seen.insert(p.clone()));
+    all_paths
+}
+
 /// Get Antigravity database path (cross-platform)
 pub fn get_db_path(target_ide: Option<&str>) -> Result<PathBuf, String> {
     let candidates = get_all_candidate_db_paths(target_ide);

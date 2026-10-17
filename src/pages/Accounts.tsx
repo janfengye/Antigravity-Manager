@@ -1,8 +1,6 @@
 
 
 import {
-  Calendar,
-  Clock,
   Download,
   LayoutGrid,
   List,
@@ -32,10 +30,10 @@ import { cn } from "../utils/cn";
 import { isTauri } from "../utils/env";
 import { request as invoke } from "../utils/request";
 import { useTranslation } from "react-i18next";
+import { motion } from "framer-motion";
 
 type FilterType = "all" | "pro" | "ultra" | "free";
 type ViewMode = "list" | "grid";
-export type QuotaWindow = "5h" | "weekly";
 
 
 function Accounts() {
@@ -43,8 +41,10 @@ function Accounts() {
   const {
     accounts,
     currentAccount,
+    activeClients,
     fetchAccounts,
     fetchCurrentAccount,
+    fetchActiveClients,
     addAccount,
     deleteAccount,
     deleteAccounts,
@@ -58,7 +58,7 @@ function Accounts() {
     updateAccountLabel,
     updateAccountPriority,
   } = useAccountStore();
-  const { config, showAllQuotas, toggleShowAllQuotas } = useConfigStore();
+  const { config } = useConfigStore();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [filter, setFilter] = useState<FilterType>('all');
@@ -69,20 +69,10 @@ function Accounts() {
     return (saved === 'list' || saved === 'grid') ? saved : 'list';
   });
 
-  const [quotaWindow, setQuotaWindow] = useState<QuotaWindow>(() => {
-    const saved = localStorage.getItem('accounts_quota_window');
-    return (saved === '5h' || saved === 'weekly') ? saved : '5h';
-  });
-
   // Save view mode preference
   useEffect(() => {
     localStorage.setItem('accounts_view_mode', viewMode);
   }, [viewMode]);
-
-  // Save quota window preference
-  useEffect(() => {
-    localStorage.setItem('accounts_quota_window', quotaWindow);
-  }, [quotaWindow]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [deviceAccount, setDeviceAccount] = useState<Account | null>(null);
   const [detailsAccount, setDetailsAccount] = useState<Account | null>(null);
@@ -243,6 +233,26 @@ function Accounts() {
     fetchAccounts();
     fetchCurrentAccount();
   }, [fetchAccounts, fetchCurrentAccount]);
+
+  // 保持多客户端（经典款、IDE、CLI）当前活动账号实时感知：挂载轮询与窗口焦点刷新
+  useEffect(() => {
+    fetchActiveClients();
+
+    const handleFocus = () => {
+      fetchActiveClients();
+    };
+    window.addEventListener('focus', handleFocus);
+
+    // 每 5 秒轻量检测一次各端本地已登录账号，外部环境切换无需手动重载页面
+    const timer = setInterval(() => {
+      fetchActiveClients();
+    }, 5000);
+
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      clearInterval(timer);
+    };
+  }, [fetchActiveClients]);
 
   // Reset pagination when view mode changes to avoid empty pages or confusion
   useEffect(() => {
@@ -729,7 +739,12 @@ function Accounts() {
   };
 
   return (
-    <div className="h-full flex flex-col p-5 gap-4 max-w-7xl mx-auto w-full">
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.2, ease: "easeOut" }}
+      className="h-full flex flex-col p-5 gap-4 max-w-7xl mx-auto w-full"
+    >
       {/* 测试按钮 - 在最顶部 */}
       <input
         ref={fileInputRef}
@@ -782,36 +797,6 @@ function Accounts() {
               </div>
             </div>
           )}
-        </div>
-
-        {/* 配额周期切换 (5H / 7天周配额) */}
-        <div className="flex gap-1 bg-gray-100 dark:bg-base-200 p-1 rounded-lg shrink-0 items-center">
-          <button
-            className={cn(
-              "px-2 py-1 text-xs font-semibold rounded-md transition-all flex items-center gap-1",
-              quotaWindow === "5h"
-                ? "bg-white dark:bg-base-100 text-blue-600 dark:text-blue-400 shadow-sm"
-                : "text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-base-content",
-            )}
-            onClick={() => setQuotaWindow("5h")}
-            title={t("accounts.quota_window_5h", "5小时滑动配额")}
-          >
-            <Clock className="w-3.5 h-3.5" />
-            <span>5H</span>
-          </button>
-          <button
-            className={cn(
-              "px-2 py-1 text-xs font-semibold rounded-md transition-all flex items-center gap-1",
-              quotaWindow === "weekly"
-                ? "bg-white dark:bg-base-100 text-blue-600 dark:text-blue-400 shadow-sm"
-                : "text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-base-content",
-            )}
-            onClick={() => setQuotaWindow("weekly")}
-            title={t("accounts.quota_window_weekly", "7天周配额")}
-          >
-            <Calendar className="w-3.5 h-3.5" />
-            <span>{t("accounts.quota_window_weekly_short", "周配额")}</span>
-          </button>
         </div>
 
         {/* 视图切换按钮组 */}
@@ -1028,17 +1013,6 @@ function Accounts() {
             </span>
           </button>
 
-          <label className="flex items-center gap-2 cursor-pointer select-none px-2 py-2 border border-transparent hover:bg-gray-100 dark:hover:bg-base-200 rounded-lg transition-colors" title={t('accounts.show_all_quotas')}>
-            <span className="text-xs font-medium text-gray-600 dark:text-gray-300 hidden xl:inline">
-              {t('accounts.show_all_quotas')}
-            </span>
-            <input
-              type="checkbox"
-              className="toggle toggle-xs toggle-primary"
-              checked={showAllQuotas}
-              onChange={toggleShowAllQuotas}
-            />
-          </label>
           <div className="w-px h-4 bg-gray-200 dark:bg-gray-700 self-center mx-1 shrink-0"></div>
 
           <button
@@ -1083,6 +1057,7 @@ function Accounts() {
                 onToggleSelect={handleToggleSelect}
                 onToggleAll={handleToggleAll}
                 currentAccountId={currentAccount?.id || null}
+                activeClients={activeClients}
                 switchingAccountId={switchingAccountId}
                 onSwitch={handleSwitch}
                 onRefresh={handleRefresh}
@@ -1100,7 +1075,6 @@ function Accounts() {
                 onWarmup={handleWarmup}
                 onUpdateLabel={handleUpdateLabel}
                 onViewError={(id: string) => setErrorAccountId(id)}
-                quotaWindow={quotaWindow}
               />
             </div>
           </div>
@@ -1112,6 +1086,7 @@ function Accounts() {
               refreshingIds={refreshingIds}
               onToggleSelect={handleToggleSelect}
               currentAccountId={currentAccount?.id || null}
+              activeClients={activeClients}
               switchingAccountId={switchingAccountId}
               onSwitch={handleSwitch}
               onRefresh={handleRefresh}
@@ -1128,7 +1103,6 @@ function Accounts() {
               onWarmup={handleWarmup}
               onUpdateLabel={handleUpdateLabel}
               onViewError={(id: string) => setErrorAccountId(id)}
-              quotaWindow={quotaWindow}
             />
           </div>
         )}
@@ -1254,7 +1228,7 @@ function Accounts() {
         account={accounts.find(a => a.id === errorAccountId) || null}
         onClose={() => setErrorAccountId(null)}
       />
-    </div>
+    </motion.div>
   );
 }
 

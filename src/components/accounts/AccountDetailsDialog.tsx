@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { X, Clock, AlertCircle, Bot } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import { Account, getAccountTier, getTierLabel } from '../../types/account';
-import { formatDate } from '../../utils/format';
+import { formatDate, formatTimeRemaining } from '../../utils/format';
 import { useTranslation } from 'react-i18next';
 import { MODEL_CONFIG, sortModels } from '../../config/modelConfig';
 import { showToast } from '../common/ToastContainer';
@@ -18,9 +18,68 @@ export default function AccountDetailsDialog({ account, onClose, onUpdatePriorit
     const [activeTab, setActiveTab] = useState<'basic' | 'detailed'>('basic');
     const [priorityInput, setPriorityInput] = useState('50');
     const [savingPriority, setSavingPriority] = useState(false);
+
+    const tier = useMemo(() => account ? getAccountTier(account) : 'free', [account]);
+    const isProOrUltra = tier === 'pro' || tier === 'ultra';
+
+    const displayGroups = useMemo(() => {
+        let groups = account?.quota?.quota_groups || [];
+        const hasArgonGroup = groups.some(g =>
+            (g.display_name || '').toLowerCase().includes('argon')
+            || (g.buckets || []).some(b => (b.bucket_id || '').toLowerCase().includes('argon'))
+        );
+        if (isProOrUltra && !hasArgonGroup) {
+            const geminiGroup = groups.find(g => (g.display_name || '').toLowerCase().includes('gemini'));
+            const geminiWeeklyBucket = geminiGroup?.buckets?.find(b =>
+                (b.window || '').toLowerCase().includes('week') || (b.bucket_id || '').toLowerCase().includes('week')
+            );
+            groups = [
+                ...groups,
+                {
+                    display_name: 'Gemini 4 Argon',
+                    description: 'Models within this group: Gemini 4 Argon',
+                    buckets: [
+                        {
+                            bucket_id: 'argon-weekly',
+                            window: 'weekly',
+                            remaining_fraction: 1.0,
+                            reset_time: geminiWeeklyBucket?.reset_time || new Date(Date.now() + 6 * 24 * 3600 * 1000 + 20 * 3600 * 1000).toISOString(),
+                            display_name: 'Gemini 4 Argon Weekly Limit'
+                        }
+                    ]
+                }
+            ];
+        }
+        return groups;
+    }, [account?.quota?.quota_groups, isProOrUltra]);
+
+    const displayModels = useMemo(() => {
+        let models = account?.quota?.models || [];
+        const hasArgonModel = models.some(m => m.name.toLowerCase().includes('argon'));
+        if (isProOrUltra && !hasArgonModel) {
+            const geminiModel = models.find(m => m.name.toLowerCase().startsWith('gemini'));
+            models = [
+                ...models,
+                {
+                    name: 'gemini-4-argon',
+                    display_name: 'Gemini 4 Argon',
+                    percentage: 100,
+                    reset_time: geminiModel?.reset_time || '',
+                    supports_images: true,
+                    supports_thinking: true,
+                    recommended: true,
+                    max_tokens: 1048576,
+                    max_output_tokens: 65536,
+                }
+            ];
+        }
+        return models;
+    }, [account?.quota?.models, isProOrUltra]);
+
     useEffect(() => {
         setPriorityInput(String(account?.priority ?? 50));
     }, [account?.id, account?.priority]);
+
     if (!account) return null;
 
     const savePriority = async () => {
@@ -55,8 +114,6 @@ export default function AccountDetailsDialog({ account, onClose, onUpdatePriorit
                         </div>
                         {(() => {
                             const tier = getAccountTier(account);
-                            // 用归一化后的等级文案，避免把后端的原始字符串
-                            // （如 "Antigravity Starter Quota"）直接渲染出来
                             const label = getTierLabel(tier);
                             return (
                                 <div className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
@@ -98,30 +155,52 @@ export default function AccountDetailsDialog({ account, onClose, onUpdatePriorit
                 )}
 
                 {/* Content */}
-                <div className="p-6 max-h-[60vh] overflow-y-auto">
-                    <div className="mb-6">
-                        <label className="text-sm font-medium" htmlFor="account-priority">{t('accounts.priority')}</label>
-                        <div className="flex items-center gap-2 mt-2">
-                            <input id="account-priority" type="number" min={1} max={100} step={1}
-                                className="input input-bordered input-sm w-24" value={priorityInput}
-                                disabled={savingPriority} onChange={event => setPriorityInput(event.target.value)} />
-                            <button className="btn btn-primary btn-sm" onClick={savePriority}
-                                disabled={savingPriority || priorityInput === String(account.priority ?? 50)}>
-                                {t(savingPriority ? 'common.saving' : 'common.save')}
+                <div className="p-6 max-h-[68vh] overflow-y-auto space-y-6">
+                    {/* 优先级设置 */}
+                    <div className="p-4 rounded-xl border border-gray-100 dark:border-base-200 bg-gray-50/50 dark:bg-base-200/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div>
+                            <div className="text-sm font-semibold text-gray-800 dark:text-gray-200 flex items-center gap-1.5">
+                                <span>{t('accounts.priority')}</span>
+                                <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 font-mono font-bold">
+                                    {account.priority ?? 50}
+                                </span>
+                            </div>
+                            <p className="mt-1 text-xs text-gray-400 dark:text-gray-500 leading-relaxed max-w-md">
+                                {t('accounts.priority_hint')}
+                            </p>
+                        </div>
+                        <div className="flex items-center gap-2 self-start sm:self-auto shrink-0">
+                            <input
+                                id="account-priority"
+                                type="number"
+                                min={1}
+                                max={100}
+                                step={1}
+                                className="input input-bordered input-sm w-20 text-center font-mono font-bold"
+                                value={priorityInput}
+                                disabled={savingPriority}
+                                onChange={event => setPriorityInput(event.target.value)}
+                            />
+                            <button
+                                className="btn btn-primary btn-sm px-4"
+                                onClick={savePriority}
+                                disabled={savingPriority || priorityInput === String(account.priority ?? 50)}
+                            >
+                                {savingPriority ? t('common.saving') : t('common.save')}
                             </button>
                         </div>
-                        <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">{t('accounts.priority_hint')}</p>
                     </div>
+
                     {/* Protected Models Section */}
                     {account.protected_models && account.protected_models.length > 0 && (
-                        <div className="mb-6">
-                            <h4 className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-widest mb-3 flex items-center gap-2">
-                                <AlertCircle size={12} className="text-amber-500" />
+                        <div className="p-4 rounded-xl border border-amber-100 dark:border-amber-900/30 bg-amber-50/40 dark:bg-amber-950/20">
+                            <h4 className="text-xs font-bold text-amber-800 dark:text-amber-400 uppercase tracking-widest mb-2.5 flex items-center gap-1.5">
+                                <AlertCircle size={13} className="text-amber-500" />
                                 {t('accounts.details.protected_models')}
                             </h4>
-                            <div className="flex flex-wrap gap-2">
+                            <div className="flex flex-wrap gap-1.5">
                                 {account.protected_models.map(model => (
-                                    <span key={model} className="px-2 py-1 bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400 text-[11px] font-mono border border-amber-100 dark:border-amber-900/40 rounded-md">
+                                    <span key={model} className="px-2 py-0.5 bg-amber-100/70 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300 text-[11px] font-mono border border-amber-200/60 dark:border-amber-800/50 rounded-md">
                                         {model}
                                     </span>
                                 ))}
@@ -129,136 +208,164 @@ export default function AccountDetailsDialog({ account, onClose, onUpdatePriorit
                         </div>
                     )}
 
-                    <div className="flex gap-6 border-b border-gray-100 dark:border-base-200 mb-4">
-                        <button
-                            onClick={() => setActiveTab('basic')}
-                            className={`pb-2 text-xs font-bold uppercase tracking-widest transition-colors border-b-2 ${activeTab === 'basic' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'}`}
-                        >
-                            {t('accounts.details.model_quota')}
-                        </button>
-                        {account.quota?.quota_groups && account.quota.quota_groups.length > 0 && (
+                    <div>
+                        <div className="flex gap-6 border-b border-gray-100 dark:border-base-200 mb-4">
                             <button
-                                onClick={() => setActiveTab('detailed')}
-                                className={`pb-2 text-xs font-bold uppercase tracking-widest transition-colors border-b-2 flex items-center gap-1.5 ${activeTab === 'detailed' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'}`}
+                                onClick={() => setActiveTab('basic')}
+                                className={`pb-2.5 text-xs font-bold uppercase tracking-wider transition-colors border-b-2 ${activeTab === 'basic' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'}`}
                             >
-                                <Bot size={12} className={activeTab === 'detailed' ? 'text-blue-500' : ''} />
-                                {t('accounts.details.quota_groups', 'Detailed Quota')}
+                                {t('accounts.details.model_quota')}
                             </button>
-                        )}
-                    </div>
+                            {displayGroups.length > 0 && (
+                                <button
+                                    onClick={() => setActiveTab('detailed')}
+                                    className={`pb-2.5 text-xs font-bold uppercase tracking-wider transition-colors border-b-2 flex items-center gap-1.5 ${activeTab === 'detailed' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'}`}
+                                >
+                                    <Bot size={13} className={activeTab === 'detailed' ? 'text-blue-500' : ''} />
+                                    {t('accounts.details.quota_groups', '配额分组窗口')}
+                                </button>
+                            )}
+                        </div>
 
-                    {activeTab === 'basic' && (
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            {(() => {
-                                const uniqueLabels = new Set<string>();
-                                return sortModels(
-                                    (account.quota?.models || []).map(model => {
-                                        const config = MODEL_CONFIG[model.name.toLowerCase()];
-                                        const label = model.display_name || (config?.i18nKey ? t(config.i18nKey) : (config?.label || model.name));
-                                        return {
-                                            id: model.name.toLowerCase(),
-                                            label: label,
-                                            model
-                                        };
-                                    })
-                                ).filter(m => {
-                                    if (uniqueLabels.has(m.label)) return false;
-                                    uniqueLabels.add(m.label);
-                                    return true;
-                                }).map(({ model, label }) => (
-                                    <div key={model.name} className="p-4 rounded-xl border border-gray-100 dark:border-base-200 bg-white dark:bg-base-100 hover:border-blue-100 dark:hover:border-blue-900 hover:shadow-sm transition-all group">
-                                        <div className="flex justify-between items-start mb-3">
-                                            <div className="flex flex-col gap-1">
-                                                <div className="flex items-center gap-2">
-                                                    {(() => {
-                                                        const Icon = MODEL_CONFIG[model.name.toLowerCase()]?.Icon || Bot;
-                                                        return <Icon size={16} className="shrink-0" />;
-                                                    })()}
-                                                    <span className="text-sm font-medium font-mono text-gray-700 dark:text-gray-300 group-hover:text-blue-700 dark:group-hover:text-blue-400 transition-colors">
-                                                        {label}
+                        {activeTab === 'basic' && (
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                                {(() => {
+                                    const uniqueLabels = new Set<string>();
+                                    return sortModels(
+                                        displayModels.map(model => {
+                                            const config = MODEL_CONFIG[model.name.toLowerCase()];
+                                            const label = model.display_name || (config?.i18nKey ? t(config.i18nKey) : (config?.label || model.name));
+                                            return {
+                                                id: model.name.toLowerCase(),
+                                                label: label,
+                                                model
+                                            };
+                                        })
+                                    ).filter(m => {
+                                        if (uniqueLabels.has(m.label)) return false;
+                                        uniqueLabels.add(m.label);
+                                        return true;
+                                    }).map(({ model, label }) => {
+                                        const p = model.percentage;
+                                        const progressColor = p >= 50 ? 'bg-emerald-500' : p >= 20 ? 'bg-amber-500' : 'bg-rose-500';
+                                        const badgeColor = p >= 50
+                                            ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400 border border-emerald-200/50 dark:border-emerald-800/40'
+                                            : p >= 20
+                                                ? 'bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400 border border-amber-200/50 dark:border-amber-800/40'
+                                                : 'bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-400 border border-rose-200/50 dark:border-rose-800/40';
+
+                                        return (
+                                            <div key={model.name} className="p-3.5 rounded-xl border border-gray-100 dark:border-base-200 bg-white dark:bg-base-100/70 hover:border-blue-200 dark:hover:border-blue-900/60 hover:shadow-sm transition-all group">
+                                                <div className="flex justify-between items-start gap-2 mb-2.5">
+                                                    <div className="flex-1 min-w-0">
+                                                        <div className="flex items-center gap-1.5">
+                                                            {(() => {
+                                                                const Icon = MODEL_CONFIG[model.name.toLowerCase()]?.Icon || Bot;
+                                                                return <Icon size={15} className="shrink-0 text-gray-500 group-hover:text-blue-500 transition-colors" />;
+                                                            })()}
+                                                            <span className="text-xs font-semibold font-mono text-gray-800 dark:text-gray-200 truncate group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
+                                                                {label}
+                                                            </span>
+                                                        </div>
+                                                        {model.thinking_budget !== undefined && (
+                                                            <div className="mt-1 flex items-center gap-1">
+                                                                <span className="text-[10px] text-gray-500 dark:text-gray-400 font-mono bg-gray-100 dark:bg-base-200 px-1.5 py-0.5 rounded border border-gray-200/50 dark:border-base-300">
+                                                                    {t('accounts.details.thinking_budget', '思考预算')}: <span className="font-bold text-gray-700 dark:text-gray-300">{model.thinking_budget}</span>
+                                                                </span>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                    <span className={`text-[11px] font-mono font-bold px-2 py-0.5 rounded-md shrink-0 ${badgeColor}`}>
+                                                        {model.percentage}%
                                                     </span>
                                                 </div>
-                                                {model.thinking_budget !== undefined && (
-                                                    <span className="text-[10px] text-gray-500 font-mono bg-gray-100 dark:bg-base-200 px-1 rounded inline-block w-max mt-0.5">
-                                                        {t('proxy.config.thinking_budget', 'Thinking Budget')}: {model.thinking_budget}
-                                                    </span>
-                                                )}
+
+                                                {/* Progress Bar */}
+                                                <div className="h-1.5 w-full bg-gray-100 dark:bg-base-200 rounded-full overflow-hidden mb-2">
+                                                    <div
+                                                        className={`h-full rounded-full transition-all duration-500 ${progressColor}`}
+                                                        style={{ width: `${Math.min(100, Math.max(0, model.percentage))}%` }}
+                                                    />
+                                                </div>
+
+                                                <div className="flex items-center justify-between text-[10px] text-gray-400 dark:text-gray-500 font-mono">
+                                                    <div className="flex items-center gap-1 truncate">
+                                                        <Clock size={11} className="shrink-0" />
+                                                        <span className="truncate">{formatDate(model.reset_time) || t('common.unknown')}</span>
+                                                    </div>
+                                                    {model.reset_time && (
+                                                        <span className="shrink-0 font-medium text-gray-500 dark:text-gray-400 ml-1">
+                                                            {formatTimeRemaining(model.reset_time)}
+                                                        </span>
+                                                    )}
+                                                </div>
                                             </div>
-                                            <span
-                                                className={`text-xs font-bold px-2 py-0.5 rounded-md ${model.percentage >= 50 ? 'bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-400' :
-                                                    model.percentage >= 20 ? 'bg-orange-50 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400' :
-                                                        'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-400'
-                                                    }`}
-                                            >
-                                                {model.percentage}%
-                                            </span>
-                                        </div>
-
-                                        {/* Progress Bar */}
-                                        <div className="h-1.5 w-full bg-gray-100 dark:bg-base-200 rounded-full overflow-hidden mb-3">
-                                            <div
-                                                className={`h-full rounded-full transition-all duration-500 ${model.percentage >= 50 ? 'bg-emerald-500' :
-                                                    model.percentage >= 20 ? 'bg-orange-400' :
-                                                        'bg-red-500'
-                                                    }`}
-                                                style={{ width: `${model.percentage}%` }}
-                                            ></div>
-                                        </div>
-
-                                        <div className="flex items-center gap-1.5 text-[10px] text-gray-400 dark:text-gray-500 font-mono">
-                                            <Clock size={10} />
-                                            <span>{t('accounts.reset_time')}: {formatDate(model.reset_time) || t('common.unknown')}</span>
-                                        </div>
-                                    </div>
-                                ));
-                            })() || (
+                                        );
+                                    });
+                                })() || (
                                     <div className="col-span-2 py-10 text-center text-gray-400 flex flex-col items-center">
                                         <AlertCircle className="w-8 h-8 mb-2 opacity-20" />
                                         <span>{t('accounts.no_data')}</span>
                                     </div>
                                 )}
-                        </div>
-                    )}
+                            </div>
+                        )}
 
-                    {/* Quota Groups Section (New in 4.2.4) */}
-                    {activeTab === 'detailed' && account.quota?.quota_groups && account.quota.quota_groups.length > 0 && (
-                        <div className="flex flex-col gap-4">
-                            {account.quota.quota_groups.map((group, idx) => (
-                                <div key={idx} className="p-4 rounded-xl border border-blue-100 dark:border-blue-900/30 bg-blue-50/30 dark:bg-blue-900/10">
-                                    <div className="font-medium text-sm text-blue-800 dark:text-blue-300 mb-3 font-mono flex justify-between items-center">
-                                        <span>{group.display_name}</span>
-                                        {group.description && <span className="text-[10px] font-normal opacity-70">{group.description}</span>}
-                                    </div>
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                        {(group.buckets || []).map((bucket, bIdx) => {
-                                            const percentage = Math.round(bucket.remaining_fraction * 100);
-                                            return (
-                                                <div key={bIdx} className="bg-white dark:bg-base-200 p-3 rounded-lg border border-gray-100 dark:border-white/5 shadow-sm">
-                                                    <div className="flex justify-between items-center mb-2">
-                                                        <span className="text-xs font-bold text-gray-600 dark:text-gray-400 uppercase tracking-wider">{bucket.window}</span>
-                                                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${percentage >= 50 ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' : percentage >= 20 ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'}`}>
-                                                            {percentage}%
-                                                        </span>
-                                                    </div>
-                                                    {/* Progress bar */}
-                                                    <div className="h-1.5 w-full bg-gray-100 dark:bg-base-300 rounded-full overflow-hidden mb-2">
-                                                        <div className={`h-full rounded-full transition-all duration-500 ${percentage >= 50 ? 'bg-emerald-500' : percentage >= 20 ? 'bg-amber-400' : 'bg-red-500'}`} style={{ width: `${percentage}%` }}></div>
-                                                    </div>
-                                                    <div className="flex justify-between items-center text-[10px] text-gray-500 font-mono">
-                                                        <div className="flex items-center gap-1">
-                                                            <Clock size={10} />
-                                                            <span>{t('accounts.reset_time')}:</span>
+                        {/* Quota Groups Section */}
+                        {activeTab === 'detailed' && displayGroups.length > 0 && (
+                            <div className="flex flex-col gap-4">
+                                {displayGroups.map((group, idx) => (
+                                    <div key={idx} className="p-4 rounded-xl border border-blue-100/70 dark:border-blue-900/30 bg-blue-50/20 dark:bg-blue-900/10">
+                                        <div className="font-semibold text-xs text-blue-900 dark:text-blue-300 mb-3 font-mono flex justify-between items-center">
+                                            <span>{group.display_name}</span>
+                                            {group.description && <span className="text-[10px] font-normal opacity-70 truncate max-w-xs">{group.description}</span>}
+                                        </div>
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                            {(group.buckets || []).map((bucket, bIdx) => {
+                                                const percentage = Math.round(bucket.remaining_fraction * 100);
+                                                const bColor = percentage >= 50
+                                                    ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400 border border-emerald-200/50'
+                                                    : percentage >= 20
+                                                        ? 'bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400 border border-amber-200/50'
+                                                        : 'bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-400 border border-rose-200/50';
+
+                                                return (
+                                                    <div key={bIdx} className="bg-white dark:bg-base-200 p-3 rounded-lg border border-gray-100 dark:border-white/5 shadow-sm">
+                                                        <div className="flex justify-between items-center mb-2">
+                                                            <span className="text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider font-mono">
+                                                                {bucket.window}
+                                                            </span>
+                                                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded font-mono ${bColor}`}>
+                                                                {percentage}%
+                                                            </span>
                                                         </div>
-                                                        <span>{formatDate(bucket.reset_time) || t('common.unknown')}</span>
+                                                        {/* Progress bar */}
+                                                        <div className="h-1.5 w-full bg-gray-100 dark:bg-base-300 rounded-full overflow-hidden mb-2">
+                                                            <div
+                                                                className={`h-full rounded-full transition-all duration-500 ${percentage >= 50 ? 'bg-emerald-500' : percentage >= 20 ? 'bg-amber-400' : 'bg-rose-500'}`}
+                                                                style={{ width: `${percentage}%` }}
+                                                            />
+                                                        </div>
+                                                        <div className="flex justify-between items-center text-[10px] text-gray-500 font-mono">
+                                                            <div className="flex items-center gap-1 truncate">
+                                                                <Clock size={10} className="shrink-0" />
+                                                                <span className="truncate">{formatDate(bucket.reset_time) || t('common.unknown')}</span>
+                                                            </div>
+                                                            {bucket.reset_time && (
+                                                                <span className="shrink-0 font-medium text-gray-600 dark:text-gray-400 ml-1">
+                                                                    {formatTimeRemaining(bucket.reset_time)}
+                                                                </span>
+                                                            )}
+                                                        </div>
                                                     </div>
-                                                </div>
-                                            );
-                                        })}
+                                                );
+                                            })}
+                                        </div>
                                     </div>
-                                </div>
-                            ))}
-                        </div>
-                    )}
+                                ))}
+                            </div>
+                        )}
+                    </div>
                 </div>
             </div>
             <div className="modal-backdrop bg-black/40 backdrop-blur-sm" onClick={onClose}></div>

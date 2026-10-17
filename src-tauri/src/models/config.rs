@@ -44,6 +44,10 @@ pub struct AppConfig {
     pub thinking_cleanup_dismissed: Option<bool>, // [NEW] 用户是否已确认/忽略该建议
     #[serde(default)]
     pub dismissed_thinking_cleanup_version: Option<String>, // [NEW] 用户已确认或忽略建议的目标版本号
+    #[serde(default)]
+    pub auto_switch_classic_depleted: bool, // [NEW] 兼容旧版开关
+    #[serde(default)]
+    pub classic_auto_switch: ClassicAutoSwitchConfig, // [NEW] 经典款配额自动热切换配置
 }
 
 fn default_quiet_autostart() -> bool {
@@ -124,6 +128,43 @@ impl Default for QuotaProtectionConfig {
     }
 }
 
+/// Classic auto-switch configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClassicAutoSwitchConfig {
+    /// Whether classic auto switch is enabled
+    pub enabled: bool,
+    /// Quota threshold percentage (0-99). Trigger switch when quota <= threshold
+    #[serde(default = "default_classic_auto_switch_threshold")]
+    pub threshold_percentage: u32,
+    /// List of monitored models
+    #[serde(default = "default_classic_monitored_models")]
+    pub monitored_models: Vec<String>,
+}
+
+fn default_classic_auto_switch_threshold() -> u32 {
+    0
+}
+
+fn default_classic_monitored_models() -> Vec<String> {
+    vec!["gemini".to_string(), "claude".to_string()]
+}
+
+impl ClassicAutoSwitchConfig {
+    pub fn new() -> Self {
+        Self {
+            enabled: false,
+            threshold_percentage: 0,
+            monitored_models: default_classic_monitored_models(),
+        }
+    }
+}
+
+impl Default for ClassicAutoSwitchConfig {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Pinned quota models configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PinnedQuotaModelsConfig {
@@ -137,7 +178,7 @@ fn default_pinned_models() -> Vec<String> {
         "gemini-3-pro-high".to_string(),
         "gemini-3-flash".to_string(),
         "gemini-3.1-flash-image".to_string(),
-        "claude-sonnet-4-6-thinking".to_string(),
+        "claude-sonnet-4-6".to_string(),
     ]
 }
 
@@ -222,6 +263,8 @@ impl AppConfig {
             suggestion_delete_thinking_store: None,
             thinking_cleanup_dismissed: None,
             dismissed_thinking_cleanup_version: None,
+            auto_switch_classic_depleted: false,
+            classic_auto_switch: ClassicAutoSwitchConfig::default(),
         }
     }
 }

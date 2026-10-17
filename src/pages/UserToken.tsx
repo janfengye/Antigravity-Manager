@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Plus, Trash2, RefreshCw, Copy, Activity, User, Settings, Shield, Clock, Users } from 'lucide-react';
+import { Plus, Trash2, RefreshCw, Copy, Activity, User, Settings, Shield, Clock, Users, BarChart2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { request as invoke } from '../utils/request';
 import { showToast } from '../components/common/ToastContainer';
 import { copyToClipboard } from '../utils/clipboard';
+import { UserTokenStatsModal } from '../components/user_tokens/UserTokenStatsModal';
 
 interface UserToken {
     id: string;
@@ -40,6 +41,10 @@ const UserToken: React.FC = () => {
     const [loading, setLoading] = useState(false);
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [creating, setCreating] = useState(false);
+
+    // Stats Modal State
+    const [showStatsModal, setShowStatsModal] = useState(false);
+    const [statsToken, setStatsToken] = useState<UserToken | null>(null);
 
     // Edit State
     const [showEditModal, setShowEditModal] = useState(false);
@@ -380,10 +385,24 @@ const UserToken: React.FC = () => {
                                             )}
                                         </div>
                                     </td>
-                                    <td>
-                                        <div className="text-xs font-semibold text-gray-700 dark:text-gray-300">{token.total_requests} <span className="text-[10px] font-normal text-gray-400">reqs</span></div>
-                                        <div className="text-[10px] text-gray-400 mt-0.5">
-                                            {(token.total_tokens_used / 1000).toFixed(1)}k tokens
+                                    <td
+                                        className="cursor-pointer group/usage"
+                                        onClick={() => {
+                                            setStatsToken(token);
+                                            setShowStatsModal(true);
+                                        }}
+                                        title={t('user_token.view_stats', { defaultValue: '查看用量统计与趋势分析' })}
+                                    >
+                                        <div className="flex items-center gap-1.5">
+                                            <div>
+                                                <div className="text-xs font-semibold text-gray-700 dark:text-gray-300 group-hover/usage:text-blue-500 transition-colors flex items-center gap-1">
+                                                    {token.total_requests} <span className="text-[10px] font-normal text-gray-400">reqs</span>
+                                                    <BarChart2 size={11} className="opacity-0 group-hover/usage:opacity-100 text-blue-500 transition-opacity" />
+                                                </div>
+                                                <div className="text-[10px] text-gray-400 mt-0.5">
+                                                    {(token.total_tokens_used / 1000).toFixed(1)}k tokens
+                                                </div>
+                                            </div>
                                         </div>
                                     </td>
                                     <td>
@@ -403,6 +422,16 @@ const UserToken: React.FC = () => {
                                     </td>
                                     <td className="text-right">
                                         <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                            <button
+                                                onClick={() => {
+                                                    setStatsToken(token);
+                                                    setShowStatsModal(true);
+                                                }}
+                                                className="p-1.5 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg text-gray-500 hover:text-blue-500 transition-colors"
+                                                title={t('user_token.view_stats', { defaultValue: '用量统计' })}
+                                            >
+                                                <BarChart2 size={14} />
+                                            </button>
                                             <button
                                                 onClick={() => handleEdit(token)}
                                                 className="p-1.5 hover:bg-gray-100 dark:hover:bg-base-200 rounded-lg text-gray-500 hover:text-blue-500 transition-colors"
@@ -671,6 +700,16 @@ const UserToken: React.FC = () => {
                     </div>
                 </div>
             )}
+
+            {/* User Token 专属用量统计弹窗 */}
+            <UserTokenStatsModal
+                isOpen={showStatsModal}
+                onClose={() => {
+                    setShowStatsModal(false);
+                    setStatsToken(null);
+                }}
+                token={statsToken}
+            />
         </motion.div>
     );
 };

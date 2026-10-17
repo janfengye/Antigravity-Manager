@@ -113,7 +113,7 @@ function AccountRow({ account, selected, onSelect, isCurrent, isRefreshing, isSw
                             </span>
                         )}
 
-                        {account.proxy_disabled && (
+                        {account.proxy_disabled && !isDisabled && (
                             <span
                                 className="px-2 py-0.5 rounded-md bg-orange-100 dark:bg-orange-900/50 text-orange-700 dark:text-orange-300 text-[10px] font-bold flex items-center gap-1 shadow-sm border border-orange-200/50"
                                 title={account.proxy_disabled_reason || t('accounts.proxy_disabled_tooltip')}

@@ -108,6 +108,35 @@ pub fn find_field(data: &[u8], target_field: u32) -> Result<Option<Vec<u8>>, Str
     Ok(None)
 }
 
+/// Find all occurrences of a specified Protobuf field content (Length-Delimited only)
+pub fn find_all_fields(data: &[u8], target_field: u32) -> Result<Vec<Vec<u8>>, String> {
+    let mut results = Vec::new();
+    let mut offset = 0;
+
+    while offset < data.len() {
+        let (tag, new_offset) = match read_varint(data, offset) {
+            Ok(v) => v,
+            Err(_) => break,
+        };
+
+        let wire_type = (tag & 7) as u8;
+        let field_num = (tag >> 3) as u32;
+
+        if field_num == target_field && wire_type == 2 {
+            let (length, content_offset) = read_varint(data, new_offset)?;
+            let end_offset = content_offset + length as usize;
+            if end_offset <= data.len() {
+                results.push(data[content_offset..end_offset].to_vec());
+            }
+            offset = end_offset;
+        } else {
+            offset = skip_field(data, new_offset, wire_type)?;
+        }
+    }
+
+    Ok(results)
+}
+
 /// Create OAuthTokenInfo (Field 6)
 ///
 /// Structure:
@@ -300,24 +329,57 @@ fn decode_legacy_base64_payload_if_needed(payload: Vec<u8>) -> Vec<u8> {
     }
 }
 
-fn decode_topic_row_payload(topic_blob: &[u8]) -> Result<(String, Vec<u8>), String> {
+fn decode_topic_row_payload_with_target(
+    topic_blob: &[u8],
+    preferred_key: Option<&str>,
+) -> Result<(String, Vec<u8>), String> {
     use base64::{engine::general_purpose, Engine as _};
 
-    let data_entry = find_field(topic_blob, 1)?.ok_or("Topic data entry not found".to_string())?;
-    let sentinel_key = String::from_utf8(
-        find_field(&data_entry, 1)?.ok_or("Topic data entry key not found".to_string())?,
-    )
-    .map_err(|_| "Topic data entry key is not UTF-8".to_string())?;
-    let row_blob = find_field(&data_entry, 2)?.ok_or("Topic row not found".to_string())?;
-    let encoded_payload = String::from_utf8(
-        find_field(&row_blob, 1)?.ok_or("Topic row value not found".to_string())?,
-    )
-    .map_err(|_| "Topic row value is not UTF-8".to_string())?;
-    let payload = general_purpose::STANDARD
-        .decode(encoded_payload)
-        .map_err(|e| format!("Topic row payload base64 decoding failed: {}", e))?;
+    let data_entries = find_all_fields(topic_blob, 1)?;
+    if data_entries.is_empty() {
+        return Err("Topic data entry not found".to_string());
+    }
 
-    Ok((sentinel_key, payload))
+    let mut first_valid = None;
+
+    for data_entry in data_entries {
+        let sentinel_key_bytes = match find_field(&data_entry, 1)? {
+            Some(b) => b,
+            None => continue,
+        };
+        let sentinel_key = match String::from_utf8(sentinel_key_bytes) {
+            Ok(k) => k,
+            Err(_) => continue,
+        };
+        let row_blob = match find_field(&data_entry, 2)? {
+            Some(b) => b,
+            None => continue,
+        };
+        let encoded_payload_bytes = match find_field(&row_blob, 1)? {
+            Some(b) => b,
+            None => continue,
+        };
+        let encoded_payload = match String::from_utf8(encoded_payload_bytes) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let payload = match general_purpose::STANDARD.decode(&encoded_payload) {
+            Ok(p) => p,
+            Err(_) => encoded_payload.into_bytes(),
+        };
+
+        if let Some(pref) = preferred_key {
+            if sentinel_key == pref {
+                return Ok((sentinel_key, payload));
+            }
+        }
+
+        if first_valid.is_none() {
+            first_valid = Some((sentinel_key, payload));
+        }
+    }
+
+    first_valid.ok_or_else(|| "No valid topic row payload decoded".to_string())
 }
 
 fn decode_legacy_unified_state_entry(outer_blob: &[u8]) -> Result<(String, Vec<u8>), String> {
@@ -350,13 +412,21 @@ pub fn create_unified_state_entry(sentinel_key: &str, payload: &[u8]) -> String 
 /// 解码统一状态同步条目，返回 sentinel key 和原始 payload。
 /// 优先支持官方 Topic/Row 格式，并兼容早期工具写入的错误嵌套格式。
 pub fn decode_unified_state_entry(outer_b64: &str) -> Result<(String, Vec<u8>), String> {
+    decode_unified_state_entry_with_target(outer_b64, None)
+}
+
+/// 解码统一状态同步条目，支持指定优先检索的目标 sentinel key。
+pub fn decode_unified_state_entry_with_target(
+    outer_b64: &str,
+    preferred_key: Option<&str>,
+) -> Result<(String, Vec<u8>), String> {
     use base64::{engine::general_purpose, Engine as _};
 
     let outer_blob = general_purpose::STANDARD
         .decode(outer_b64)
         .map_err(|e| format!("Outer Base64 decoding failed: {}", e))?;
 
-    decode_topic_row_payload(&outer_blob)
+    decode_topic_row_payload_with_target(&outer_blob, preferred_key)
         .or_else(|_| decode_legacy_unified_state_entry(&outer_blob))
 }
 

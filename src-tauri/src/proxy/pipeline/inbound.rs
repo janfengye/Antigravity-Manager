@@ -92,6 +92,9 @@ impl InboundThinkingPipeline {
         // 将 `functionCall.id` 与 `functionResponse.id` 统一对齐为带 `_` 的标准形态 (`call_...`)。
         Self::normalize_tool_call_ids(contents);
 
+        // 0.05 工具名称双向自愈与非法回执降级防护（Pipeline First 统一治理，Fixes #3679）：
+        Self::repair_and_sanitize_tool_names(contents);
+
         // 0.1 连续工具调用轮次合并（Pipeline First 统一治理）：
         // 当客户端将并行工具调用拆散为多个连续的 assistant/model 轮次时，
         // 必须将其合并为一个单一的 model content 轮次。
@@ -734,6 +737,162 @@ impl InboundThinkingPipeline {
         normalized_count
     }
 
+    /// 工具名称双向自愈与非法回执降级防护（Pipeline First 统一治理，Fixes #3679）：
+    /// 彻底解决由于客户端格式差异、上下文窗口裁剪或 Adapter 转换中未能识别出的 "unknown" 工具名，
+    /// 杜绝未经声明的 "unknown" 工具回执发送给上游导致 400 Bad Request 异常中断会话。
+    ///
+    /// 1. 扫描所有 `functionCall` 与 `functionResponse`，在 ID 规范化后建立健全的 `id -> name` 拓扑映射；
+    /// 2. 遍历修正所有 `name == "unknown"` 或空的 `functionResponse`：
+    ///    - 优先根据已规范化的 `id` 反查对应的合法工具名进行修复；
+    ///    - 其次若前置紧邻轮次有唯一对应的 `functionCall`，继承其工具名；
+    /// 3. 反向自愈：若 `functionCall` 的 `name == "unknown"`，亦可通过其 `id` 从回执中自愈；
+    /// 4. 兜底降级防护：
+    ///    若经过自愈后仍有 `functionResponse` 的名称为 "unknown" 或为空（例如上下文彻底被截断的孤儿回执），
+    ///    将其平滑降级为普通的文本内容部件（保持输出结果可供模型阅读），
+    ///    彻底消除上游因未声明工具名称直接抛出 400 崩溃的隐患。
+    pub fn repair_and_sanitize_tool_names(contents: &mut [Value]) -> usize {
+        let mut repaired_count = 0usize;
+        let mut id_to_name: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+
+        // Pass 1: 扫描全会话中已知的合法工具调用与回执名称
+        for content in contents.iter() {
+            if let Some(parts) = content.get("parts").and_then(|p| p.as_array()) {
+                for part in parts {
+                    if let Some(fc) = part.get("functionCall") {
+                        if let Some(name) = fc.get("name").and_then(|v| v.as_str()) {
+                            if !name.is_empty() && name != "unknown" {
+                                if let Some(id) = fc.get("id").and_then(|v| v.as_str()) {
+                                    id_to_name.insert(id.to_string(), name.to_string());
+                                }
+                            }
+                        }
+                    }
+                    if let Some(fr) = part.get("functionResponse") {
+                        if let Some(name) = fr.get("name").and_then(|v| v.as_str()) {
+                            if !name.is_empty() && name != "unknown" {
+                                if let Some(id) = fr.get("id").and_then(|v| v.as_str()) {
+                                    id_to_name
+                                        .entry(id.to_string())
+                                        .or_insert_with(|| name.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Pass 2: 双向自愈与拓扑推断
+        let mut last_valid_fc_name: Option<String> = None;
+        for content in contents.iter_mut() {
+            if let Some(parts) = content.get_mut("parts").and_then(|p| p.as_array_mut()) {
+                for part in parts.iter_mut() {
+                    // 自愈 functionCall
+                    if let Some(fc) = part.get_mut("functionCall").and_then(|v| v.as_object_mut()) {
+                        let name_is_invalid = fc
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .map_or(true, |n| n.is_empty() || n == "unknown");
+                        if name_is_invalid {
+                            if let Some(id) = fc.get("id").and_then(|v| v.as_str()) {
+                                if let Some(repaired_name) = id_to_name.get(id) {
+                                    fc.insert("name".to_string(), serde_json::json!(repaired_name));
+                                    repaired_count += 1;
+                                }
+                            }
+                        }
+                        if let Some(valid_name) = fc.get("name").and_then(|v| v.as_str()) {
+                            if !valid_name.is_empty() && valid_name != "unknown" {
+                                last_valid_fc_name = Some(valid_name.to_string());
+                            }
+                        }
+                    }
+
+                    // 自愈 functionResponse
+                    if let Some(fr) = part
+                        .get_mut("functionResponse")
+                        .and_then(|v| v.as_object_mut())
+                    {
+                        let name_is_invalid = fr
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .map_or(true, |n| n.is_empty() || n == "unknown");
+                        if name_is_invalid {
+                            let mut repaired = false;
+                            if let Some(id) = fr.get("id").and_then(|v| v.as_str()) {
+                                if let Some(repaired_name) = id_to_name.get(id) {
+                                    fr.insert("name".to_string(), serde_json::json!(repaired_name));
+                                    repaired_count += 1;
+                                    repaired = true;
+                                }
+                            }
+                            if !repaired {
+                                if let Some(ref fallback_name) = last_valid_fc_name {
+                                    fr.insert("name".to_string(), serde_json::json!(fallback_name));
+                                    repaired_count += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Pass 3: 孤儿且无法自愈的非法 functionResponse 降级防护
+        for content in contents.iter_mut() {
+            if let Some(parts) = content.get_mut("parts").and_then(|p| p.as_array_mut()) {
+                for part in parts.iter_mut() {
+                    let should_degrade = if let Some(fr) = part.get("functionResponse") {
+                        fr.get("name")
+                            .and_then(|v| v.as_str())
+                            .map_or(true, |n| n.is_empty() || n == "unknown")
+                    } else {
+                        false
+                    };
+
+                    if should_degrade {
+                        if let Some(fr) = part.get("functionResponse") {
+                            let output_text = if let Some(resp) = fr.get("response") {
+                                if let Some(out) = resp.get("output").and_then(|o| o.as_str()) {
+                                    out.to_string()
+                                } else if let Some(out_str) = resp.as_str() {
+                                    out_str.to_string()
+                                } else {
+                                    serde_json::to_string(resp).unwrap_or_default()
+                                }
+                            } else {
+                                String::new()
+                            };
+
+                            let degraded_text = if output_text.trim().is_empty() {
+                                "[Tool execution finished with empty output]".to_string()
+                            } else {
+                                format!("[Tool Output]:\n{}", output_text)
+                            };
+
+                            tracing::warn!(
+                                "[InboundPipeline] Degraded orphan 'unknown' functionResponse to plain text to prevent upstream 400 error"
+                            );
+                            *part = serde_json::json!({
+                                "text": degraded_text
+                            });
+                            repaired_count += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        if repaired_count > 0 {
+            tracing::info!(
+                "[InboundPipeline] Repaired or sanitized {} tool call/response(s)",
+                repaired_count
+            );
+        }
+        repaired_count
+    }
+
     /// 连续工具调用轮次合并（Pipeline First 统一治理）：
     /// 当客户端将并行工具调用拆为多个连续的 assistant/model 轮次时，
     /// 统一合并为一个单一的 model content 轮次。
@@ -826,6 +985,14 @@ impl InboundThinkingPipeline {
                 && !has_fr(p)
                 && p.get("functionCall").is_none()
         }
+        /// part 是否为系统注入的提醒文本（如 Claude Code 的 <system-reminder>）
+        fn is_system_reminder(p: &Value) -> bool {
+            p.get("text").and_then(|t| t.as_str()).is_some_and(|s| {
+                s.contains("<system-reminder>")
+                    || s.contains("<system-instruction>")
+                    || s.contains("<environment_details>")
+            })
+        }
 
         let mut rewritten = 0usize;
         let mut out: Vec<Value> = Vec::with_capacity(contents.len());
@@ -851,22 +1018,74 @@ impl InboundThinkingPipeline {
                 continue;
             }
 
+            // [FIX #3634 Gemini 工具链闭环保全]
+            // 当目标协议为 Gemini (target_role == "model") 时：
+            // 若回执轮伴随有系统注入的提醒文本（如 Claude Code CLI 附带的 <system-reminder>），
+            // 绝不可将该提醒拆分为悬挂在末尾的独立 role: "user" 轮次！
+            // 悬挂的末尾 user 轮次会直接打断 Gemini 的工具调用状态机，导致模型误判为用户新一轮对话而吐出极短字符后草率终止。
+            // 统一将伴随的系统提醒文本无缝折叠入最后一个 functionResponse 的 response.output 中，
+            // 既完整保留上下文感知与 KV Cache 稳定性，又维持纯净的 role: "model" 回执收尾，确保工具链持续驱动。
+            let mut parts = parts;
+            if target_role == "model" && parts.iter().any(is_system_reminder) {
+                let mut reminders = Vec::new();
+                parts.retain(|p| {
+                    if is_system_reminder(p) {
+                        if let Some(t) = p.get("text").and_then(|t| t.as_str()) {
+                            reminders.push(t.to_string());
+                        }
+                        false
+                    } else {
+                        true
+                    }
+                });
+
+                if !reminders.is_empty() {
+                    let combined = reminders.join("\n\n");
+                    if let Some(fr) = parts.iter_mut().rev().find(|p| has_fr(p)) {
+                        if let Some(fr_obj) = fr
+                            .get_mut("functionResponse")
+                            .and_then(|f| f.as_object_mut())
+                        {
+                            let resp = fr_obj.entry("response").or_insert_with(|| json!({}));
+                            if let Some(resp_obj) = resp.as_object_mut() {
+                                if let Some(out_val) = resp_obj.get_mut("output") {
+                                    if let Some(out_str) = out_val.as_str() {
+                                        *out_val = json!(format!("{}\n\n{}", out_str, combined));
+                                    } else {
+                                        resp_obj
+                                            .insert("system_reminder".to_string(), json!(combined));
+                                    }
+                                } else {
+                                    resp_obj.insert("output".to_string(), json!(combined));
+                                }
+                            }
+                        }
+                    }
+                    rewritten += 1;
+                }
+            }
+
             let all_response = parts.iter().all(|p| has_fr(p) || is_media(p));
 
             // 已经是目标角色且为纯回执轮，无需改写，直接流入聚合阶段
             if role == target_role && all_response {
-                out.push(content);
+                let mut c = content;
+                c["parts"] = json!(parts);
+                out.push(c);
                 continue;
             }
 
             // 纯回执轮：改写 role 为 target_role
             if all_response {
                 if target_role == "model" && out.is_empty() {
-                    out.push(content);
+                    let mut c = content;
+                    c["parts"] = json!(parts);
+                    out.push(c);
                     continue;
                 }
                 let mut c = content;
                 c["role"] = json!(target_role);
+                c["parts"] = json!(parts);
                 out.push(c);
                 rewritten += 1;
                 continue;
@@ -1171,10 +1390,21 @@ impl InboundThinkingPipeline {
             if let Some(budget) = final_budget {
                 if budget == 0 {
                     tc = json!({
+                        "includeThoughts": false,
                         "thinkingBudget": 0
                     });
                 } else {
-                    tc["thinkingBudget"] = json!(budget);
+                    let effective_budget =
+                        if (crate::proxy::model_specs::is_gemini_v4_or_above(target_model)
+                            || target_model.to_lowercase().contains("argon"))
+                            && budget > 0
+                            && budget < 1024
+                        {
+                            1024
+                        } else {
+                            budget
+                        };
+                    tc["thinkingBudget"] = json!(effective_budget);
                 }
             } else if is_tiered {
                 // Tiered 模型未指定具体数字 budget 且官方结构体无 thinking_budget 时：纯自适应模式
@@ -1280,6 +1510,9 @@ impl InboundThinkingPipeline {
                     .and_then(Value::as_object_mut)
                 {
                     tc.insert("thinkingBudget".to_string(), json!(final_budget));
+                    if final_budget == 0 {
+                        tc.insert("includeThoughts".to_string(), json!(false));
+                    }
                 }
             }
         }
@@ -1347,31 +1580,25 @@ impl InboundThinkingPipeline {
         let mut canonical_contents = req_obj.remove("contents").unwrap_or(json!([]));
 
         // [Gatekeeper 2026-09-29 / 2026-09-30 Pipeline First] Gemini 目标出站终审安全自愈门禁：
-        // Google Gemini 3+ 规则：全会话历史与活跃轮次中的所有工具调用 (Function Calling)
+        // Google Gemini 3+ 与 Google v1internal 规则：全会话历史与活跃轮次中的所有工具调用 (Function Calling)
         // 均被 Google AST 校验器严格强制检查 thoughtSignature。
-        // 若任意历史或活跃轮次的某个 functionCall 缺少签名，出站前统一自动注入官方合法哨兵 SENTINEL_SIGNATURE，彻底杜绝上游 400！
-        let is_claude_model = target_model.to_lowercase().contains("claude")
-            || crate::models::OfficialModelCatalog::get(target_model)
-                .map(|m| m.is_claude())
-                .unwrap_or(false);
-        if !is_claude_model || target_model.to_lowercase().contains("gemini") {
-            if let Some(contents_arr) = canonical_contents.as_array_mut() {
-                for content in contents_arr.iter_mut() {
-                    if let Some(parts) = content.get_mut("parts").and_then(|p| p.as_array_mut()) {
-                        for part in parts.iter_mut() {
-                            if part.get("functionCall").is_some() {
-                                let has_sig = part
-                                    .get("thoughtSignature")
-                                    .or_else(|| part.get("thought_signature"))
-                                    .and_then(|s| s.as_str())
-                                    .map_or(false, |s| !s.trim().is_empty());
-                                if !has_sig {
-                                    tracing::warn!(
-                                        "[Gatekeeper] Found functionCall missing thoughtSignature in turn, auto-injecting sentinel!"
-                                    );
-                                    part["thoughtSignature"] =
-                                        json!(crate::proxy::thinking_store::SENTINEL_SIGNATURE);
-                                }
+        // 若任意历史或活跃轮次的某个 functionCall 缺少签名，出站前统一自动注入官方合法哨兵 SENTINEL_SIGNATURE，彻底杜绝上游 400 (Fixes #3202, #3229)！
+        if let Some(contents_arr) = canonical_contents.as_array_mut() {
+            for content in contents_arr.iter_mut() {
+                if let Some(parts) = content.get_mut("parts").and_then(|p| p.as_array_mut()) {
+                    for part in parts.iter_mut() {
+                        if part.get("functionCall").is_some() {
+                            let has_sig = part
+                                .get("thoughtSignature")
+                                .or_else(|| part.get("thought_signature"))
+                                .and_then(|s| s.as_str())
+                                .map_or(false, |s| !s.trim().is_empty());
+                            if !has_sig {
+                                tracing::warn!(
+                                    "[Gatekeeper] Found functionCall missing thoughtSignature in turn, auto-injecting sentinel!"
+                                );
+                                part["thoughtSignature"] =
+                                    json!(crate::proxy::thinking_store::SENTINEL_SIGNATURE);
                             }
                         }
                     }
@@ -1650,10 +1877,33 @@ impl InboundThinkingPipeline {
         // 6. sessionId 提取
         let canonical_sid = req_obj.remove("sessionId");
 
-        // 7. safetySettings (仅当客户端显式传递且非空时保留，官方默认不携带，杜绝伪造 4 项 OFF)
-        let canonical_safety = req_obj
-            .remove("safetySettings")
-            .filter(|v| v.as_array().map_or(false, |a| !a.is_empty()));
+        // 7. safetySettings (仅当客户端显式传递且非空时保留，官方默认不携带，杜绝伪造 4 项 OFF；同时过滤非标准分类，Fixes #3195)
+        let canonical_safety = req_obj.remove("safetySettings").and_then(|v| {
+            if let Value::Array(arr) = v {
+                const VALID_CATEGORIES: &[&str] = &[
+                    "HARM_CATEGORY_HARASSMENT",
+                    "HARM_CATEGORY_HATE_SPEECH",
+                    "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                    "HARM_CATEGORY_DANGEROUS_CONTENT",
+                    "HARM_CATEGORY_CIVIC_INTEGRITY",
+                ];
+                let filtered: Vec<Value> = arr
+                    .into_iter()
+                    .filter(|item| {
+                        item.get("category")
+                            .and_then(Value::as_str)
+                            .map_or(false, |cat| VALID_CATEGORIES.contains(&cat))
+                    })
+                    .collect();
+                if filtered.is_empty() {
+                    None
+                } else {
+                    Some(Value::Array(filtered))
+                }
+            } else {
+                None
+            }
+        });
 
         // 8. 严格对齐官方 Topology 键序:
         // contents -> systemInstruction -> tools -> labels -> generationConfig -> sessionId -> safetySettings -> 其余
@@ -2585,6 +2835,40 @@ mod tests {
         assert_eq!(contents[2]["parts"][0]["text"], "顺便说明");
         assert_eq!(contents[3]["role"], "model");
         assert!(contents[3]["parts"][0].get("functionResponse").is_some());
+    }
+
+    #[test]
+    fn test_fr_role_with_trailing_system_reminder_folds_into_response_without_dangling_user_turn() {
+        let reminder_text = "<system-reminder>\nBefore the user's request for this turn, the system provides the following reminder for your awareness:\n<total_tokens>14999685 tokens left</total_tokens>\n</system-reminder>";
+        let mut contents = vec![
+            json!({"role": "user", "parts": [{"text": "check process"}]}),
+            json!({"role": "model", "parts": [fc_part("c1", "Bash")]}),
+            json!({
+                "role": "user",
+                "parts": [
+                    fr_part("c1", "Bash"),
+                    {"text": reminder_text}
+                ]
+            }),
+        ];
+        InboundThinkingPipeline::normalize_function_response_roles(
+            &mut contents,
+            "gemini-3.8-flash-low",
+        );
+        // 核心契约：工具回执伴随的系统提示绝不可拆为悬挂在末尾的独立 user 轮次！
+        // 整个会话必须以包含 functionResponse 的 model 轮次收尾，以维持 Gemini 工具链闭环。
+        assert_eq!(
+            contents.len(),
+            3,
+            "应折叠为 3 轮，杜绝产生悬挂的第 4 轮 user 消息"
+        );
+        assert_eq!(contents[2]["role"], "model");
+        let fr = &contents[2]["parts"][0]["functionResponse"];
+        let output = fr["response"]["output"].as_str().expect("output string");
+        assert!(
+            output.contains(reminder_text),
+            "系统提醒内容必须完整保留在工具回执 output 内部"
+        );
     }
 
     /// 回执附带图片：`user [fr, inlineData]` → `model [fr]` + `user [inlineData]`，
@@ -3559,5 +3843,128 @@ mod tests {
             Some(crate::proxy::thinking_store::SENTINEL_SIGNATURE),
             "Gatekeeper must inject sentinel signature for non-Claude models (Defect 10)"
         );
+    }
+
+    #[test]
+    fn test_gatekeeper_sentinel_injected_for_claude_model_function_call_issue_3202() {
+        let mut inner_req = json!({
+            "contents": [
+                {
+                    "role": "model",
+                    "parts": [
+                        {
+                            "functionCall": {
+                                "name": "default_api:Bash",
+                                "args": {"command": "git status"}
+                            }
+                        }
+                    ]
+                }
+            ]
+        });
+
+        InboundThinkingPipeline::align_google_request_prefix_topology_with_model(
+            &mut inner_req,
+            "claude-sonnet-4-6",
+            None,
+        );
+
+        let fc_part = &inner_req["contents"][0]["parts"][0];
+        assert_eq!(
+            fc_part.get("thoughtSignature").and_then(|v| v.as_str()),
+            Some(crate::proxy::thinking_store::SENTINEL_SIGNATURE),
+            "Gatekeeper 必须为 Claude 模型的工具调用补全哨兵签名，防止 Google 400 报错 (Fixes #3202)"
+        );
+    }
+
+    #[test]
+    fn test_gatekeeper_filters_unsupported_safety_categories_issue_3195() {
+        let mut inner_req = json!({
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [{"text": "hello"}]
+                }
+            ],
+            "safetySettings": [
+                { "category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE" },
+                { "category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE" },
+                { "category": "HARM_CATEGORY_INVALID_DEPRECATED_CUSTOM", "threshold": "BLOCK_NONE" }
+            ]
+        });
+
+        InboundThinkingPipeline::align_google_request_prefix_topology_with_model(
+            &mut inner_req,
+            "gemini-3.1-pro-high",
+            None,
+        );
+
+        let safety = inner_req["safetySettings"].as_array().unwrap();
+        assert_eq!(safety.len(), 2, "不支持的分类必须被过滤");
+        assert_eq!(safety[0]["category"], "HARM_CATEGORY_HARASSMENT");
+        assert_eq!(safety[1]["category"], "HARM_CATEGORY_HATE_SPEECH");
+    }
+
+    #[test]
+    fn test_repair_and_sanitize_tool_names_repairs_unknown_from_matching_id_issue_3679() {
+        let mut contents = vec![
+            json!({
+                "role": "model",
+                "parts": [
+                    {
+                        "functionCall": {
+                            "id": "call_abc123",
+                            "name": "run_command",
+                            "args": { "command": "cargo test" }
+                        }
+                    }
+                ]
+            }),
+            json!({
+                "role": "user",
+                "parts": [
+                    {
+                        "functionResponse": {
+                            "id": "call_abc123",
+                            "name": "unknown",
+                            "response": { "output": "ok" }
+                        }
+                    }
+                ]
+            }),
+        ];
+
+        let repaired = InboundThinkingPipeline::repair_and_sanitize_tool_names(&mut contents);
+        assert_eq!(repaired, 1);
+        assert_eq!(
+            contents[1]["parts"][0]["functionResponse"]["name"], "run_command",
+            "具有匹配 ID 的 'unknown' functionResponse 必须被自动自愈为正确的工具名 (Fixes #3679)"
+        );
+    }
+
+    #[test]
+    fn test_repair_and_sanitize_tool_names_degrades_orphan_unknown_response_issue_3679() {
+        let mut contents = vec![json!({
+            "role": "user",
+            "parts": [
+                {
+                    "functionResponse": {
+                        "id": "call_orphan",
+                        "name": "unknown",
+                        "response": { "output": "something happened" }
+                    }
+                }
+            ]
+        })];
+
+        let count = InboundThinkingPipeline::repair_and_sanitize_tool_names(&mut contents);
+        assert_eq!(count, 1);
+        let part = &contents[0]["parts"][0];
+        assert!(
+            part.get("functionResponse").is_none(),
+            "无法自愈的孤儿 'unknown' 工具回执必须被降级，彻底杜绝上游 400 校验异常"
+        );
+        let text = part["text"].as_str().expect("必须降级为文本 part");
+        assert!(text.contains("something happened"));
     }
 }

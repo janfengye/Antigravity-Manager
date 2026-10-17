@@ -49,6 +49,7 @@ const COMMAND_MAPPING: Record<string, { url: string; method: 'GET' | 'POST' | 'D
   'get_proxy_stats': { url: '/api/proxy/stats', method: 'GET' },
   'set_proxy_monitor_enabled': { url: '/api/proxy/monitor/toggle', method: 'POST' },
   'set_proxy_capture_health_logs': { url: '/api/proxy/monitor/health-logs/toggle', method: 'POST' },
+  'test_model_connectivity': { url: '/api/proxy/test-model', method: 'POST' },
 
   // Logs & Monitoring
   'get_proxy_logs_filtered': { url: '/api/logs', method: 'GET' },
@@ -181,6 +182,8 @@ const COMMAND_MAPPING: Record<string, { url: string; method: 'GET' | 'POST' | 'D
   'renew_user_token': { url: '/api/user-tokens/:id/renew', method: 'POST' },
   'delete_user_token': { url: '/api/user-tokens/:id', method: 'DELETE' },
   'update_user_token': { url: '/api/user-tokens/:id', method: 'PATCH' },
+  'get_user_token_stats': { url: '/api/user-tokens/:id/stats', method: 'GET' },
+  'get_user_tokens_ranking': { url: '/api/user-tokens/ranking', method: 'GET' },
 
   // Proxy Pool (Web Mode Fix)
   'get_proxy_pool_config': { url: '/api/proxy/pool/config', method: 'GET' },

@@ -5,7 +5,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::State;
 use tokio::sync::RwLock;
-use tokio::time::Duration;
 
 /// 反代服务状态
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -251,6 +250,7 @@ pub async fn ensure_admin_server(
         config.experimental.thinking_store_enabled,
         config.experimental.thinking_retention_days,
         Some(config.experimental.thinking_max_memory_turns),
+        Some(config.experimental.enable_global_compaction_strip),
     );
 
     // Ensure monitor exists
@@ -310,12 +310,14 @@ pub async fn ensure_admin_server(
     // [NEW] 初始化全局图像思维模式配置
     crate::proxy::update_image_thinking_mode(config.image_thinking_mode.clone());
     crate::proxy::update_multimodal_config(config.multimodal.clone());
+    crate::proxy::update_stream_timeout_config(config.stream_timeouts.clone());
     crate::proxy::config::update_global_audit_config(
         config.experimental.payload_storage_mode.clone(),
         config.experimental.log_retention_days,
         config.experimental.thinking_store_enabled,
         config.experimental.thinking_retention_days,
         Some(config.experimental.thinking_max_memory_turns),
+        Some(config.experimental.enable_global_compaction_strip),
     );
 
     Ok(())
@@ -835,4 +837,135 @@ pub async fn get_proxy_pool_config(
 #[tauri::command]
 pub async fn get_proxy_db_disk_size() -> Result<u64, String> {
     crate::modules::proxy_db::get_proxy_db_disk_bytes()
+}
+
+/// 测试模型连通性与预热检测
+#[tauri::command]
+pub async fn test_model_connectivity(
+    state: State<'_, ProxyServiceState>,
+    model: String,
+    target_account_id: Option<String>,
+) -> Result<crate::proxy::handlers::warmup::WarmupResponse, String> {
+    let port = {
+        let instance_guard = state.instance.read().await;
+        if let Some(ref inst) = *instance_guard {
+            inst.config.port
+        } else {
+            return Err("反代服务未运行，请先在代理页面启动反代服务".to_string());
+        }
+    };
+
+    let accounts = crate::modules::account::list_accounts().unwrap_or_default();
+
+    let (chosen_account, token, pid) = if let Some(ref acc_id) = target_account_id {
+        if !acc_id.is_empty() {
+            let acc = accounts
+                .iter()
+                .find(|a| &a.id == acc_id)
+                .cloned()
+                .ok_or_else(|| "未找到指定的账号".to_string())?;
+            let (t, p) = crate::modules::quota::get_valid_token_for_warmup(&acc).await?;
+            (acc, t, p)
+        } else {
+            pick_auto_test_account(&accounts).await?
+        }
+    } else {
+        pick_auto_test_account(&accounts).await?
+    };
+
+    let warmup_url = format!("http://127.0.0.1:{}/internal/warmup", port);
+    let body = serde_json::json!({
+        "email": chosen_account.email,
+        "model": model,
+        "access_token": token,
+        "project_id": pid,
+        "account_id": chosen_account.id
+    });
+
+    let client = rquest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .no_proxy()
+        .build()
+        .map_err(|e| format!("创建客户端失败: {}", e))?;
+
+    let resp = client
+        .post(&warmup_url)
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("发送预热检测请求失败: {}", e))?;
+
+    let result = resp
+        .json::<crate::proxy::handlers::warmup::WarmupResponse>()
+        .await
+        .map_err(|e| format!("解析预热检测结果失败: {}", e))?;
+
+    Ok(result)
+}
+
+async fn pick_auto_test_account(
+    accounts: &[crate::models::account::Account],
+) -> Result<(crate::models::account::Account, String, String), String> {
+    let candidates: Vec<_> = accounts
+        .iter()
+        .filter(|a| !a.disabled && !a.proxy_disabled)
+        .cloned()
+        .collect();
+
+    if candidates.is_empty() {
+        return Err(
+            "当前没有开启反代的可用账号，请先在账号页面开启至少一个账号的反代，或指定具体账号测试"
+                .to_string(),
+        );
+    }
+
+    // 优先选择配额充足且健康的账号 (按各模型中最高剩余配额从大到小排序)
+    let mut sorted_candidates = candidates;
+    sorted_candidates.sort_by(|a, b| {
+        let quota_a = a
+            .quota
+            .as_ref()
+            .and_then(|q| q.models.iter().map(|m| m.percentage).max())
+            .unwrap_or(0);
+        let quota_b = b
+            .quota
+            .as_ref()
+            .and_then(|q| q.models.iter().map(|m| m.percentage).max())
+            .unwrap_or(0);
+        quota_b.cmp(&quota_a)
+    });
+
+    let mut last_err = None;
+    for acc in sorted_candidates {
+        match crate::modules::quota::get_valid_token_for_warmup(&acc).await {
+            Ok((t, p)) => return Ok((acc, t, p)),
+            Err(e) => {
+                last_err = Some(e);
+            }
+        }
+    }
+
+    Err(last_err.unwrap_or_else(|| "无法获取候选账号的有效凭证".to_string()))
+}
+
+/// 获取当前生效的官方 Hub 指纹信息
+#[tauri::command]
+pub async fn get_hub_fingerprint() -> Result<crate::modules::hub_version::HubFingerprint, String> {
+    Ok(crate::modules::hub_version::get_current_hub_fingerprint())
+}
+
+/// 强制探测官方远程更新源并返回最新 Hub 指纹信息
+#[tauri::command]
+pub async fn detect_remote_hub_fingerprint(
+    custom_version: Option<String>,
+    custom_cl: Option<String>,
+) -> Result<crate::modules::hub_version::HubFingerprint, String> {
+    let fp = crate::modules::hub_version::detect_and_update_hub_fingerprint(
+        custom_version.as_deref(),
+        custom_cl.as_deref(),
+    )
+    .await;
+
+    Ok(fp)
 }

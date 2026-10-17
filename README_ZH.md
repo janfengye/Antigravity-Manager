@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> 专业级 AI 账号管理与协议代理系统 (v4.9.6)
+> 专业级 AI 账号管理与协议代理系统 (v4.9.8)
 
 <div align="center">
   <img src="public/icon.png" width="100" height="100" alt="Antigravity Tools Logo">
@@ -11,7 +11,7 @@
       <img src="https://img.shields.io/github/v/release/lbjlaq/Antigravity-Manager?color=blue&style=flat-square" alt="GitHub release">
     </a>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.9.6-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.9.8-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -302,11 +302,17 @@ env WEBKIT_DISABLE_DMABUF_RENDERER=1 ANTIGRAVITY_FORCE_WAYLAND=1 antigravity-too
 ```bash
 export ANTHROPIC_BASE_URL="http://127.0.0.1:8045"
 export ANTHROPIC_API_KEY="sk-antigravity"
-jeikcode --model claude-sonnet-4-6-thinking
+jeikcode --model claude-sonnet-4-6
 ```
 > 更多高级配置与排查指南参见：[JeikCode 接入 Antigravity-Manager 指南](./docs/jeikcode_integration.md)
 
 ### 如何接入 Claude Code CLI?
+> **客户端推荐版本说明**：
+> - **稳定生产推荐**：`Claude Code v2.1.28x`（流完成校验相对宽松，网络抖动下鲁棒性最高）；
+> - **最新版本支持**：`Claude Code v2.1.293 ~ v2.1.295`（须配合部署包含断流防挂起与保活优化的网关版本，详见 [排查诊断文档](./docs/CLAUDE_CODE_STREAM_DIAGNOSIS.md)）。
+> 
+> 安装指定稳定版本示例：`npm install -g @anthropic-ai/claude-code@2.1.284`
+
 1.  启动 Antigravity，并在“API 反代”页面开启服务。
 2.  在终端执行：
 ```bash
@@ -488,7 +494,7 @@ response = client.chat.completions.create(
 
 ## 📝 更新日志
 
-> 最新版本 **v4.9.6**（2026-10-06）——完整重新发布 v4.9.5 内容（v4.9.5 发布流水线因托管 Runner 资源不足被取消、未产出任何 Release 资产，代码完全一致）：根治思考预算无差别覆盖 32768、确立具名模型后缀（`-low`, `-medium`, `-high`）绝对最高优先级并无损回退 Default 模式与解耦 Claude 适配器（PR #3611，Fixes #3610）；Cowork 活跃消息修剪预算由 35k 降至 8k 深度归档，压缩后残余上下文降至 40k~45k tokens，压缩率突破 60%，双轨并轨为全局统一压缩状态机，引入动态净空防抖保障与 Claude 桌面进程生命周期管理，支持旧版补丁琥珀色警示与无损就地升级，macOS 签名容灾回滚保全官方证书链（PR #3604, #3609, #3603）；限制单请求 429 遍历账号池上限至 `min(pool_size, 2)`、引入阶梯退避与 Layer 2 乐观重试重置彻底消除 503 假死熔断，长连接会话 404/429 统一解绑自愈与跨协议成功计数重置，统一 Claude 共享配额保护组（PR #3608, #3606, #3602，Fixes #3506, #3517, #3509）；全面兼容 `antigravity-ide` 命名变体，严格阻断 IDE 穿透查询系统 Keyring，内核级进程识别并隔离 `state.vscdb`（PR #3608, #3600，Fixes #3598）；Gemini JSON Schema 深度清洗过滤非标 enum、实时透传上游流错误（504/503/429），OpenCode 注入 node 执行环境，规范 agy CLI 钥匙环 D-Bus 路径并打通 Web/Headless API 对齐（PR #3601, #3606, #3607，感谢 @cubelikeplayDaniel, @diannaaav）；GNOME Wayland 避免强制降级 X11、自动注入 DMA-BUF 保护并修复透明窗口判定（Fixes #3605, Ref #3581，感谢 @jeikl）。
+> 最新版本 **v4.9.8**（2026-10-17）：Antigravity 经典款配额耗尽/低于阈值全自动无感热切换与双核算力池监控（Ref #3509）；原生全面演进支持 Antigravity CLI (`agy`)，自动 Shell Wrapper 注入与模型思考档位智能拆解，三端（经典款 / IDE / CLI）活动账号独立探查与情境化多端徽章（Ref #3686, Ref #3630）；403 错误详情全量捕获与动作链接提取（人机验证/申诉），临时验证与永久禁用严格解耦，配额恢复全自动闭环自愈（Ref #3630, Ref #3684）；对齐 Claude Code 2.1.301 协议规范与 Agent SDK 开场白防 WAF 身份清洗，全链路下行注入 `request-id`，录入 Claude 5 全系 8 个核心模型（PR #3689, Ref #3684, Ref #3686）；JSON Schema 活跃引用追踪阻断循环展开指数爆炸杜绝 Linux VPS OOM (SIGKILL 137) 崩溃，规范化数组非法 properties 与终态 ARRAY 守卫规避 Gemini 400 报错，推理/思考模型流式首包 Peek 超时自适应放宽至 60s/90s/120s 杜绝 30s 误杀，账号池两阶段原子同步加载彻底消除并发 503 闪断，限流防倒退校验与 RPC details 全量遍历（PR #3694, Fixes #3690, Ref #3682, Ref #3693）；彻底剔除 100% 报 429 的 Prod 生产公共端点，流式接口首包超时保底放宽至 120s，Responses 格式数组 input 完整还原多轮角色边界，根除 0ms 乐观重置风暴（PR #3691, PR #3672, PR #3687, PR #3685, Fixes #3506, Ref #3525）；流量监控报文详情重构为 Postman 风格单 Tab 视窗、正文「结构化拆分」与「原始代码」双视图、两列键值对表格与 Bearer 掩码脱敏、标准双链路 HAR 1.2 导出，全量覆盖 12 种系统语言（感谢 @cubelikeplayDaniel, @EricZhou05, @blackdm666, @jeikl）。
 
 👉 **[查看完整更新日志 CHANGELOG.md →](CHANGELOG.md)**
 

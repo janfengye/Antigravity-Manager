@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, startTransition } from 'react';
+import { useState, useEffect, useMemo, useRef, startTransition } from 'react';
 import { useTranslation } from 'react-i18next';
 import { request as invoke } from '../utils/request';
 import { isTauri } from '../utils/env';
@@ -22,7 +22,11 @@ import {
     Edit2,
     Save,
     Share2,
-    Bot
+    Bot,
+    Timer,
+    Zap,
+    Square,
+    ChevronDown
 } from 'lucide-react';
 import { AppConfig, ProxyConfig, StickySessionConfig, ExperimentalConfig } from '../types/config';
 import HelpTooltip from '../components/common/HelpTooltip';
@@ -33,13 +37,16 @@ import { useProxyModels } from '../hooks/useProxyModels';
 import GroupedSelect, { SelectOption } from '../components/common/GroupedSelect';
 import { CliSyncCard } from '../components/proxy/CliSyncCard';
 import { listAccounts } from '../services/accountService';
+import { motion } from 'framer-motion';
 import CircuitBreaker from '../components/settings/CircuitBreaker';
 import GlobalSystemPrompt from '../components/settings/GlobalSystemPrompt';
 import ImageThinkingMode from '../components/settings/ImageThinkingMode';
 import ThinkingBudget from '../components/settings/ThinkingBudget';
 import MultimodalSettings from '../components/settings/MultimodalSettings';
+import StreamTimeoutSettings from '../components/settings/StreamTimeoutSettings';
 import AgentSettings from '../components/settings/AgentSettings';
 import { CircuitBreakerConfig } from '../types/config';
+import { RequestDetailModal, ProxyRequestLog } from '../components/proxy/RequestDetailModal';
 
 interface ProxyStatus {
     running: boolean;
@@ -214,6 +221,28 @@ export default function ApiProxy() {
         }));
     }, [models]);
 
+    // Model Connectivity Test states
+    interface ModelTestStatus {
+        loading?: boolean;
+        success?: boolean;
+        status?: number;
+        durationMs?: number;
+        accountEmail?: string;
+        accountId?: string;
+        logId?: string;
+        isRetired?: boolean;
+        error?: string;
+        isHistorical?: boolean;
+    }
+    const [modelTestResults, setModelTestResults] = useState<Record<string, ModelTestStatus>>({});
+    const [testTargetAccountId, setTestTargetAccountId] = useState<string>('');
+    const [testingAll, setTestingAll] = useState(false);
+    const stopTestingRef = useRef(false);
+
+    // Request detail modal for probe logs
+    const [selectedDetailLog, setSelectedDetailLog] = useState<ProxyRequestLog | null>(null);
+    const [loadingDetailLog, setLoadingDetailLog] = useState(false);
+
     // 初始化加载
     useEffect(() => {
         loadConfig();
@@ -222,6 +251,7 @@ export default function ApiProxy() {
         loadPreferredAccount();
         loadCfStatus();
         loadCustomPresets();
+        loadRecentModelStatuses();
         const interval = setInterval(loadStatus, 3000);
         const cfInterval = setInterval(loadCfStatus, 5000);
         return () => {
@@ -229,6 +259,111 @@ export default function ApiProxy() {
             clearInterval(cfInterval);
         };
     }, []);
+
+    // 预填最近请求日志的模型连通性状态
+    const loadRecentModelStatuses = async () => {
+        try {
+            const logs = await invoke<ProxyRequestLog[]>('get_proxy_logs_paginated', { limit: 100, offset: 0 });
+            if (Array.isArray(logs)) {
+                setModelTestResults(prev => {
+                    const next = { ...prev };
+                    for (const log of logs) {
+                        const mId = log.model || log.mapped_model;
+                        if (mId && !next[mId]) {
+                            next[mId] = {
+                                loading: false,
+                                success: log.status >= 200 && log.status < 300,
+                                status: log.status,
+                                durationMs: log.duration,
+                                accountEmail: log.account_email,
+                                logId: log.id,
+                                isHistorical: true
+                            };
+                        }
+                    }
+                    return next;
+                });
+            }
+        } catch {
+            // ignore
+        }
+    };
+
+    const handleTestModel = async (modelId: string) => {
+        setModelTestResults(prev => ({
+            ...prev,
+            [modelId]: { ...prev[modelId], loading: true, error: undefined }
+        }));
+        try {
+            const res = await invoke<{
+                success: boolean;
+                message: string;
+                log_id?: string;
+                duration_ms?: number;
+                status?: number;
+                account_email?: string;
+                account_id?: string;
+                is_retired?: boolean;
+            }>('test_model_connectivity', {
+                model: modelId,
+                targetAccountId: testTargetAccountId || null
+            });
+
+            setModelTestResults(prev => ({
+                ...prev,
+                [modelId]: {
+                    loading: false,
+                    success: res.success,
+                    status: res.status,
+                    durationMs: res.duration_ms,
+                    accountEmail: res.account_email,
+                    accountId: res.account_id,
+                    logId: res.log_id,
+                    isRetired: res.is_retired,
+                    error: res.success ? undefined : res.message,
+                    isHistorical: false
+                }
+            }));
+        } catch (err) {
+            setModelTestResults(prev => ({
+                ...prev,
+                [modelId]: {
+                    loading: false,
+                    success: false,
+                    error: String(err),
+                    isHistorical: false
+                }
+            }));
+        }
+    };
+
+    const handleBatchTest = async () => {
+        if (testingAll) {
+            stopTestingRef.current = true;
+            setTestingAll(false);
+            return;
+        }
+        setTestingAll(true);
+        stopTestingRef.current = false;
+
+        for (const m of filteredModels) {
+            if (stopTestingRef.current) break;
+            await handleTestModel(m.id);
+        }
+        setTestingAll(false);
+    };
+
+    const handleOpenLogDetail = async (logId: string) => {
+        setLoadingDetailLog(true);
+        try {
+            const detail = await invoke<ProxyRequestLog>('get_proxy_log_detail', { logId, log_id: logId });
+            setSelectedDetailLog(detail);
+        } catch (e) {
+            showToast(String(e), 'error');
+        } finally {
+            setLoadingDetailLog(false);
+        }
+    };
 
 
 
@@ -1392,11 +1527,58 @@ print(response.choices[0].message.content)`;
         if (!appConfig) return null;
         return (
             <div className="bg-white dark:bg-base-100 rounded-xl shadow-sm border border-gray-100 dark:border-base-200 overflow-hidden">
-                <div className="px-4 py-2.5 border-b border-gray-100 dark:border-base-200">
-                    <h2 className="text-base font-bold text-gray-900 dark:text-base-content flex items-center gap-2">
-                        <Terminal size={18} />
-                        {t('proxy.supported_models.title')}
+                <div className="px-4 py-3 border-b border-gray-100 dark:border-base-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 bg-gray-50/40 dark:bg-base-200/40">
+                    <h2 className="text-sm font-bold text-gray-900 dark:text-base-content flex items-center gap-2">
+                        <Terminal size={16} className="text-blue-500" />
+                        <span>{t('proxy.supported_models.title')}</span>
                     </h2>
+                    <div className="flex items-center gap-2 flex-wrap shrink-0">
+                        {/* 账号选择器 */}
+                        <div className="relative inline-flex items-center">
+                            <div className="flex items-center gap-1.5 h-7 px-2.5 rounded-lg bg-gray-100 hover:bg-gray-200/70 dark:bg-base-200 dark:hover:bg-base-300 border border-gray-200/90 dark:border-base-300 shadow-2xs transition-all cursor-pointer">
+                                <Bot size={13} className="text-amber-500 shrink-0" />
+                                <select
+                                    className="bg-transparent border-none text-[11px] font-semibold text-gray-700 dark:text-gray-200 focus:outline-none cursor-pointer max-w-[190px] truncate p-0 pr-1 appearance-none leading-none"
+                                    value={testTargetAccountId}
+                                    onChange={(e) => setTestTargetAccountId(e.target.value)}
+                                    title={t('proxy.supported_models.select_account')}
+                                >
+                                    <option value="" className="bg-white dark:bg-base-100 text-gray-900 dark:text-white">
+                                        {t('proxy.supported_models.auto_dispatch')}
+                                    </option>
+                                    {availableAccounts.map(acc => (
+                                        <option key={acc.id} value={acc.id} className="bg-white dark:bg-base-100 text-gray-900 dark:text-white">
+                                            {acc.email}
+                                        </option>
+                                    ))}
+                                </select>
+                                <ChevronDown size={11} className="text-gray-400 shrink-0 pointer-events-none" />
+                            </div>
+                        </div>
+
+                        {/* 批量测活按钮 */}
+                        <button
+                            className={`btn btn-xs h-7 min-h-0 px-2.5 rounded-lg gap-1.5 font-semibold text-[11px] shadow-2xs transition-all active:scale-95 ${
+                                testingAll
+                                    ? 'btn-error btn-outline'
+                                    : 'bg-amber-500 hover:bg-amber-600 text-white border-transparent'
+                            }`}
+                            onClick={handleBatchTest}
+                            title={testingAll ? t('proxy.supported_models.stop_test') : t('proxy.supported_models.batch_test')}
+                        >
+                            {testingAll ? (
+                                <>
+                                    <Square size={11} className="fill-current" />
+                                    <span>{t('proxy.supported_models.stop_test')}</span>
+                                </>
+                            ) : (
+                                <>
+                                    <Zap size={11} className="fill-current" />
+                                    <span>{t('proxy.supported_models.batch_test')}</span>
+                                </>
+                            )}
+                        </button>
+                    </div>
                 </div>
 
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-0 lg:divide-x dark:divide-gray-700">
@@ -1404,39 +1586,144 @@ print(response.choices[0].message.content)`;
                     <div className="col-span-2 p-0">
                         <div className="overflow-x-auto">
                             <table className="table w-full">
-                                <thead className="bg-gray-50/50 dark:bg-gray-800/50 text-gray-500 dark:text-gray-400">
-                                    <tr>
+                                <thead className="bg-gray-50/70 dark:bg-gray-800/70 text-gray-500 dark:text-gray-400 select-none">
+                                    <tr className="border-b border-gray-100 dark:border-base-200">
                                         <th className="w-10 pl-3"></th>
-                                        <th className="text-[11px] font-medium">{t('proxy.supported_models.model_name')}</th>
-                                        <th className="text-[11px] font-medium">{t('proxy.supported_models.model_id')}</th>
-                                        <th className="text-[11px] hidden sm:table-cell font-medium">{t('proxy.supported_models.description')}</th>
-                                        <th className="text-[11px] w-20 text-center font-medium">{t('proxy.supported_models.action')}</th>
+                                        <th className="text-[11px] font-medium whitespace-nowrap min-w-[140px]">{t('proxy.supported_models.model_name')}</th>
+                                        <th className="text-[11px] font-medium whitespace-nowrap min-w-[140px]">{t('proxy.supported_models.model_id')}</th>
+                                        <th className="text-[11px] font-medium whitespace-nowrap min-w-[130px]">{t('proxy.supported_models.status')}</th>
+                                        <th className="text-[11px] w-36 text-center font-medium whitespace-nowrap">{t('proxy.supported_models.action')}</th>
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {filteredModels.map((m) => (
-                                        <tr
-                                            key={m.id}
-                                            className={`hover:bg-blue-50/50 dark:hover:bg-blue-900/10 cursor-pointer transition-colors ${selectedModelId === m.id ? 'bg-blue-50/80 dark:bg-blue-900/20' : ''}`}
-                                            onClick={() => setSelectedModelId(m.id)}
-                                        >
-                                            <td className="pl-4 text-blue-500">{m.icon}</td>
-                                            <td className="font-bold text-xs">{m.name}</td>
-                                            <td className="font-mono text-[10px] text-gray-500">{m.id}</td>
-                                            <td className="text-[10px] text-gray-400 hidden sm:table-cell">{m.desc}</td>
-                                            <td className="text-center">
-                                                <button
-                                                    className="btn btn-ghost btn-xs text-blue-500"
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        copyToClipboardHandler(m.id, `model-${m.id}`);
-                                                    }}
-                                                >
-                                                    {copied === `model-${m.id}` ? <CheckCircle size={14} /> : <div className="flex items-center gap-1 text-[10px] font-bold tracking-tight"><Copy size={12} /> {t('common.copy')}</div>}
-                                                </button>
-                                            </td>
-                                        </tr>
-                                    ))}
+                                    {filteredModels.map((m) => {
+                                        const testStatus = modelTestResults[m.id];
+                                        return (
+                                            <tr
+                                                key={m.id}
+                                                className={`h-11 border-b border-gray-100/70 dark:border-base-200/60 hover:bg-blue-50/40 dark:hover:bg-blue-900/10 cursor-pointer transition-colors ${selectedModelId === m.id ? 'bg-blue-50/70 dark:bg-blue-900/20' : ''}`}
+                                                onClick={() => setSelectedModelId(m.id)}
+                                            >
+                                                <td className="pl-4 text-blue-500 align-middle">{m.icon}</td>
+                                                <td className="font-bold text-xs align-middle whitespace-nowrap text-gray-900 dark:text-gray-100">{m.name}</td>
+                                                <td className="font-mono text-[10px] text-gray-500 dark:text-gray-400 align-middle whitespace-nowrap">{m.id}</td>
+                                                <td className="align-middle whitespace-nowrap">
+                                                    {testStatus?.loading ? (
+                                                        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono font-medium whitespace-nowrap bg-blue-50 text-blue-700 border border-blue-200/80 dark:bg-blue-950/40 dark:text-blue-300 dark:border-blue-800/60 shadow-2xs">
+                                                            <span className="loading loading-spinner loading-[10px] text-blue-600 dark:text-blue-400"></span>
+                                                            <span>{t('proxy.supported_models.testing')}</span>
+                                                        </span>
+                                                    ) : testStatus?.isRetired ? (
+                                                        <span
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                if (testStatus.logId) handleOpenLogDetail(testStatus.logId);
+                                                            }}
+                                                            className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-mono font-medium whitespace-nowrap bg-rose-50 text-rose-700 border border-rose-200/80 dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-800/60 shadow-2xs transition-all ${
+                                                                testStatus.logId ? 'cursor-pointer hover:shadow-xs hover:border-rose-400 dark:hover:border-rose-600 hover:scale-[1.02] active:scale-95' : ''
+                                                            }`}
+                                                            title={testStatus.logId ? t('proxy.supported_models.view_detail') : undefined}
+                                                        >
+                                                            <span className="w-1.5 h-1.5 rounded-full bg-rose-500 shrink-0"></span>
+                                                            <span>{t('proxy.supported_models.retired')}</span>
+                                                        </span>
+                                                    ) : testStatus?.success ? (
+                                                        <span
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                if (testStatus.logId) handleOpenLogDetail(testStatus.logId);
+                                                            }}
+                                                            className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-mono font-medium whitespace-nowrap border shadow-2xs transition-all ${
+                                                                testStatus.isHistorical
+                                                                    ? 'bg-gray-100/80 text-gray-700 border-gray-200/90 dark:bg-base-200 dark:text-gray-300 dark:border-base-300'
+                                                                    : 'bg-emerald-50 text-emerald-700 border-emerald-200/90 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800/60'
+                                                            } ${testStatus.logId ? 'cursor-pointer hover:shadow-xs hover:border-emerald-400 dark:hover:border-emerald-600 hover:scale-[1.02] active:scale-95' : ''}`}
+                                                            title={testStatus.logId ? `${testStatus.accountEmail ? `账号: ${testStatus.accountEmail}\n` : ''}${t('proxy.supported_models.view_detail')}` : undefined}
+                                                        >
+                                                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0"></span>
+                                                            <span>{testStatus.durationMs != null ? `${testStatus.durationMs}ms` : '200 OK'}</span>
+                                                        </span>
+                                                    ) : testStatus?.status === 429 ? (
+                                                        <span
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                if (testStatus.logId) handleOpenLogDetail(testStatus.logId);
+                                                            }}
+                                                            className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-mono font-medium whitespace-nowrap bg-amber-50 text-amber-700 border border-amber-200/90 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800/60 shadow-2xs transition-all ${
+                                                                testStatus.logId ? 'cursor-pointer hover:shadow-xs hover:border-amber-400 dark:hover:border-amber-600 hover:scale-[1.02] active:scale-95' : ''
+                                                            }`}
+                                                            title={testStatus.logId ? t('proxy.supported_models.view_detail') : undefined}
+                                                        >
+                                                            <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0"></span>
+                                                            <span>{t('proxy.supported_models.rate_limited')}{testStatus.durationMs != null ? ` (${testStatus.durationMs}ms)` : ''}</span>
+                                                        </span>
+                                                    ) : (testStatus && !testStatus.success && !testStatus.loading) ? (
+                                                        <span
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                if (testStatus.logId) handleOpenLogDetail(testStatus.logId);
+                                                            }}
+                                                            className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-mono font-medium whitespace-nowrap bg-rose-50 text-rose-700 border border-rose-200/90 dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-800/60 shadow-2xs transition-all ${
+                                                                testStatus.logId ? 'cursor-pointer hover:shadow-xs hover:border-rose-400 dark:hover:border-rose-600 hover:scale-[1.02] active:scale-95' : ''
+                                                            }`}
+                                                            title={testStatus.error || (testStatus.logId ? t('proxy.supported_models.view_detail') : undefined)}
+                                                        >
+                                                            <span className="w-1.5 h-1.5 rounded-full bg-rose-500 shrink-0"></span>
+                                                            <span>{testStatus.status ? `${testStatus.status}` : 'Err'}</span>
+                                                        </span>
+                                                    ) : (
+                                                        <span className="text-[10px] text-gray-400 dark:text-gray-500 font-mono select-none px-2 py-0.5">--</span>
+                                                    )}
+                                                </td>
+                                                <td className="text-center align-middle whitespace-nowrap px-2">
+                                                    <div className="inline-flex items-center justify-center gap-1.5">
+                                                        <button
+                                                            className={`btn btn-xs h-6.5 min-h-0 px-2 rounded-md font-medium text-[11px] transition-all shadow-2xs ${
+                                                                testStatus?.loading
+                                                                    ? 'btn-disabled opacity-60'
+                                                                    : 'bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/25 active:scale-95'
+                                                            }`}
+                                                            disabled={testStatus?.loading || testingAll}
+                                                            title={t('proxy.supported_models.test_connectivity')}
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                handleTestModel(m.id);
+                                                            }}
+                                                        >
+                                                            {testStatus?.loading ? (
+                                                                <span className="loading loading-spinner loading-[10px]"></span>
+                                                            ) : (
+                                                                <div className="flex items-center gap-1 font-semibold">
+                                                                    <Zap size={11} className="fill-current" />
+                                                                    <span>{t('proxy.supported_models.test_connectivity')}</span>
+                                                                </div>
+                                                            )}
+                                                        </button>
+                                                        <button
+                                                            className="btn btn-xs h-6.5 min-h-0 px-2 rounded-md font-medium text-[11px] bg-gray-100 hover:bg-gray-200 dark:bg-base-200 dark:hover:bg-base-300 text-gray-700 dark:text-gray-300 border border-gray-200/70 dark:border-base-300 transition-all active:scale-95 shadow-2xs"
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                copyToClipboardHandler(m.id, `model-${m.id}`);
+                                                            }}
+                                                            title={t('common.copy')}
+                                                        >
+                                                            {copied === `model-${m.id}` ? (
+                                                                <div className="flex items-center gap-1 font-semibold text-emerald-600">
+                                                                    <CheckCircle size={11} />
+                                                                    <span>{t('common.copied')}</span>
+                                                                </div>
+                                                            ) : (
+                                                                <div className="flex items-center gap-1 font-semibold">
+                                                                    <Copy size={11} />
+                                                                    <span>{t('common.copy')}</span>
+                                                                </div>
+                                                            )}
+                                                        </button>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
                                 </tbody>
                             </table>
                         </div>
@@ -1470,12 +1757,25 @@ print(response.choices[0].message.content)`;
                         </div>
                     </div>
                 </div>
+
+                {selectedDetailLog && (
+                    <RequestDetailModal
+                        log={selectedDetailLog}
+                        onClose={() => setSelectedDetailLog(null)}
+                        loadingDetail={loadingDetailLog}
+                    />
+                )}
             </div>
         );
     };
 
     return (
-        <div className="h-full w-full overflow-y-auto overflow-x-hidden">
+        <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.2, ease: "easeOut" }}
+            className="h-full w-full overflow-y-auto overflow-x-hidden"
+        >
             <div className="p-5 space-y-4 max-w-7xl mx-auto">
 
                 {/* Loading State */}
@@ -2010,6 +2310,19 @@ print(response.choices[0].message.content)`;
                         {/* TAB: 模型配置 (models) */}
                         {activeMenuTab === 'models' && (
                             <div className="p-4 space-y-4">
+                                {/* 流式超时设置 (Stream Timeout Settings) - 默认收起 */}
+                                <CollapsibleCard
+                                    title={t('proxy.config.stream_timeout_settings.title', { defaultValue: '流式超时设置 (Stream Timeout Settings)' })}
+                                    icon={<Timer size={18} className="text-blue-500" />}
+                                    defaultExpanded={false}
+                                >
+                                    <StreamTimeoutSettings
+                                        config={appConfig.proxy.stream_timeouts}
+                                        onChange={(timeoutConfig) => updateProxyConfig({ stream_timeouts: timeoutConfig })}
+                                        onSave={handleSaveProxySettings}
+                                    />
+                                </CollapsibleCard>
+
                                 {/* 思考设置 (Thinking & Reasoning Settings) - 默认收起 */}
                                 <CollapsibleCard
                                     title={t('proxy.config.thinking_settings.title', { defaultValue: '思考设置 (Thinking Settings)' })}
@@ -2031,6 +2344,10 @@ print(response.choices[0].message.content)`;
                                         thinkingRetentionDays={appConfig.proxy.experimental?.thinking_retention_days ?? 15}
                                         onThinkingRetentionDaysChange={(days: number) =>
                                             updateExperimentalConfig({ thinking_retention_days: days })
+                                        }
+                                        globalCompactionStripEnabled={appConfig.proxy.experimental?.enable_global_compaction_strip === true}
+                                        onGlobalCompactionStripChange={(enabled) =>
+                                            updateExperimentalConfig({ enable_global_compaction_strip: enabled })
                                         }
                                     />
                                 </CollapsibleCard>
@@ -2176,6 +2493,33 @@ print(response.choices[0].message.content)`;
                                                 <div className="flex justify-between px-1 mt-1 text-[10px] text-gray-400 font-mono">
                                                     <span>0s</span>
                                                     <span>300s</span>
+                                                </div>
+                                            </div>
+
+                                            <div className="bg-gray-50/70 dark:bg-base-200 rounded-xl p-4 border border-gray-100 dark:border-base-300">
+                                                <div className="flex items-center justify-between mb-2">
+                                                    <label className="text-xs font-medium text-gray-700 dark:text-gray-300 inline-flex items-center gap-1">
+                                                        {t('proxy.config.scheduling.max_spillover_accounts')}
+                                                        <HelpTooltip text={t('proxy.config.scheduling.max_spillover_accounts_tooltip')} />
+                                                    </label>
+                                                    <span className="text-xs font-mono text-indigo-600 font-bold">
+                                                        {(appConfig.proxy.scheduling?.max_spillover_accounts ?? 0) === 0
+                                                            ? t('proxy.config.scheduling.spillover_unlimited')
+                                                            : t('proxy.config.scheduling.spillover_count', { count: appConfig.proxy.scheduling?.max_spillover_accounts })}
+                                                    </span>
+                                                </div>
+                                                <input
+                                                    type="range"
+                                                    min="0"
+                                                    max="10"
+                                                    step="1"
+                                                    className="range range-indigo range-xs"
+                                                    value={appConfig.proxy.scheduling?.max_spillover_accounts ?? 0}
+                                                    onChange={(e) => updateSchedulingConfig({ max_spillover_accounts: parseInt(e.target.value) || 0 })}
+                                                />
+                                                <div className="flex justify-between px-1 mt-1 text-[10px] text-gray-400 font-mono">
+                                                    <span>0 ({t('proxy.config.scheduling.spillover_unlimited')})</span>
+                                                    <span>10</span>
                                                 </div>
                                             </div>
 
@@ -2598,7 +2942,7 @@ print(response.choices[0].message.content)`;
                         </div>
                     </div>
                 </ModalDialog>
-            </div >
-        </div >
+            </div>
+        </motion.div>
     );
 }

@@ -187,11 +187,73 @@ pub fn update_multimodal_config(config: MultimodalConfig) {
     }
 }
 
+// ============================================================================
+// 全局流式梯度超时配置存储
+// ============================================================================
+static GLOBAL_STREAM_TIMEOUT_CONFIG: OnceLock<RwLock<StreamTimeoutConfig>> = OnceLock::new();
+
+/// 获取当前流式梯度超时配置（支持环境变量覆盖，保证 Headless/CLI 一致性）
+pub fn get_stream_timeout_config() -> StreamTimeoutConfig {
+    let base = GLOBAL_STREAM_TIMEOUT_CONFIG
+        .get()
+        .and_then(|lock| lock.read().ok())
+        .map(|cfg| cfg.clone())
+        .unwrap_or_default();
+
+    // 允许通过环境变量覆盖，符合 AGENTS.md Headless & CLI Parity 纪律
+    let initial_ttft_secs = std::env::var("ANTIGRAVITY_TIMEOUT_TTFT_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(base.initial_ttft_secs);
+
+    let transition_secs = std::env::var("ANTIGRAVITY_TIMEOUT_TRANSITION_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(base.transition_secs);
+
+    let streaming_sliding_secs = std::env::var("ANTIGRAVITY_TIMEOUT_STREAMING_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(base.streaming_sliding_secs);
+
+    StreamTimeoutConfig {
+        initial_ttft_secs,
+        transition_secs,
+        streaming_sliding_secs,
+    }
+}
+
+/// 更新全局流式梯度超时配置
+pub fn update_stream_timeout_config(config: StreamTimeoutConfig) {
+    if let Some(lock) = GLOBAL_STREAM_TIMEOUT_CONFIG.get() {
+        if let Ok(mut cfg) = lock.write() {
+            if *cfg != config {
+                *cfg = config.clone();
+                tracing::info!(
+                    "[Stream-Timeouts] Global config updated: ttft={}s, transition={}s, sliding={}s",
+                    config.initial_ttft_secs,
+                    config.transition_secs,
+                    config.streaming_sliding_secs
+                );
+            }
+        }
+    } else {
+        let _ = GLOBAL_STREAM_TIMEOUT_CONFIG.set(RwLock::new(config.clone()));
+        tracing::info!(
+            "[Stream-Timeouts] Global config initialized: ttft={}s, transition={}s, sliding={}s",
+            config.initial_ttft_secs,
+            config.transition_secs,
+            config.streaming_sliding_secs
+        );
+    }
+}
+
 static GLOBAL_PAYLOAD_STORAGE_MODE: OnceLock<RwLock<String>> = OnceLock::new();
 static GLOBAL_LOG_RETENTION_DAYS: OnceLock<RwLock<u32>> = OnceLock::new();
 static GLOBAL_THINKING_STORE_ENABLED: OnceLock<RwLock<bool>> = OnceLock::new();
 static GLOBAL_THINKING_RETENTION_DAYS: OnceLock<RwLock<u32>> = OnceLock::new();
 static GLOBAL_THINKING_MAX_MEMORY_TURNS: OnceLock<RwLock<u32>> = OnceLock::new();
+static GLOBAL_ENABLE_GLOBAL_COMPACTION_STRIP: OnceLock<RwLock<bool>> = OnceLock::new();
 
 fn write_or_init<T: Clone>(slot: &OnceLock<RwLock<T>>, value: T) {
     if let Some(lock) = slot.get() {
@@ -228,6 +290,18 @@ pub fn is_thinking_store_enabled() -> bool {
         .unwrap_or(true)
 }
 
+pub fn is_global_compaction_strip_enabled() -> bool {
+    GLOBAL_ENABLE_GLOBAL_COMPACTION_STRIP
+        .get()
+        .and_then(|lock| lock.read().ok())
+        .map(|v| *v)
+        .unwrap_or(false)
+}
+
+pub fn set_global_compaction_strip_enabled(enabled: bool) {
+    write_or_init(&GLOBAL_ENABLE_GLOBAL_COMPACTION_STRIP, enabled);
+}
+
 pub fn get_thinking_retention_days() -> u32 {
     GLOBAL_THINKING_RETENTION_DAYS
         .get()
@@ -252,6 +326,7 @@ pub fn update_global_audit_config(
     thinking_store_enabled: bool,
     thinking_retention_days: u32,
     thinking_max_memory_turns: Option<u32>,
+    enable_global_compaction_strip: Option<bool>,
 ) {
     let mode = if payload_storage_mode == "full" {
         "full"
@@ -270,13 +345,16 @@ pub fn update_global_audit_config(
     );
     let max_turns = thinking_max_memory_turns.unwrap_or(600).clamp(10, 10_000);
     write_or_init(&GLOBAL_THINKING_MAX_MEMORY_TURNS, max_turns);
+    let strip_enabled = enable_global_compaction_strip.unwrap_or(false);
+    write_or_init(&GLOBAL_ENABLE_GLOBAL_COMPACTION_STRIP, strip_enabled);
     tracing::info!(
-        "[Audit] storage_mode={}, log_retention_days={}, thinking_store={}, thinking_retention_days={}, thinking_max_memory_turns={}",
+        "[Audit] storage_mode={}, log_retention_days={}, thinking_store={}, thinking_retention_days={}, thinking_max_memory_turns={}, global_compaction_strip={}",
         mode,
         log_retention_days.clamp(1, 3650),
         thinking_store_enabled,
         thinking_retention_days.clamp(1, 3650),
-        max_turns
+        max_turns,
+        strip_enabled
     );
 }
 
@@ -365,6 +443,10 @@ pub struct ExperimentalConfig {
     /// 启用 Claude Cowork 手动深度归档协议支持 (高危选项，默认 false)
     #[serde(default = "default_false")]
     pub enable_cowork_manual_compact: bool,
+
+    /// 全局压缩剥离签名 (Global Compaction Signature Stripping) (试验性选项，默认 false)
+    #[serde(default = "default_false")]
+    pub enable_global_compaction_strip: bool,
 }
 
 impl Default for ExperimentalConfig {
@@ -382,6 +464,7 @@ impl Default for ExperimentalConfig {
             enable_cowork_auto_compact: false,
             cowork_compact_threshold: default_cowork_compact_threshold(),
             enable_cowork_manual_compact: false,
+            enable_global_compaction_strip: false,
         }
     }
 }
@@ -663,6 +746,44 @@ impl Default for MultimodalConfig {
     }
 }
 
+/// 流式梯度超时配置 (首字响应、状态切换、推流滑动)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StreamTimeoutConfig {
+    /// 首字响应宽限时长（秒，默认 180s）
+    #[serde(default = "default_initial_ttft_secs")]
+    pub initial_ttft_secs: u64,
+
+    /// 思考至正文/工具调用的状态切换宽限时长（秒，默认 180s）
+    #[serde(default = "default_transition_secs")]
+    pub transition_secs: u64,
+
+    /// 稳态推流相邻 Token 滑动窗口超时（秒，默认 120s）
+    #[serde(default = "default_streaming_sliding_secs")]
+    pub streaming_sliding_secs: u64,
+}
+
+pub fn default_initial_ttft_secs() -> u64 {
+    180
+}
+
+pub fn default_transition_secs() -> u64 {
+    180
+}
+
+pub fn default_streaming_sliding_secs() -> u64 {
+    120
+}
+
+impl Default for StreamTimeoutConfig {
+    fn default() -> Self {
+        Self {
+            initial_ttft_secs: default_initial_ttft_secs(),
+            transition_secs: default_transition_secs(),
+            streaming_sliding_secs: default_streaming_sliding_secs(),
+        }
+    }
+}
+
 /// IP 黑名单配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IpBlacklistConfig {
@@ -820,6 +941,14 @@ pub struct ProxyConfig {
     #[serde(default)]
     pub user_agent_override: Option<String>,
 
+    /// 官方 Hub 版本自定义覆盖 (如 "2.23.1")
+    #[serde(default)]
+    pub hub_version: Option<String>,
+
+    /// 官方构建提交编号 (CL) 自定义覆盖 (如 "998881661")
+    #[serde(default)]
+    pub hub_cl: Option<String>,
+
     /// 账号调度配置 (粘性会话/限流重试)
     #[serde(default)]
     pub scheduling: crate::proxy::sticky_config::StickySessionConfig,
@@ -869,6 +998,10 @@ pub struct ProxyConfig {
     /// 多模态交互与保鲜滑窗配置
     #[serde(default)]
     pub multimodal: MultimodalConfig,
+
+    /// 流式梯度超时配置 (首字响应、状态切换、推流滑动)
+    #[serde(default)]
+    pub stream_timeouts: StreamTimeoutConfig,
 }
 
 /// Request log retention policy.
@@ -1002,11 +1135,14 @@ impl Default for ProxyConfig {
             security_monitor: SecurityMonitorConfig::default(),
             preferred_account_id: None, // 默认使用轮询模式
             user_agent_override: None,
+            hub_version: None,
+            hub_cl: None,
             saved_user_agent: None,
             thinking_budget: ThinkingBudgetConfig::default(),
             global_system_prompt: GlobalSystemPromptConfig::default(),
             proxy_pool: ProxyPoolConfig::default(),
             multimodal: MultimodalConfig::default(),
+            stream_timeouts: StreamTimeoutConfig::default(),
             image_thinking_mode: None,
             image_scheduler: ImageSchedulerConfig::default(),
         }

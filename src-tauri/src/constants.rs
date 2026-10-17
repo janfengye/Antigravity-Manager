@@ -216,31 +216,17 @@ pub static SESSION_ID: LazyLock<String> = LazyLock::new(|| uuid::Uuid::new_v4().
 
 /// Antigravity 官方语言服务枢纽 (Antigravity Hub) 版本号
 /// 对应官方出站 User-Agent: antigravity/hub/{OFFICIAL_HUB_VERSION}
-pub const OFFICIAL_HUB_VERSION: &str = "2.17.0";
+pub const OFFICIAL_HUB_VERSION: &str = "2.23.1";
 
 /// Antigravity 官方内部代码仓库 (Google Piper Monorepo) 变更集编号 (Changelist Number / CL)
 /// 官方每一个正式版本发布均对应确定的构建提交点，全球正版客户端保持统一，切勿随机变动
-pub const OFFICIAL_HUB_CL: &str = "986210228";
+pub const OFFICIAL_HUB_CL: &str = "998881661";
 
 /// Returns the official Antigravity Hub User-Agent matching the upstream egress signature:
 /// format: "antigravity/hub/{OFFICIAL_HUB_VERSION} (aidev_client; os_type={os}; arch={arch}; cl={OFFICIAL_HUB_CL})"
-/// e.g.: "antigravity/hub/2.17.0 (aidev_client; os_type=windows; arch=amd64; cl=986210228)"
+/// e.g.: "antigravity/hub/2.23.1 (aidev_client; os_type=darwin; arch=arm64; cl=998881661)"
 pub fn build_official_upstream_user_agent() -> String {
-    let os_type = match std::env::consts::OS {
-        "windows" => "windows",
-        "macos" => "darwin",
-        "linux" => "linux",
-        other => other,
-    };
-    let arch = match std::env::consts::ARCH {
-        "x86_64" => "amd64",
-        "aarch64" => "arm64",
-        other => other,
-    };
-    format!(
-        "antigravity/hub/{} (aidev_client; os_type={}; arch={}; cl={})",
-        OFFICIAL_HUB_VERSION, os_type, arch, OFFICIAL_HUB_CL
-    )
+    crate::modules::hub_version::get_current_hub_user_agent()
 }
 
 /// Official Antigravity upstream User-Agent

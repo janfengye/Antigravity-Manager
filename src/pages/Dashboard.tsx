@@ -1,17 +1,14 @@
-import { save } from '@tauri-apps/plugin-dialog';
+import { motion } from 'framer-motion';
 import {
+    Activity,
     AlertTriangle,
     ArrowRight,
-    Ban,
     Bot,
     Calendar,
     Clock,
-    Download,
     RefreshCw,
-    ShieldAlert,
-    ShieldCheck,
     Sparkles,
-    Users,
+    Zap,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -21,11 +18,8 @@ import { showToast } from '../components/common/ToastContainer';
 import BestAccounts from '../components/dashboard/BestAccounts';
 import { findImageQuotaModel, findQuotaModel } from '../config/modelConfig';
 import CurrentAccount from '../components/dashboard/CurrentAccount';
-import { exportAccounts } from '../services/accountService';
 import { useAccountStore } from '../stores/useAccountStore';
 import { Account } from '../types/account';
-import { isTauri } from '../utils/env';
-import { request as invoke } from '../utils/request';
 import { DashboardQuotaView } from '../utils/quotaDisplay';
 
 function Dashboard() {
@@ -34,8 +28,10 @@ function Dashboard() {
     const {
         accounts,
         currentAccount,
+        activeClients,
         fetchAccounts,
         fetchCurrentAccount,
+        fetchActiveClients,
         switchAccount,
         addAccount,
         refreshQuota,
@@ -45,10 +41,27 @@ function Dashboard() {
     useEffect(() => {
         fetchAccounts();
         fetchCurrentAccount();
+        fetchActiveClients();
+
+        // 保持 5 秒轮询三大客户端（经典款 / IDE / CLI）当前生效账号状态
+        const intervalId = setInterval(() => {
+            fetchActiveClients();
+        }, 5000);
+
+        // 窗口聚焦时即刻拉取最新客户端状态
+        const handleFocus = () => {
+            fetchActiveClients();
+        };
+        window.addEventListener('focus', handleFocus);
+
+        return () => {
+            clearInterval(intervalId);
+            window.removeEventListener('focus', handleFocus);
+        };
     }, []);
 
-    const [onlyAvailable, setOnlyAvailable] = useState<boolean>(() => {
-        const saved = localStorage.getItem('dashboard_filter_only_available');
+    const [onlyProxyPool, setOnlyProxyPool] = useState<boolean>(() => {
+        const saved = localStorage.getItem('dashboard_filter_proxy_pool');
         return saved !== null ? saved === 'true' : true;
     });
 
@@ -58,8 +71,8 @@ function Dashboard() {
     });
 
     useEffect(() => {
-        localStorage.setItem('dashboard_filter_only_available', String(onlyAvailable));
-    }, [onlyAvailable]);
+        localStorage.setItem('dashboard_filter_proxy_pool', String(onlyProxyPool));
+    }, [onlyProxyPool]);
 
     useEffect(() => {
         localStorage.setItem('dashboard_quota_view', quotaView);
@@ -72,23 +85,31 @@ function Dashboard() {
         const abnormalAccounts = accounts.filter(
             a => a.validation_blocked || a.quota?.is_forbidden
         );
-        // 禁用账号：非异常，但用户手动禁用反代或停用账号
-        const disabledAccounts = accounts.filter(
-            a => !a.validation_blocked && !a.quota?.is_forbidden && (a.disabled || a.proxy_disabled)
-        );
-        // 可用账号：开启且状态正常、风控正常的生产力账号
-        const availableAccounts = accounts.filter(
-            a => !a.disabled && !a.proxy_disabled && !a.validation_blocked && !a.quota?.is_forbidden
-        );
-        // 全部正常状态账号（包含禁用与非禁用，彻底剔除风控异常账号）
+        // 全量正常状态账号（彻底剔除风控异常账号）
         const normalAccounts = accounts.filter(
             a => !a.validation_blocked && !a.quota?.is_forbidden
         );
+        // 完全被用户手动停用的账号 (disabled 为 true)
+        const fullyDisabledAccounts = normalAccounts.filter(
+            a => a.disabled
+        );
+        // 可用正常账号（非异常且未停用，可供客户端登录或调度）
+        const availableAccounts = normalAccounts.filter(
+            a => !a.disabled
+        );
+        // 反代在线账号（可用且未禁用反代，真正加入反代服务池）
+        const proxyOnlineAccounts = availableAccounts.filter(
+            a => !a.proxy_disabled
+        );
+        // 仅禁用反代的正常账号 (未停用但禁用了反代)
+        const proxyDisabledAccounts = availableAccounts.filter(
+            a => a.proxy_disabled
+        );
 
-        // 依据按钮状态选择底座统计池：默认仅看可用账号；关闭则看全部正常状态账号
-        const basePool = onlyAvailable
-            ? (availableAccounts.length > 0 ? availableAccounts : normalAccounts)
-            : normalAccounts;
+        // 依据按钮状态选择底座统计池：默认看反代在线账号，切换看全部可用账号
+        const basePool = onlyProxyPool
+            ? (proxyOnlineAccounts.length > 0 ? proxyOnlineAccounts : availableAccounts)
+            : availableAccounts;
 
         // 2. 单账号配额提取辅助函数
         const get5hQuota = (a: Account, modelKey: 'gemini-pro' | 'gemini-image' | 'claude'): number | null => {
@@ -97,6 +118,7 @@ function Dashboard() {
             if (a.quota?.quota_groups) {
                 for (const group of a.quota.quota_groups) {
                     const gname = group.display_name.toLowerCase();
+                    if (gname.includes('argon')) continue;
                     const matches = isClaude
                         ? (gname.includes('claude') || gname.includes('gpt') || gname.includes('3p'))
                         : (gname.includes('gemini') || (!gname.includes('claude') && !gname.includes('gpt') && !gname.includes('3p')));
@@ -124,6 +146,7 @@ function Dashboard() {
             if (a.quota?.quota_groups) {
                 for (const group of a.quota.quota_groups) {
                     const gname = group.display_name.toLowerCase();
+                    if (gname.includes('argon')) continue;
                     const matches = isClaude
                         ? (gname.includes('claude') || gname.includes('gpt') || gname.includes('3p'))
                         : (gname.includes('gemini') || (!gname.includes('claude') && !gname.includes('gpt') && !gname.includes('3p')));
@@ -233,7 +256,10 @@ function Dashboard() {
         return {
             total: accounts.length,
             available: availableAccounts.length,
-            disabled: disabledAccounts.length,
+            proxyOnline: proxyOnlineAccounts.length,
+            proxyDisabled: proxyDisabledAccounts.length,
+            fullyDisabled: fullyDisabledAccounts.length,
+            disabled: fullyDisabledAccounts.length + proxyDisabledAccounts.length,
             abnormal: abnormalAccounts.length,
             normalCount: normalAccounts.length,
             basePoolCount: basePool.length,
@@ -241,17 +267,39 @@ function Dashboard() {
             geminiImage,
             claude,
         };
-    }, [accounts, onlyAvailable]);
+    }, [accounts, onlyProxyPool]);
+
+    const geminiQuotaValue = quotaView === '5h'
+        ? stats.gemini.avg5h
+        : quotaView === 'weekly'
+            ? stats.gemini.avgWeekly
+            : stats.gemini.weightedEffective;
+    const geminiQuotaLabel = quotaView === '5h'
+        ? t('dashboard.view_mode_5h', '5小时滚动可用')
+        : quotaView === 'weekly'
+            ? t('dashboard.view_mode_weekly', '7天周配额均值')
+            : t('dashboard.view_mode_weighted', '综合加权可用');
+
+    const claudeQuotaValue = quotaView === '5h'
+        ? stats.claude.avg5h
+        : quotaView === 'weekly'
+            ? stats.claude.avgWeekly
+            : stats.claude.weightedEffective;
+    const claudeQuotaLabel = quotaView === '5h'
+        ? t('dashboard.view_mode_5h', '5小时滚动可用')
+        : quotaView === 'weekly'
+            ? t('dashboard.view_mode_weekly', '7天周配额均值')
+            : t('dashboard.view_mode_weighted', '综合加权可用');
 
     const isSwitchingRef = useRef(false);
 
-    const handleSwitch = async (accountId: string) => {
+    const handleSwitch = async (accountId: string, targetIde?: string) => {
         if (loading || isSwitchingRef.current) return;
 
         isSwitchingRef.current = true;
-        console.log('[Dashboard] handleSwitch called for', accountId);
+        console.log('[Dashboard] handleSwitch called for', accountId, 'targetIde:', targetIde);
         try {
-            await switchAccount(accountId);
+            await switchAccount(accountId, targetIde);
             showToast(t('dashboard.toast.switch_success'), 'success');
         } catch (error) {
             console.error('切换账号失败:', error);
@@ -287,73 +335,17 @@ function Dashboard() {
         }
     };
 
-    const exportAccountsToJson = async (accountsToExport: Account[]) => {
-        try {
-            if (accountsToExport.length === 0) {
-                showToast(t('dashboard.toast.export_no_accounts'), 'warning');
-                return;
-            }
-
-            // Get export data from API (contains refresh_token)
-            const accountIds = accountsToExport.map(acc => acc.id);
-            const response = await exportAccounts(accountIds);
-
-            if (!response.accounts || response.accounts.length === 0) {
-                showToast(t('dashboard.toast.export_no_accounts'), 'warning');
-                return;
-            }
-
-            const exportData = response.accounts;
-            const content = JSON.stringify(exportData, null, 2);
-            const fileName = `antigravity_accounts_${new Date().toISOString().split('T')[0]}.json`;
-
-            if (isTauri()) {
-                const path = await save({
-                    filters: [{
-                        name: 'JSON',
-                        extensions: ['json']
-                    }],
-                    defaultPath: fileName
-                });
-
-                if (!path) return;
-
-                await invoke('save_text_file', { path, content });
-                showToast(t('dashboard.toast.export_success', { path }), 'success');
-            } else {
-                // Web 模式：使用浏览器下载
-                const blob = new Blob([content], { type: 'application/json' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = fileName;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                URL.revokeObjectURL(url);
-                showToast(t('dashboard.toast.export_success', { path: fileName }), 'success');
-            }
-        } catch (error: any) {
-            console.error('Export failed:', error);
-            showToast(`${t('dashboard.toast.export_error')}: ${error.toString()}`, 'error');
-        }
-    };
-
-    const handleExport = () => {
-        exportAccountsToJson(accounts);
-    };
-
     return (
         <div className="h-full w-full overflow-y-auto">
-            <div
+            <motion.div
+                initial={{ opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.15, ease: [0.16, 1, 0.3, 1] }}
+                style={{ position: 'relative', zIndex: 1, willChange: 'opacity, transform' }}
                 className="p-5 space-y-4 max-w-7xl mx-auto"
-                onMouseMove={() => console.log('Mouse moving over Dashboard')}
-                style={{ position: 'relative', zIndex: 1 }}
             >
-                {/* 问候语和操作按钮 */}
-                <div
-                    className="flex justify-between items-center"
-                >
+                {/* 问候语和全局刷新/添加操作栏 */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div>
                         <h1 className="text-2xl font-bold text-gray-900 dark:text-base-content">
                             {currentAccount
@@ -362,10 +354,11 @@ function Dashboard() {
                             }
                         </h1>
                     </div>
-                    <div className="flex gap-2">
-                        <AddAccountDialog onAdd={handleAddAccount} />
+
+                    {/* 刷新额度与添加账号操作 */}
+                    <div className="flex items-center gap-2">
                         <button
-                            className={`px-3 py-1.5 bg-blue-500 text-white text-xs font-medium rounded-lg hover:bg-blue-600 transition-colors flex items-center gap-1.5 shadow-sm ${isRefreshing || !currentAccount ? 'opacity-70 cursor-not-allowed' : ''}`}
+                            className={`px-3 py-1.5 bg-blue-500 text-white text-xs font-medium rounded-xl hover:bg-blue-600 transition-colors flex items-center gap-1.5 shadow-sm ${isRefreshing || !currentAccount ? 'opacity-70 cursor-not-allowed' : ''}`}
                             onClick={handleRefreshCurrent}
                             disabled={isRefreshing || !currentAccount}
                             title={isRefreshing ? t('dashboard.refreshing') : t('dashboard.refresh_quota')}
@@ -373,109 +366,25 @@ function Dashboard() {
                             <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
                             <span className="hidden sm:inline">{isRefreshing ? t('dashboard.refreshing') : t('dashboard.refresh_quota')}</span>
                         </button>
+                        <AddAccountDialog onAdd={handleAddAccount} />
                     </div>
                 </div>
 
-                {/* 1. 账号生态健康状态阵列 (4 核心卡片，以风控与配置定生死) */}
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                    {/* 总账号数 */}
-                    <div className="bg-white dark:bg-base-100 rounded-xl p-4 shadow-sm border border-gray-100 dark:border-base-200">
-                        <div className="flex items-center justify-between mb-2">
-                            <div className="p-1.5 bg-blue-50 dark:bg-blue-900/20 rounded-md">
-                                <Users className="w-4 h-4 text-blue-500 dark:text-blue-400" />
-                            </div>
-                            <span className="text-[10px] font-mono font-bold text-gray-400 dark:text-gray-500">TOTAL</span>
-                        </div>
-                        <div className="text-2xl font-bold text-gray-900 dark:text-base-content mb-0.5">{stats.total}</div>
-                        <div className="text-xs text-gray-500 dark:text-gray-400 font-medium">
-                            {t('dashboard.total_accounts', '总账号数')}
-                        </div>
-                        <div className="text-[10px] text-gray-400 dark:text-gray-500 mt-1.5">
-                            {t('dashboard.total_accounts_desc', '已录入配置的全部账号')}
-                        </div>
-                    </div>
-
-                    {/* 可用账号数 (开启且风控正常，不以额度定生死) */}
-                    <div className="bg-white dark:bg-base-100 rounded-xl p-4 shadow-sm border border-emerald-100 dark:border-emerald-950/40">
-                        <div className="flex items-center justify-between mb-2">
-                            <div className="p-1.5 bg-emerald-50 dark:bg-emerald-900/20 rounded-md">
-                                <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                            </div>
-                            <span className="text-[10px] font-mono font-bold text-emerald-600 dark:text-emerald-400">ACTIVE</span>
-                        </div>
-                        <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 mb-0.5">{stats.available}</div>
-                        <div className="text-xs text-gray-700 dark:text-gray-300 font-bold">
-                            {t('dashboard.available_accounts', '可用账号数')}
-                        </div>
-                        <div className="text-[10px] text-emerald-600/80 dark:text-emerald-400/80 mt-1.5">
-                            {t('dashboard.available_accounts_desc', '✓ 开启且状态正常 · 反代服务中')}
-                        </div>
-                    </div>
-
-                    {/* 禁用账号数 (手动停用) */}
-                    <div className="bg-white dark:bg-base-100 rounded-xl p-4 shadow-sm border border-gray-100 dark:border-base-200">
-                        <div className="flex items-center justify-between mb-2">
-                            <div className="p-1.5 bg-gray-100 dark:bg-base-300 rounded-md">
-                                <Ban className="w-4 h-4 text-gray-500 dark:text-gray-400" />
-                            </div>
-                            <span className="text-[10px] font-mono font-bold text-gray-400 dark:text-gray-500">DISABLED</span>
-                        </div>
-                        <div className="text-2xl font-bold text-gray-600 dark:text-gray-300 mb-0.5">{stats.disabled}</div>
-                        <div className="text-xs text-gray-500 dark:text-gray-400 font-medium">
-                            {t('dashboard.disabled_accounts', '禁用账号数')}
-                        </div>
-                        <div className="text-[10px] text-gray-400 dark:text-gray-500 mt-1.5">
-                            {t('dashboard.disabled_accounts_desc', '手动停用 / 反代已禁用')}
-                        </div>
-                    </div>
-
-                    {/* 异常账号数 (风控阻断或403封禁) */}
-                    <div className="bg-white dark:bg-base-100 rounded-xl p-4 shadow-sm border border-gray-100 dark:border-base-200">
-                        <div className="flex items-center justify-between mb-2">
-                            <div className={`p-1.5 rounded-md ${stats.abnormal > 0 ? 'bg-rose-50 dark:bg-rose-900/20' : 'bg-gray-50 dark:bg-base-300'}`}>
-                                <ShieldAlert className={`w-4 h-4 ${stats.abnormal > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-gray-400'}`} />
-                            </div>
-                            <span className={`text-[10px] font-mono font-bold ${stats.abnormal > 0 ? 'text-rose-500' : 'text-gray-400'}`}>RISK</span>
-                        </div>
-                        <div className={`text-2xl font-bold mb-0.5 ${stats.abnormal > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-gray-900 dark:text-base-content'}`}>{stats.abnormal}</div>
-                        <div className="text-xs text-gray-500 dark:text-gray-400 font-medium">
-                            {t('dashboard.abnormal_accounts', '异常账号数')}
-                        </div>
-                        <div className={`text-[10px] mt-1.5 ${stats.abnormal > 0 ? 'text-rose-600 font-bold' : 'text-gray-400 dark:text-gray-500'}`}>
-                            {stats.abnormal > 0
-                                ? t('dashboard.abnormal_accounts_has_risk', '⚠ 需处理风控验证 / 封禁')
-                                : t('dashboard.abnormal_accounts_no_risk', '✓ 零风控异常账号')
-                            }
-                        </div>
-                    </div>
-                </div>
-
-                {/* 2. 配额生产力矩阵与显眼的双选胶囊控制器 (Pill Capsule Control) */}
-                <div className="flex flex-wrap items-center justify-between gap-2 pt-1 pb-1">
-                    <div className="flex items-center gap-2">
-                        <span className="text-xs font-bold text-gray-800 dark:text-gray-200">
-                            {onlyAvailable
-                                ? t('dashboard.quota_matrix_active', '可用账号配额生产力矩阵')
-                                : t('dashboard.quota_matrix_all_normal', '全量正常账号配额矩阵 (包含已禁用)')
-                            }
-                        </span>
-                        <span className="text-[10px] text-gray-400 dark:text-gray-500 font-mono">
-                            ({t('dashboard.base_pool_count', { count: stats.basePoolCount })})
-                        </span>
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-2">
-                        {/* 显眼的配额视窗三态胶囊控制器 (综合加权 | 5H 滚动 | 7天周配额) */}
-                        <div className="flex items-center gap-1 bg-gray-200/80 dark:bg-base-300 p-1 rounded-full shadow-inner border border-gray-200/80 dark:border-base-200 select-none">
+                {/* 顶栏控制条：左侧快捷控制胶囊，右侧纯粹通透的 KPI 指标 */}
+                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 px-1 py-0.5">
+                    {/* 左上角控制胶囊组 */}
+                    <div className="flex flex-wrap items-center gap-2 select-none">
+                        {/* 1. 配额视窗模式切换: 综合加权 / 5H滚动 / 7天周配额 */}
+                        <div className="flex items-center bg-gray-100 dark:bg-white/[0.04] p-1 rounded-xl text-xs dark:border dark:border-white/[0.08]">
                             <button
                                 type="button"
                                 onClick={() => setQuotaView('weighted')}
-                                className={`px-3 py-1.5 rounded-full text-xs font-bold transition-all flex items-center gap-1 cursor-pointer ${
+                                className={`px-2.5 py-1 rounded-lg font-medium transition-all cursor-pointer flex items-center gap-1.5 ${
                                     quotaView === 'weighted'
-                                        ? 'bg-indigo-600 text-white shadow-md scale-100 ring-2 ring-indigo-400/30'
-                                        : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-black/5 dark:hover:bg-white/5'
+                                        ? 'bg-white dark:bg-zinc-800 text-indigo-600 dark:text-indigo-300 shadow-sm font-bold dark:border dark:border-white/[0.12]'
+                                        : 'text-gray-500 dark:text-zinc-400 hover:text-gray-800 dark:hover:text-zinc-200'
                                 }`}
-                                title={t('dashboard.view_mode_title_weighted')}
+                                title={t('dashboard.view_mode_weighted_title', '综合加权可用 (5H滚动与周配额木桶短板)')}
                             >
                                 <Sparkles className="w-3.5 h-3.5" />
                                 <span>{t('dashboard.view_mode_weighted', '综合加权')}</span>
@@ -483,12 +392,12 @@ function Dashboard() {
                             <button
                                 type="button"
                                 onClick={() => setQuotaView('5h')}
-                                className={`px-3 py-1.5 rounded-full text-xs font-bold transition-all flex items-center gap-1 cursor-pointer ${
+                                className={`px-2.5 py-1 rounded-lg font-medium transition-all cursor-pointer flex items-center gap-1.5 ${
                                     quotaView === '5h'
-                                        ? 'bg-emerald-600 text-white shadow-md scale-100 ring-2 ring-emerald-400/30'
-                                        : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-black/5 dark:hover:bg-white/5'
+                                        ? 'bg-white dark:bg-zinc-800 text-emerald-600 dark:text-emerald-300 shadow-sm font-bold dark:border dark:border-white/[0.12]'
+                                        : 'text-gray-500 dark:text-zinc-400 hover:text-gray-800 dark:hover:text-zinc-200'
                                 }`}
-                                title={t('dashboard.view_mode_title_5h')}
+                                title={t('dashboard.view_mode_title_5h', '5H 滚动：近 5 小时冲刺可用度 (受周配额硬顶约束)')}
                             >
                                 <Clock className="w-3.5 h-3.5" />
                                 <span>{t('dashboard.view_mode_5h', '5H 滚动')}</span>
@@ -496,299 +405,496 @@ function Dashboard() {
                             <button
                                 type="button"
                                 onClick={() => setQuotaView('weekly')}
-                                className={`px-3 py-1.5 rounded-full text-xs font-bold transition-all flex items-center gap-1 cursor-pointer ${
+                                className={`px-2.5 py-1 rounded-lg font-medium transition-all cursor-pointer flex items-center gap-1.5 ${
                                     quotaView === 'weekly'
-                                        ? 'bg-purple-600 text-white shadow-md scale-100 ring-2 ring-purple-400/30'
-                                        : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-black/5 dark:hover:bg-white/5'
+                                        ? 'bg-white dark:bg-zinc-800 text-teal-600 dark:text-teal-300 shadow-sm font-bold dark:border dark:border-white/[0.12]'
+                                        : 'text-gray-500 dark:text-zinc-400 hover:text-gray-800 dark:hover:text-zinc-200'
                                 }`}
-                                title={t('dashboard.view_mode_title_weekly')}
+                                title={t('dashboard.view_mode_title_weekly', '7天周配额：本周宏观总预算 (受 5H 瞬时冷却阀门约束)')}
                             >
                                 <Calendar className="w-3.5 h-3.5" />
                                 <span>{t('dashboard.view_mode_weekly', '7天周配额')}</span>
                             </button>
                         </div>
 
-                        {/* 显眼的双选胶囊控制器 (Pill Capsule) */}
-                        <div className="flex items-center gap-1 bg-gray-200/80 dark:bg-base-300 p-1 rounded-full shadow-inner border border-gray-200/80 dark:border-base-200 select-none">
+                        {/* 3. 账号池范围筛选: 反代账号 vs 可用账号 */}
+                        <div className="flex items-center bg-gray-100 dark:bg-white/[0.04] p-1 rounded-xl text-xs dark:border dark:border-white/[0.08]">
                             <button
                                 type="button"
-                                onClick={() => setOnlyAvailable(true)}
-                                className={`px-3.5 py-1.5 rounded-full text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
-                                    onlyAvailable
-                                        ? 'bg-emerald-600 text-white shadow-md scale-100 ring-2 ring-emerald-400/30'
-                                        : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-black/5 dark:hover:bg-white/5'
+                                onClick={() => setOnlyProxyPool(true)}
+                                className={`px-2.5 py-1 rounded-lg font-medium transition-all cursor-pointer ${
+                                    onlyProxyPool
+                                        ? 'bg-white dark:bg-zinc-800 text-emerald-600 dark:text-emerald-300 shadow-sm font-bold dark:border dark:border-white/[0.12]'
+                                        : 'text-gray-500 dark:text-zinc-400 hover:text-gray-800 dark:hover:text-zinc-200'
                                 }`}
-                                title={t('dashboard.btn_title_only_available', '当前：仅看开启且正常的可用账号 (点击包含已禁用账号)')}
+                                title={t('dashboard.btn_title_proxy_online', '当前：仅统计参与反代分发的在线账号配额')}
                             >
-                                <ShieldCheck className="w-3.5 h-3.5" />
-                                <span>
-                                    {t('dashboard.btn_only_available', { count: stats.available })}
-                                </span>
+                                {t('dashboard.btn_proxy_online', { count: stats.proxyOnline, defaultValue: `反代账号 (${stats.proxyOnline})` })}
                             </button>
                             <button
                                 type="button"
-                                onClick={() => setOnlyAvailable(false)}
-                                className={`px-3.5 py-1.5 rounded-full text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
-                                    !onlyAvailable
-                                        ? 'bg-blue-600 text-white shadow-md scale-100 ring-2 ring-blue-400/30'
-                                        : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-black/5 dark:hover:bg-white/5'
+                                onClick={() => setOnlyProxyPool(false)}
+                                className={`px-2.5 py-1 rounded-lg font-medium transition-all cursor-pointer ${
+                                    !onlyProxyPool
+                                        ? 'bg-white dark:bg-zinc-800 text-blue-600 dark:text-blue-300 shadow-sm font-bold dark:border dark:border-white/[0.12]'
+                                        : 'text-gray-500 dark:text-zinc-400 hover:text-gray-800 dark:hover:text-zinc-200'
                                 }`}
-                                title={t('dashboard.btn_title_include_disabled', '当前：查看全部正常状态账号包含禁用 (点击仅看可用账号)')}
+                                title={t('dashboard.btn_title_all_available', '当前：统计所有正常未停用的可用账号配额')}
                             >
-                                <Users className="w-3.5 h-3.5" />
-                                <span>
-                                    {t('dashboard.btn_include_disabled', { count: stats.normalCount })}
-                                </span>
+                                {t('dashboard.btn_all_available', { count: stats.available, defaultValue: `可用账号 (${stats.available})` })}
                             </button>
                         </div>
                     </div>
-                </div>
 
-                {/* 3 大模型卡片：展示 5H均值、周配额均值及周额度熔断加权配额 */}
-                {(() => {
-                    const getCardQuota = (stat: typeof stats.gemini) => {
-                        if (quotaView === '5h') {
-                            return {
-                                val: stat.avg5h,
-                                label: t('dashboard.view_mode_5h', '5H 滚动可用'),
-                                isTight: stat.avg5h < 50,
-                            };
-                        }
-                        if (quotaView === 'weekly') {
-                            return {
-                                val: stat.avgWeekly,
-                                label: t('dashboard.view_mode_weekly', '7天周配额'),
-                                isTight: stat.avgWeekly < 50,
-                            };
-                        }
-                        return {
-                            val: stat.weightedEffective,
-                            label: t('dashboard.weighted_available', '综合加权可用'),
-                            isTight: stat.weightedEffective < 50,
-                        };
-                    };
-
-                    const geminiCard = getCardQuota(stats.gemini);
-                    const geminiImageCard = getCardQuota(stats.geminiImage);
-                    const claudeCard = getCardQuota(stats.claude);
-
-                    return (
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                            {/* Gemini 文本模型配额 */}
-                            <div className="bg-white dark:bg-base-100 rounded-xl p-4 shadow-sm border border-gray-100 dark:border-base-200 flex flex-col justify-between">
+                            {/* 右侧：纯粹通透的大字 KPI 矩阵 (Requests · Avg response · Spend 灵感) */}
+                            <div className="flex items-center gap-5 sm:gap-6 text-right">
                                 <div>
-                                    <div className="flex items-center justify-between mb-2">
-                                        <div className="flex items-center gap-2">
-                                            <div className="p-1.5 bg-green-50 dark:bg-green-900/20 rounded-md">
-                                                <Sparkles className="w-4 h-4 text-green-500 dark:text-green-400" />
-                                            </div>
-                                            <span className="text-xs font-bold text-gray-800 dark:text-gray-200">
-                                                {t('dashboard.gemini_available_quota', 'Gemini 可用配额')}
-                                            </span>
-                                        </div>
-                                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${!geminiCard.isTight ? 'bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-300' : 'bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'}`}>
-                                            {!geminiCard.isTight
-                                                ? t('dashboard.quota_sufficient_short', '充足')
-                                                : t('dashboard.quota_tight_short', '偏紧')
-                                            }
-                                        </span>
+                                    <div className="text-xl sm:text-2xl font-black font-mono tracking-tight text-gray-900 dark:text-white leading-none">
+                                        {stats.total}
                                     </div>
-
-                                    <div className="flex items-baseline gap-2 mb-2">
-                                        <span className="text-3xl font-extrabold text-gray-900 dark:text-base-content font-mono">
-                                            {geminiCard.val}%
-                                        </span>
-                                        <span className="text-[11px] text-gray-400 dark:text-gray-500 font-medium">
-                                            {geminiCard.label}
-                                        </span>
+                                    <div className="text-[10px] text-gray-400 dark:text-zinc-500 font-medium mt-1">
+                                        {t('dashboard.total_accounts', '总账号纳管')}
                                     </div>
                                 </div>
-
-                                <div className="pt-2 border-t border-gray-100 dark:border-base-300/60 flex items-center justify-between text-[11px]">
-                                    <div className="flex items-center gap-1.5">
-                                        <span className="text-gray-400 dark:text-gray-500">{t('dashboard.rolling_5h', '5小时滚动:')}</span>
-                                        <span className="font-mono font-bold text-emerald-600 dark:text-emerald-400">{stats.gemini.avg5h}%</span>
-                                    </div>
-                                    <div className="flex items-center gap-1.5">
-                                        <span className="text-gray-400 dark:text-gray-500">{t('dashboard.weekly_7d', '7天周配额:')}</span>
-                                        <span className={`font-mono font-bold ${stats.gemini.avgWeekly <= 10 ? 'text-amber-600 dark:text-amber-400' : 'text-gray-700 dark:text-gray-300'}`}>{stats.gemini.avgWeekly}%</span>
-                                    </div>
-                                </div>
-                                {stats.gemini.zeroWeeklyCount > 0 && (
-                                    <div className="text-[10px] text-amber-600 dark:text-amber-400 mt-1.5 font-medium flex items-center gap-1">
-                                        <AlertTriangle className="w-3 h-3 shrink-0" />
-                                        <span>{t('dashboard.zero_weekly_warning', { count: stats.gemini.zeroWeeklyCount })}</span>
-                                    </div>
-                                )}
-                                {quotaView === '5h' && stats.gemini.cappedCount > 0 && stats.gemini.zeroWeeklyCount === 0 && (
-                                    <div className="text-[10px] text-amber-600 dark:text-amber-400 mt-1.5 font-medium flex items-center gap-1">
-                                        <AlertTriangle className="w-3 h-3 shrink-0" />
-                                        <span>{stats.gemini.cappedCount} 个账号 5H 上限受到周配额压制</span>
-                                    </div>
-                                )}
-                                {quotaView === 'weekly' && stats.gemini.coolingCount > 0 && (
-                                    <div className="text-[10px] text-blue-600 dark:text-blue-400 mt-1.5 font-medium flex items-center gap-1">
-                                        <Clock className="w-3 h-3 shrink-0" />
-                                        <span>{stats.gemini.coolingCount} 个账号当前处于 5H 冷却冻结中</span>
-                                    </div>
-                                )}
-                            </div>
-
-                            {/* Gemini 绘图模型配额 */}
-                            <div className="bg-white dark:bg-base-100 rounded-xl p-4 shadow-sm border border-gray-100 dark:border-base-200 flex flex-col justify-between">
+                                <div className="h-6 w-px bg-gray-200 dark:bg-white/[0.08]" />
                                 <div>
-                                    <div className="flex items-center justify-between mb-2">
-                                        <div className="flex items-center gap-2">
-                                            <div className="p-1.5 bg-purple-50 dark:bg-purple-900/20 rounded-md">
-                                                <Sparkles className="w-4 h-4 text-purple-500 dark:text-purple-400" />
-                                            </div>
-                                            <span className="text-xs font-bold text-gray-800 dark:text-gray-200">
-                                                {t('dashboard.gemini_image_quota', 'Gemini 绘图配额')}
-                                            </span>
-                                        </div>
-                                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${!geminiImageCard.isTight ? 'bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300' : 'bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'}`}>
-                                            {!geminiImageCard.isTight
-                                                ? t('dashboard.quota_sufficient_short', '充足')
-                                                : t('dashboard.quota_tight_short', '偏紧')
-                                            }
-                                        </span>
+                                    <div className="text-xl sm:text-2xl font-black font-mono tracking-tight text-emerald-600 dark:text-emerald-400 leading-none">
+                                        {stats.proxyOnline}
                                     </div>
-
-                                    <div className="flex items-baseline gap-2 mb-2">
-                                        <span className="text-3xl font-extrabold text-gray-900 dark:text-base-content font-mono">
-                                            {geminiImageCard.val}%
-                                        </span>
-                                        <span className="text-[11px] text-gray-400 dark:text-gray-500 font-medium">
-                                            {geminiImageCard.label}
-                                        </span>
+                                    <div className="text-[10px] text-gray-400 dark:text-zinc-500 font-medium mt-1">
+                                        {t('dashboard.proxy_online_unit', '反代服务在线')}
                                     </div>
                                 </div>
-
-                                <div className="pt-2 border-t border-gray-100 dark:border-base-300/60 flex items-center justify-between text-[11px]">
-                                    <div className="flex items-center gap-1.5">
-                                        <span className="text-gray-400 dark:text-gray-500">{t('dashboard.rolling_5h', '5小时滚动:')}</span>
-                                        <span className="font-mono font-bold text-emerald-600 dark:text-emerald-400">{stats.geminiImage.avg5h}%</span>
-                                    </div>
-                                    <div className="flex items-center gap-1.5">
-                                        <span className="text-gray-400 dark:text-gray-500">{t('dashboard.weekly_7d', '7天周配额:')}</span>
-                                        <span className={`font-mono font-bold ${stats.geminiImage.avgWeekly <= 10 ? 'text-amber-600 dark:text-amber-400' : 'text-gray-700 dark:text-gray-300'}`}>{stats.geminiImage.avgWeekly}%</span>
-                                    </div>
-                                </div>
-                                {stats.geminiImage.zeroWeeklyCount > 0 && (
-                                    <div className="text-[10px] text-amber-600 dark:text-amber-400 mt-1.5 font-medium flex items-center gap-1">
-                                        <AlertTriangle className="w-3 h-3 shrink-0" />
-                                        <span>{t('dashboard.zero_weekly_warning', { count: stats.geminiImage.zeroWeeklyCount })}</span>
-                                    </div>
-                                )}
-                                {quotaView === '5h' && stats.geminiImage.cappedCount > 0 && stats.geminiImage.zeroWeeklyCount === 0 && (
-                                    <div className="text-[10px] text-amber-600 dark:text-amber-400 mt-1.5 font-medium flex items-center gap-1">
-                                        <AlertTriangle className="w-3 h-3 shrink-0" />
-                                        <span>{stats.geminiImage.cappedCount} 个账号 5H 上限受到周配额压制</span>
-                                    </div>
-                                )}
-                                {quotaView === 'weekly' && stats.geminiImage.coolingCount > 0 && (
-                                    <div className="text-[10px] text-blue-600 dark:text-blue-400 mt-1.5 font-medium flex items-center gap-1">
-                                        <Clock className="w-3 h-3 shrink-0" />
-                                        <span>{stats.geminiImage.coolingCount} 个账号当前处于 5H 冷却冻结中</span>
-                                    </div>
-                                )}
-                            </div>
-
-                            {/* Claude 模型配额 */}
-                            <div className="bg-white dark:bg-base-100 rounded-xl p-4 shadow-sm border border-gray-100 dark:border-base-200 flex flex-col justify-between">
+                                <div className="h-6 w-px bg-gray-200 dark:bg-white/[0.08]" />
                                 <div>
-                                    <div className="flex items-center justify-between mb-2">
-                                        <div className="flex items-center gap-2">
-                                            <div className="p-1.5 bg-cyan-50 dark:bg-cyan-900/20 rounded-md">
-                                                <Bot className="w-4 h-4 text-cyan-500 dark:text-cyan-400" />
-                                            </div>
-                                            <span className="text-xs font-bold text-gray-800 dark:text-gray-200">
-                                                {t('dashboard.claude_available_quota', 'Claude 可用配额')}
-                                            </span>
-                                        </div>
-                                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${!claudeCard.isTight ? 'bg-cyan-50 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300' : 'bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'}`}>
-                                            {!claudeCard.isTight
-                                                ? t('dashboard.quota_sufficient_short', '充足')
-                                                : t('dashboard.quota_tight_short', '偏紧')
-                                            }
-                                        </span>
+                                    <div className="text-xl sm:text-2xl font-black font-mono tracking-tight text-blue-600 dark:text-blue-400 leading-none">
+                                        {Math.round((stats.available / (stats.total || 1)) * 100)}%
                                     </div>
-
-                                    <div className="flex items-baseline gap-2 mb-2">
-                                        <span className="text-3xl font-extrabold text-gray-900 dark:text-base-content font-mono">
-                                            {claudeCard.val}%
-                                        </span>
-                                        <span className="text-[11px] text-gray-400 dark:text-gray-500 font-medium">
-                                            {claudeCard.label}
-                                        </span>
+                                    <div className="text-[10px] text-gray-400 dark:text-zinc-500 font-medium mt-1">
+                                        {t('dashboard.normal_rate', '健康正常率')}
                                     </div>
                                 </div>
-
-                                <div className="pt-2 border-t border-gray-100 dark:border-base-300/60 flex items-center justify-between text-[11px]">
-                                    <div className="flex items-center gap-1.5">
-                                        <span className="text-gray-400 dark:text-gray-500">{t('dashboard.rolling_5h', '5小时滚动:')}</span>
-                                        <span className="font-mono font-bold text-emerald-600 dark:text-emerald-400">{stats.claude.avg5h}%</span>
-                                    </div>
-                                    <div className="flex items-center gap-1.5">
-                                        <span className="text-gray-400 dark:text-gray-500">{t('dashboard.weekly_7d', '7天周配额:')}</span>
-                                        <span className={`font-mono font-bold ${stats.claude.avgWeekly <= 10 ? 'text-amber-600 dark:text-amber-400' : 'text-gray-700 dark:text-gray-300'}`}>{stats.claude.avgWeekly}%</span>
-                                    </div>
-                                </div>
-                                {stats.claude.zeroWeeklyCount > 0 && (
-                                    <div className="text-[10px] text-amber-600 dark:text-amber-400 mt-1.5 font-medium flex items-center gap-1">
-                                        <AlertTriangle className="w-3 h-3 shrink-0" />
-                                        <span>{t('dashboard.zero_weekly_warning', { count: stats.claude.zeroWeeklyCount })}</span>
-                                    </div>
-                                )}
-                                {quotaView === '5h' && stats.claude.cappedCount > 0 && stats.claude.zeroWeeklyCount === 0 && (
-                                    <div className="text-[10px] text-amber-600 dark:text-amber-400 mt-1.5 font-medium flex items-center gap-1">
-                                        <AlertTriangle className="w-3 h-3 shrink-0" />
-                                        <span>{stats.claude.cappedCount} 个账号 5H 上限受到周配额压制</span>
-                                    </div>
-                                )}
-                                {quotaView === 'weekly' && stats.claude.coolingCount > 0 && (
-                                    <div className="text-[10px] text-blue-600 dark:text-blue-400 mt-1.5 font-medium flex items-center gap-1">
-                                        <Clock className="w-3 h-3 shrink-0" />
-                                        <span>{stats.claude.coolingCount} 个账号当前处于 5H 冷却冻结中</span>
-                                    </div>
-                                )}
                             </div>
                         </div>
-                    );
-                })()}
+
+                <div className="space-y-4">
+                        {/* 核心 Bento 4 卡矩阵 (纯黑极简风格) */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3.5 items-stretch">
+                            {/* 卡片 1: 账号底座资产 */}
+                            <motion.div
+                                whileHover={{ y: -2 }}
+                                transition={{ duration: 0.15 }}
+                                className="bg-white dark:bg-[#15161b] rounded-2xl p-5 shadow-sm dark:shadow-xl dark:shadow-black/40 border border-gray-100 dark:border-white/[0.10] flex flex-col justify-between relative overflow-hidden"
+                            >
+                                <div className="space-y-4">
+                                    <div className="flex items-center justify-between">
+                                        <div className="flex items-center gap-2">
+                                            <div className="p-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-transparent dark:border-emerald-500/20">
+                                                <Zap className="w-4 h-4" />
+                                            </div>
+                                            <span className="text-xs font-bold text-gray-800 dark:text-zinc-200">
+                                                {t('dashboard.accounts_health', '账号底座资产')}
+                                            </span>
+                                        </div>
+                                        <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-500/30">
+                                            {stats.available}/{stats.total}
+                                        </span>
+                                    </div>
+
+                                    {/* 核心大数字 */}
+                                    <div>
+                                        <div className="text-3xl sm:text-4xl font-black font-mono tracking-tight text-gray-900 dark:text-white">
+                                            {stats.available}
+                                            <span className="text-sm font-sans font-normal text-gray-400 dark:text-zinc-400 ml-1.5">
+                                                / {stats.total} {t('dashboard.available_accounts_unit', '可用')}
+                                            </span>
+                                        </div>
+                                        <div className="text-[11px] text-gray-400 dark:text-zinc-400 mt-1 font-medium">
+                                            {stats.proxyOnline > 0
+                                                ? t('dashboard.proxy_joined_pool', { count: stats.proxyOnline, defaultValue: `✓ ${stats.proxyOnline} 个账号已加入反代服务池` })
+                                                : t('dashboard.disabled_accounts_desc', '手动停用/待开启')
+                                            }
+                                        </div>
+                                    </div>
+
+                                    {/* 彩色进度条 */}
+                                    <div className="w-full bg-gray-100 dark:bg-white/10 h-2 rounded-full overflow-hidden">
+                                        <div
+                                            className="bg-gradient-to-r from-emerald-500 to-teal-400 h-full rounded-full transition-all duration-300 shadow-[0_0_8px_rgba(52,211,153,0.4)]"
+                                            style={{ width: `${Math.round((stats.available / (stats.total || 1)) * 100)}%` }}
+                                        />
+                                    </div>
+                                </div>
+
+                                {/* 底部操作栏胶囊 */}
+                                <div className="pt-3 mt-3 border-t border-gray-100 dark:border-white/[0.08] flex items-center justify-between text-xs">
+                                    <span className="text-[11px] text-gray-400 dark:text-zinc-400 font-mono font-medium">
+                                        {Math.round((stats.available / (stats.total || 1)) * 100)}% {t('dashboard.asset_rate', '资产率')}
+                                    </span>
+                                    <button
+                                        type="button"
+                                        onClick={() => navigate('/accounts')}
+                                        className="px-3 py-1 bg-gray-900 hover:bg-gray-800 dark:bg-white/10 dark:hover:bg-white/15 text-white text-[11px] font-semibold rounded-lg transition-colors flex items-center gap-1 cursor-pointer shadow-xs"
+                                    >
+                                        <span>{t('dashboard.view_all_accounts', '查看账号')}</span>
+                                        <ArrowRight className="w-3 h-3" />
+                                    </button>
+                                </div>
+                            </motion.div>
+
+                            {/* 卡片 2: Gemini 算力池 */}
+                            {/* 卡片 2: Gemini 算力池 */}
+                            <motion.div
+                                whileHover={{ y: -2 }}
+                                transition={{ duration: 0.15 }}
+                                className="bg-white dark:bg-[#15161b] rounded-2xl p-5 shadow-sm dark:shadow-xl dark:shadow-black/40 border border-gray-100 dark:border-white/[0.10] flex flex-col justify-between"
+                            >
+                                <div className="space-y-3">
+                                    <div className="flex items-center justify-between">
+                                        <div className="flex items-center gap-2">
+                                            <div className="p-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-transparent dark:border-emerald-500/20">
+                                                <Sparkles className="w-4 h-4" />
+                                            </div>
+                                            <span className="text-xs font-bold text-gray-800 dark:text-zinc-200">
+                                                {t('accounts.quota_group_gemini', 'Gemini 模型')}
+                                            </span>
+                                        </div>
+                                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                            geminiQuotaValue >= 50
+                                                ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300 dark:border dark:border-emerald-500/30'
+                                                : 'bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300 dark:border dark:border-amber-500/30'
+                                        }`}>
+                                            {geminiQuotaValue >= 50 ? t('dashboard.quota_sufficient_short', '充足') : t('dashboard.quota_tight_short', '偏紧')}
+                                        </span>
+                                    </div>
+
+                                    {/* 核心大字 (随 quotaView 联动) */}
+                                    <div className="flex items-baseline justify-between">
+                                        <div>
+                                            <span className="text-3xl font-black font-mono tracking-tight text-gray-900 dark:text-white">
+                                                {geminiQuotaValue}%
+                                            </span>
+                                            <span className="text-[11px] text-gray-400 dark:text-zinc-400 block mt-0.5">
+                                                {geminiQuotaLabel}
+                                            </span>
+                                        </div>
+                                    </div>
+
+                                    {/* 双核配额微度规 */}
+                                    <div className="pt-2">
+                                        <div className="grid grid-cols-2 gap-2">
+                                            {/* 5H 滚动子卡槽 */}
+                                            <button
+                                                type="button"
+                                                onClick={() => setQuotaView('5h')}
+                                                className={`p-2 rounded-xl border text-left transition-all duration-200 cursor-pointer ${
+                                                    quotaView === '5h'
+                                                        ? 'bg-emerald-500/10 border-emerald-500/30 dark:bg-emerald-500/20 dark:border-emerald-500/50 shadow-xs'
+                                                        : 'bg-gray-50/70 hover:bg-gray-100/70 dark:bg-white/[0.04] dark:hover:bg-white/[0.08] border-gray-100 dark:border-white/[0.08]'
+                                                }`}
+                                            >
+                                                <div className="flex items-center justify-between text-[11px] mb-1.5">
+                                                    <span className={`text-[10px] font-medium ${quotaView === '5h' ? 'text-emerald-700 dark:text-emerald-300 font-bold' : 'text-gray-400 dark:text-zinc-400'}`}>
+                                                        {t('dashboard.view_mode_5h', '5H 滚动')}
+                                                    </span>
+                                                    <span className={`font-mono text-xs font-bold ${quotaView === '5h' ? 'text-emerald-700 dark:text-emerald-300' : 'text-gray-700 dark:text-zinc-200'}`}>
+                                                        {stats.gemini.avg5h}%
+                                                    </span>
+                                                </div>
+                                                <div className="h-1.5 w-full bg-gray-200/80 dark:bg-white/10 rounded-full overflow-hidden">
+                                                    <div
+                                                        className="h-full bg-gradient-to-r from-emerald-500 to-teal-400 rounded-full transition-all duration-300 shadow-[0_0_6px_rgba(16,185,129,0.5)]"
+                                                        style={{ width: `${Math.min(stats.gemini.avg5h, 100)}%` }}
+                                                    />
+                                                </div>
+                                            </button>
+
+                                            {/* 7天周配额子卡槽 */}
+                                            <button
+                                                type="button"
+                                                onClick={() => setQuotaView('weekly')}
+                                                className={`p-2 rounded-xl border text-left transition-all duration-200 cursor-pointer ${
+                                                    quotaView === 'weekly'
+                                                        ? 'bg-teal-500/10 border-teal-500/30 dark:bg-teal-500/20 dark:border-teal-500/50 shadow-xs'
+                                                        : 'bg-gray-50/70 hover:bg-gray-100/70 dark:bg-white/[0.04] dark:hover:bg-white/[0.08] border-gray-100 dark:border-white/[0.08]'
+                                                }`}
+                                            >
+                                                <div className="flex items-center justify-between text-[11px] mb-1.5">
+                                                    <span className={`text-[10px] font-medium ${quotaView === 'weekly' ? 'text-teal-700 dark:text-teal-300 font-bold' : 'text-gray-400 dark:text-zinc-400'}`}>
+                                                        {t('dashboard.view_mode_weekly', '7天周配额')}
+                                                    </span>
+                                                    <span className={`font-mono text-xs font-bold ${quotaView === 'weekly' ? 'text-teal-700 dark:text-teal-300' : 'text-gray-700 dark:text-zinc-200'}`}>
+                                                        {stats.gemini.avgWeekly}%
+                                                    </span>
+                                                </div>
+                                                <div className="h-1.5 w-full bg-gray-200/80 dark:bg-white/10 rounded-full overflow-hidden">
+                                                    <div
+                                                        className="h-full bg-gradient-to-r from-teal-500 to-cyan-400 rounded-full transition-all duration-300 shadow-[0_0_6px_rgba(20,184,166,0.5)]"
+                                                        style={{ width: `${Math.min(stats.gemini.avgWeekly, 100)}%` }}
+                                                    />
+                                                </div>
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="pt-2.5 mt-2 border-t border-gray-100 dark:border-white/[0.08] text-[10px] text-gray-400 dark:text-zinc-400 flex items-center justify-between">
+                                    <span>{t('dashboard.gemini_group_desc', '包含 Pro / Flash / 绘图')}</span>
+                                    {stats.gemini.zeroWeeklyCount > 0 && (
+                                        <span className="text-rose-600 dark:text-rose-400 font-bold flex items-center gap-0.5">
+                                            <AlertTriangle size={10} /> {stats.gemini.zeroWeeklyCount} {t('dashboard.circuit_break', '熔断')}
+                                        </span>
+                                    )}
+                                </div>
+                            </motion.div>
+
+                            {/* 卡片 3: Claude & GPT 算力池 */}
+                            <motion.div
+                                whileHover={{ y: -2 }}
+                                transition={{ duration: 0.15 }}
+                                className="bg-white dark:bg-[#15161b] rounded-2xl p-5 shadow-sm dark:shadow-xl dark:shadow-black/40 border border-gray-100 dark:border-white/[0.10] flex flex-col justify-between"
+                            >
+                                <div className="space-y-3">
+                                    <div className="flex items-center justify-between">
+                                        <div className="flex items-center gap-2">
+                                            <div className="p-1.5 rounded-lg bg-cyan-50 dark:bg-cyan-500/15 text-cyan-600 dark:text-cyan-400 border border-transparent dark:border-cyan-500/20">
+                                                <Bot className="w-4 h-4" />
+                                            </div>
+                                            <span className="text-xs font-bold text-gray-800 dark:text-zinc-200">
+                                                {t('accounts.quota_group_claude', 'Claude & GPT')}
+                                            </span>
+                                        </div>
+                                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                            claudeQuotaValue >= 50
+                                                ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300 dark:border dark:border-emerald-500/30'
+                                                : 'bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300 dark:border dark:border-amber-500/30'
+                                        }`}>
+                                            {claudeQuotaValue >= 50 ? t('dashboard.quota_sufficient_short', '充足') : t('dashboard.quota_tight_short', '偏紧')}
+                                        </span>
+                                    </div>
+
+                                    {/* 核心大字 (随 quotaView 联动) */}
+                                    <div className="flex items-baseline justify-between">
+                                        <div>
+                                            <span className="text-3xl font-black font-mono tracking-tight text-gray-900 dark:text-white">
+                                                {claudeQuotaValue}%
+                                            </span>
+                                            <span className="text-[11px] text-gray-400 dark:text-zinc-400 block mt-0.5">
+                                                {claudeQuotaLabel}
+                                            </span>
+                                        </div>
+                                    </div>
+
+                                    {/* 双核配额微度规 */}
+                                    <div className="pt-2">
+                                        <div className="grid grid-cols-2 gap-2">
+                                            {/* 5H 滚动子卡槽 */}
+                                            <button
+                                                type="button"
+                                                onClick={() => setQuotaView('5h')}
+                                                className={`p-2 rounded-xl border text-left transition-all duration-200 cursor-pointer ${
+                                                    quotaView === '5h'
+                                                        ? 'bg-cyan-500/10 border-cyan-500/30 dark:bg-cyan-500/20 dark:border-cyan-500/50 shadow-xs'
+                                                        : 'bg-gray-50/70 hover:bg-gray-100/70 dark:bg-white/[0.04] dark:hover:bg-white/[0.08] border-gray-100 dark:border-white/[0.08]'
+                                                }`}
+                                            >
+                                                <div className="flex items-center justify-between text-[11px] mb-1.5">
+                                                    <span className={`text-[10px] font-medium ${quotaView === '5h' ? 'text-cyan-700 dark:text-cyan-300 font-bold' : 'text-gray-400 dark:text-zinc-400'}`}>
+                                                        {t('dashboard.view_mode_5h', '5H 滚动')}
+                                                    </span>
+                                                    <span className={`font-mono text-xs font-bold ${quotaView === '5h' ? 'text-cyan-700 dark:text-cyan-300' : 'text-gray-700 dark:text-zinc-200'}`}>
+                                                        {stats.claude.avg5h}%
+                                                    </span>
+                                                </div>
+                                                <div className="h-1.5 w-full bg-gray-200/80 dark:bg-white/10 rounded-full overflow-hidden">
+                                                    <div
+                                                        className="h-full bg-gradient-to-r from-cyan-500 to-sky-400 rounded-full transition-all duration-300 shadow-[0_0_6px_rgba(6,182,212,0.5)]"
+                                                        style={{ width: `${Math.min(stats.claude.avg5h, 100)}%` }}
+                                                    />
+                                                </div>
+                                            </button>
+
+                                            {/* 7天周配额子卡槽 */}
+                                            <button
+                                                type="button"
+                                                onClick={() => setQuotaView('weekly')}
+                                                className={`p-2 rounded-xl border text-left transition-all duration-200 cursor-pointer ${
+                                                    quotaView === 'weekly'
+                                                        ? 'bg-indigo-500/10 border-indigo-500/30 dark:bg-indigo-500/20 dark:border-indigo-500/50 shadow-xs'
+                                                        : 'bg-gray-50/70 hover:bg-gray-100/70 dark:bg-white/[0.04] dark:hover:bg-white/[0.08] border-gray-100 dark:border-white/[0.08]'
+                                                }`}
+                                            >
+                                                <div className="flex items-center justify-between text-[11px] mb-1.5">
+                                                    <span className={`text-[10px] font-medium ${quotaView === 'weekly' ? 'text-indigo-700 dark:text-indigo-300 font-bold' : 'text-gray-400 dark:text-zinc-400'}`}>
+                                                        {t('dashboard.view_mode_weekly', '7天周配额')}
+                                                    </span>
+                                                    <span className={`font-mono text-xs font-bold ${quotaView === 'weekly' ? 'text-indigo-700 dark:text-indigo-300' : 'text-gray-700 dark:text-zinc-200'}`}>
+                                                        {stats.claude.avgWeekly}%
+                                                    </span>
+                                                </div>
+                                                <div className="h-1.5 w-full bg-gray-200/80 dark:bg-white/10 rounded-full overflow-hidden">
+                                                    <div
+                                                        className="h-full bg-gradient-to-r from-indigo-500 to-purple-400 rounded-full transition-all duration-300 shadow-[0_0_6px_rgba(99,102,241,0.5)]"
+                                                        style={{ width: `${Math.min(stats.claude.avgWeekly, 100)}%` }}
+                                                    />
+                                                </div>
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="pt-2.5 mt-2 border-t border-gray-100 dark:border-white/[0.08] text-[10px] text-gray-400 dark:text-zinc-400 flex items-center justify-between">
+                                    <span>{t('dashboard.claude_group_desc', '第三方多模态池')}</span>
+                                    {stats.claude.zeroWeeklyCount > 0 && (
+                                        <span className="text-rose-600 dark:text-rose-400 font-bold flex items-center gap-0.5">
+                                            <AlertTriangle size={10} /> {stats.claude.zeroWeeklyCount} {t('dashboard.circuit_break', '熔断')}
+                                        </span>
+                                    )}
+                                </div>
+                            </motion.div>
+
+                            {/* 卡片 4: 调度风控与健康水位 */}
+                            <motion.div
+                                whileHover={{ y: -2 }}
+                                transition={{ duration: 0.15 }}
+                                className="bg-white dark:bg-[#15161b] rounded-2xl p-5 shadow-sm dark:shadow-xl dark:shadow-black/40 border border-gray-100 dark:border-white/[0.10] flex flex-col justify-between"
+                            >
+                                <div className="space-y-3">
+                                    <div className="flex items-center justify-between">
+                                        <div className="flex items-center gap-2">
+                                            <div className="p-1.5 rounded-lg bg-purple-50 dark:bg-purple-500/15 text-purple-600 dark:text-purple-400 border border-transparent dark:border-purple-500/20">
+                                                <Activity className="w-4 h-4" />
+                                            </div>
+                                            <span className="text-xs font-bold text-gray-800 dark:text-zinc-200">
+                                                {t('dashboard.health_and_risk', '健康度 & 风控')}
+                                            </span>
+                                        </div>
+                                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                            stats.abnormal === 0
+                                                ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300 dark:border dark:border-emerald-500/30'
+                                                : 'bg-rose-50 text-rose-700 dark:bg-rose-500/20 dark:text-rose-300 dark:border dark:border-rose-500/40'
+                                        }`}>
+                                            {stats.abnormal === 0
+                                                ? t('dashboard.health_all_green', '全绿无风险')
+                                                : t('dashboard.abnormal_badge', { count: stats.abnormal, defaultValue: `${stats.abnormal} 异常` })
+                                            }
+                                        </span>
+                                    </div>
+
+                                    {/* 核心大字 */}
+                                    <div className="flex items-baseline justify-between">
+                                        <div>
+                                            <span className="text-3xl font-black font-mono tracking-tight text-gray-900 dark:text-white">
+                                                {Math.round((stats.available / (stats.total || 1)) * 100)}%
+                                            </span>
+                                            <span className="text-[11px] text-gray-400 dark:text-zinc-400 block mt-0.5">
+                                                {t('dashboard.health_available_rate', '健康可用率')}
+                                            </span>
+                                        </div>
+                                    </div>
+
+                                    {/* Promptly 风格的连续竖状胶囊柱阵列 */}
+                                    <div className="pt-2">
+                                        {(() => {
+                                            const total = stats.total || 1;
+                                            const availableCount = stats.available;
+                                            const abnormalCount = stats.abnormal;
+                                            const disabledCount = Math.max(0, stats.total - availableCount - abnormalCount);
+
+                                            // 12格最大余额法精确量化
+                                            const shares = [
+                                                { type: 'available', count: availableCount, raw: (availableCount / total) * 12 },
+                                                { type: 'disabled', count: disabledCount, raw: (disabledCount / total) * 12 },
+                                                { type: 'abnormal', count: abnormalCount, raw: (abnormalCount / total) * 12 },
+                                            ];
+
+                                            const bars = shares.map((s) => ({
+                                                type: s.type,
+                                                floor: Math.floor(s.raw),
+                                                remainder: s.raw - Math.floor(s.raw),
+                                                count: s.count > 0 ? Math.max(1, Math.floor(s.raw)) : 0,
+                                            }));
+
+                                            // 纠偏保证总格数恒等于 12
+                                            let currentTotal = bars.reduce((acc, b) => acc + b.count, 0);
+                                            if (currentTotal > 12) {
+                                                while (currentTotal > 12) {
+                                                    const candidates = bars.filter((b) => b.count > 1).sort((a, b) => a.remainder - b.remainder);
+                                                    if (candidates.length > 0) {
+                                                        candidates[0].count--;
+                                                        currentTotal--;
+                                                    } else break;
+                                                }
+                                            } else if (currentTotal < 12) {
+                                                while (currentTotal < 12) {
+                                                    const candidates = [...bars].sort((a, b) => b.remainder - a.remainder);
+                                                    candidates[0].count++;
+                                                    currentTotal++;
+                                                }
+                                            }
+
+                                            const availableBars = bars.find((b) => b.type === 'available')?.count || 0;
+                                            const abnormalBars = bars.find((b) => b.type === 'abnormal')?.count || 0;
+
+                                            return (
+                                                <div
+                                                    className="flex items-center justify-between gap-1 h-14 px-2 py-2 bg-gray-50 dark:bg-black/40 rounded-xl border border-gray-100 dark:border-white/[0.08]"
+                                                    title={`${availableCount} ${t('dashboard.available_accounts_unit', '可用')} · ${disabledCount} ${t('dashboard.disabled_accounts', '停用')} · ${abnormalCount} ${t('dashboard.abnormal_accounts', '异常')}`}
+                                                >
+                                                    {Array.from({ length: 12 }).map((_, idx) => {
+                                                        let colorClass = 'bg-gray-200 dark:bg-white/10';
+                                                        if (idx < availableBars) {
+                                                            colorClass = 'bg-gray-900 dark:bg-zinc-200';
+                                                        } else if (idx >= 12 - abnormalBars) {
+                                                            colorClass = 'bg-rose-500 animate-pulse dark:shadow-[0_0_8px_rgba(244,63,94,0.6)]';
+                                                        }
+
+                                                        return (
+                                                            <div
+                                                                key={idx}
+                                                                className={`flex-1 h-full rounded-full transition-all duration-200 ${colorClass}`}
+                                                            />
+                                                        );
+                                                    })}
+                                                </div>
+                                            );
+                                        })()}
+                                    </div>
+                                </div>
+
+                                <div className="pt-2.5 mt-2 border-t border-gray-100 dark:border-white/[0.08] text-[10px] text-gray-400 dark:text-zinc-400 flex items-center justify-between">
+                                    <span>
+                                        {stats.abnormal > 0
+                                            ? t('dashboard.abnormal_accounts_has_risk', '⚠ 需处理风控验证 / 封禁')
+                                            : t('dashboard.abnormal_accounts_no_risk', '✓ 零风控异常账号')
+                                        }
+                                    </span>
+                                    <span className="font-mono font-bold text-gray-700 dark:text-zinc-200">
+                                        {stats.available}/{stats.total}
+                                    </span>
+                                </div>
+                            </motion.div>
+                        </div>
+                    </div>
 
                 {/* 双栏布局 */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <CurrentAccount
                         account={currentAccount}
-                        quotaView={quotaView}
-                        onSwitch={() => navigate('/accounts')}
+                        accounts={accounts}
+                        activeClients={activeClients}
+                        onSwitch={(targetIde) => navigate('/accounts', { state: { targetIde } })}
                     />
                     <BestAccounts
                         accounts={accounts}
                         currentAccountId={currentAccount?.id}
+                        activeClients={activeClients}
                         onSwitch={handleSwitch}
                     />
                 </div>
 
-                {/* 快速链接 */}
-                <div className="grid grid-cols-2 gap-3">
-                    <button
-                        className="bg-indigo-50 dark:bg-indigo-900/20 rounded-lg p-3 shadow-sm border border-indigo-100 dark:border-indigo-900/30 hover:border-indigo-300 dark:hover:border-indigo-700 hover:shadow-md transition-all flex items-center justify-between group"
-                        onClick={() => navigate('/accounts')}
-                    >
-                        <span className="text-indigo-700 dark:text-indigo-300 font-medium text-sm">{t('dashboard.view_all_accounts')}</span>
-                        <ArrowRight className="w-4 h-4 text-indigo-400 dark:text-indigo-500 group-hover:text-indigo-600 dark:group-hover:text-indigo-300 group-hover:translate-x-1 transition-all" />
-                    </button>
-                    <button
-                        className="bg-purple-50 dark:bg-purple-900/20 rounded-lg p-3 shadow-sm border border-purple-100 dark:border-purple-900/30 hover:border-purple-300 dark:hover:border-purple-700 hover:shadow-md transition-all flex items-center justify-between group"
-                        onClick={handleExport}
-                    >
-                        <span className="text-purple-700 dark:text-purple-300 font-medium text-sm">{t('dashboard.export_data')}</span>
-                        <Download className="w-4 h-4 text-purple-400 dark:text-purple-500 group-hover:text-purple-600 dark:group-hover:text-purple-300 transition-all" />
-                    </button>
-                </div>
-            </div>
+                {/* 快速链接已精简并入顶部/卡片 */}
+            </motion.div>
         </div>
     );
 }

@@ -1,14 +1,17 @@
 import { useState, useEffect, startTransition } from 'react';
-import { Save, Github, User, MessageCircle, ExternalLink, RefreshCw, Heart, Coffee, LayoutDashboard, Users, Network, Activity, BarChart3, Settings as SettingsIcon, Lock, CheckCircle2, Globe, Send, KeyRound } from 'lucide-react';
+import { Save, Github, User, MessageCircle, ExternalLink, RefreshCw, Heart, Coffee, LayoutDashboard, Users, Network, Activity, BarChart3, Settings as SettingsIcon, Lock, CheckCircle2, Globe, Send, KeyRound, Copy, Check } from 'lucide-react';
 import { request as invoke } from '../utils/request';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useConfigStore } from '../stores/useConfigStore';
-import { AppConfig } from '../types/config';
+import { AppConfig, HubFingerprint } from '../types/config';
 import ModalDialog from '../components/common/ModalDialog';
+import HelpTooltip from '../components/common/HelpTooltip';
 import { showToast } from '../components/common/ToastContainer';
+import { copyToClipboard } from '../utils/clipboard';
+import { cn } from '../utils/cn';
 import QuotaProtection from '../components/settings/QuotaProtection';
 import SmartWarmup from '../components/settings/SmartWarmup';
-import PinnedQuotaModels from '../components/settings/PinnedQuotaModels';
+import ClassicAutoSwitch from '../components/settings/ClassicAutoSwitch';
 import { useDebugConsole } from '../stores/useDebugConsole';
 
 import { useTranslation } from 'react-i18next';
@@ -18,6 +21,7 @@ import { emit } from '@tauri-apps/api/event';
 
 import DebugConsole from '../components/debug/DebugConsole';
 import ProxyPoolSettings from '../components/settings/ProxyPoolSettings';
+import { motion } from 'framer-motion';
 
 function normalizeDataDirDisplay(path: string): string {
     const trimmed = path.trim();
@@ -37,11 +41,11 @@ function normalizeDataDirDisplay(path: string): string {
 }
 
 function Settings() {
-    const { t, i18n } = useTranslation();
+    const { t } = useTranslation();
     const { config, loadConfig, saveConfig, updateLanguage, updateTheme } = useConfigStore();
     const { enable, disable, isEnabled } = useDebugConsole();
     const [activeTab, setActiveTab] = useState<'general' | 'account' | 'proxy' | 'advanced' | 'debug' | 'about'>('general');
-    const [appVersion, setAppVersion] = useState<string>('4.9.6');
+    const [appVersion, setAppVersion] = useState<string>('4.9.8');
     const [formData, setFormData] = useState<AppConfig>({
         language: 'zh',
         theme: 'system',
@@ -49,6 +53,12 @@ function Settings() {
         refresh_interval: 15,
         auto_sync: false,
         sync_interval: 5,
+        auto_switch_classic_depleted: false,
+        classic_auto_switch: {
+            enabled: false,
+            threshold_percentage: 0,
+            monitored_models: ['gemini', 'claude']
+        },
         proxy: {
             enabled: false,
             port: 8080,
@@ -129,9 +139,18 @@ function Settings() {
     const [isBrewSuccessOpen, setIsBrewSuccessOpen] = useState(false);
     const [isUpdateConfirmOpen, setIsUpdateConfirmOpen] = useState(false);
 
+    // Official Hub fingerprint state
+    const [hubFingerprint, setHubFingerprint] = useState<HubFingerprint | null>(null);
+    const [detectingHub, setDetectingHub] = useState(false);
+    const [copiedHubUa, setCopiedHubUa] = useState(false);
 
     useEffect(() => {
         loadConfig();
+
+        // 获取当前 Hub 客户端指纹
+        invoke<HubFingerprint>('get_hub_fingerprint')
+            .then(fp => setHubFingerprint(fp))
+            .catch(err => console.error('Failed to get hub fingerprint:', err));
 
         // 获取真实数据目录路径
         invoke<string>('get_data_dir_path')
@@ -194,12 +213,47 @@ function Settings() {
             await saveConfig(formData);
             showToast(t('common.saved'), 'success');
 
+            // 刷新当前 Hub 指纹状态
+            invoke<HubFingerprint>('get_hub_fingerprint')
+                .then(fp => setHubFingerprint(fp))
+                .catch(() => {});
+
             // 如果修改了代理配置，提示用户需要重启
             if (proxyEnabled && proxyUrl) {
                 showToast(t('proxy.config.upstream_proxy.restart_hint'), 'info');
             }
         } catch (error) {
             showToast(`${t('common.error')}: ${error}`, 'error');
+        }
+    };
+
+    const handleDetectHubFingerprint = async () => {
+        setDetectingHub(true);
+        try {
+            const fp = await invoke<HubFingerprint>('detect_remote_hub_fingerprint', {
+                customVersion: formData.proxy?.hub_version || null,
+                customCl: formData.proxy?.hub_cl || null,
+            });
+            setHubFingerprint(fp);
+            showToast(
+                t('proxy.config.hub.detect_success', {
+                    version: fp.version,
+                    cl: fp.cl,
+                    defaultValue: `已成功探测并同步官方最新 Hub: v${fp.version} (CL: ${fp.cl})`
+                }),
+                'success'
+            );
+        } catch (err) {
+            console.error('探测 Hub 失败:', err);
+            showToast(
+                t('proxy.config.hub.detect_failed', {
+                    error: String(err),
+                    defaultValue: `探测失败: ${err}`
+                }),
+                'error'
+            );
+        } finally {
+            setDetectingHub(false);
         }
     };
 
@@ -471,7 +525,12 @@ function Settings() {
     };
 
     return (
-        <div className="h-full w-full overflow-y-auto">
+        <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.2, ease: "easeOut" }}
+            className="h-full w-full overflow-y-auto"
+        >
             <div className="p-5 space-y-4 max-w-7xl mx-auto">
                 {/* 顶部工具栏：Tab 导航和保存按钮 */}
                 <div className="flex justify-between items-center">
@@ -558,10 +617,6 @@ function Settings() {
                                     onChange={(e) => {
                                         const newLang = e.target.value;
                                         setFormData({ ...formData, language: newLang });
-                                        document.documentElement.dir = newLang === 'ar' ? 'rtl' : 'ltr';
-                                        startTransition(() => {
-                                            i18n.changeLanguage(newLang);
-                                        });
                                         updateLanguage(newLang);
                                     }}
                                 >
@@ -575,6 +630,8 @@ function Settings() {
                                     <option value="ko">한국어</option>
                                     <option value="ru">Русский</option>
                                     <option value="ar">العربية</option>
+                                    <option value="es">Español</option>
+                                    <option value="my">Bahasa Melayu</option>
                                 </select>
                             </div>
 
@@ -894,42 +951,24 @@ function Settings() {
                                 </div>
                             </div>
 
-                            {/* 自动获取当前账号 */}
-                            <div className="group bg-white dark:bg-base-100 rounded-xl p-5 border border-gray-100 dark:border-base-200 hover:border-emerald-200 transition-all duration-300 shadow-sm">
-                                <div className="flex items-center justify-between">
-                                    <div className="flex items-center gap-4">
-                                        <div className="w-10 h-10 rounded-xl bg-emerald-50 dark:bg-emerald-900/20 flex items-center justify-center text-emerald-500 group-hover:bg-emerald-500 group-hover:text-white transition-all duration-300">
-                                            <User size={20} />
-                                        </div>
-                                        <div>
-                                            <div className="font-bold text-gray-900 dark:text-gray-100">{t('settings.account.auto_sync')}</div>
-                                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{t('settings.account.auto_sync_desc')}</p>
-                                        </div>
-                                    </div>
-                                    <label className="relative inline-flex items-center cursor-pointer">
-                                        <input
-                                            type="checkbox"
-                                            className="sr-only peer"
-                                            checked={formData.auto_sync}
-                                            onChange={(e) => setFormData({ ...formData, auto_sync: e.target.checked })}
-                                        />
-                                        <div className="w-11 h-6 bg-gray-200 dark:bg-base-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500 shadow-inner"></div>
-                                    </label>
-                                </div>
 
-                                {formData.auto_sync && (
-                                    <div className="mt-5 pt-5 border-t border-gray-50 dark:border-base-300 flex items-center gap-4 animate-in slide-in-from-top-1 duration-200">
-                                        <label className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">{t('settings.account.sync_interval')}</label>
-                                        <input
-                                            type="number"
-                                            className="w-24 px-3 py-2 bg-gray-50 dark:bg-base-200 border border-gray-100 dark:border-base-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm font-bold text-emerald-600 dark:text-emerald-400"
-                                            min="1"
-                                            max="35791"
-                                            value={formData.sync_interval}
-                                            onChange={(e) => setFormData({ ...formData, sync_interval: isNaN(parseInt(e.target.value)) ? 1 : Math.min(Math.max(parseInt(e.target.value), 1), 35791) })}
-                                        />
-                                    </div>
-                                )}
+                            {/* 经典款自动热切 */}
+                            <div className="group bg-white dark:bg-base-100 rounded-xl p-5 border border-gray-100 dark:border-base-200 hover:border-violet-200 transition-all duration-300 shadow-sm">
+                                <ClassicAutoSwitch
+                                    config={formData.classic_auto_switch}
+                                    onChange={async (newConfig) => {
+                                        const newFormData = {
+                                            ...formData,
+                                            classic_auto_switch: newConfig
+                                        };
+                                        setFormData(newFormData);
+                                        try {
+                                            await saveConfig(newFormData);
+                                        } catch (error) {
+                                            showToast(`${t('common.error')}: ${error}`, 'error');
+                                        }
+                                    }}
+                                />
                             </div>
 
                             {/* 7天周配额智能预热 (Smart Warmup) */}
@@ -978,17 +1017,6 @@ function Settings() {
                                             showToast(`${t('common.error')}: ${error}`, 'error');
                                         }
                                     }}
-                                />
-                            </div>
-
-                            {/* 配额关注列表 (Pinned Quota Models) */}
-                            <div className="group bg-white dark:bg-base-100 rounded-xl p-5 border border-gray-100 dark:border-base-200 hover:border-indigo-200 transition-all duration-300 shadow-sm">
-                                <PinnedQuotaModels
-                                    config={formData.pinned_quota_models}
-                                    onChange={(newConfig) => setFormData({
-                                        ...formData,
-                                        pinned_quota_models: newConfig
-                                    })}
                                 />
                             </div>
                         </div>
@@ -1260,7 +1288,110 @@ function Settings() {
                                     </p>
                                 </div>
 
+                                {/* 官方 Hub 客户端指纹与动态探测 */}
+                                <div className="border-t border-gray-200 dark:border-base-200 pt-4">
+                                    <div className="flex items-center justify-between mb-2">
+                                        <div className="flex items-center gap-2">
+                                            <h3 className="font-medium text-gray-900 dark:text-base-content">
+                                                {t('proxy.config.hub.title', { defaultValue: '官方 Hub 客户端指纹' })}
+                                            </h3>
+                                            <HelpTooltip text={t('proxy.config.hub.tooltip', { defaultValue: '出站流量对齐 Google 官方 Antigravity Hub 原生客户端特征，自动维护版本号与构建 CL 编号以规避 429 配额限制。' })} />
+                                            {hubFingerprint && (
+                                                <span className={cn(
+                                                    "text-xs px-2 py-0.5 rounded-full font-mono font-medium",
+                                                    hubFingerprint.source === 'custom' && "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
+                                                    hubFingerprint.source === 'remote' && "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300",
+                                                    hubFingerprint.source === 'local' && "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300",
+                                                    hubFingerprint.source === 'baseline' && "bg-gray-100 text-gray-700 dark:bg-base-300 dark:text-gray-300",
+                                                )}>
+                                                    {hubFingerprint.source === 'custom' ? t('proxy.config.hub.source_custom', { defaultValue: '自定义' })
+                                                        : hubFingerprint.source === 'remote' ? t('proxy.config.hub.source_remote', { defaultValue: '远端探测' })
+                                                        : hubFingerprint.source === 'local' ? t('proxy.config.hub.source_local', { defaultValue: '本地应用' })
+                                                        : t('proxy.config.hub.source_baseline', { defaultValue: '稳态基准' })}
+                                                </span>
+                                            )}
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={handleDetectHubFingerprint}
+                                            disabled={detectingHub}
+                                            className="px-3 py-1.5 border border-gray-200 dark:border-base-300 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-100 dark:hover:bg-base-200 transition-colors text-sm flex items-center gap-1.5"
+                                        >
+                                            <RefreshCw className={cn("w-3.5 h-3.5", detectingHub && "animate-spin")} />
+                                            <span>{t('proxy.config.hub.detect_button', { defaultValue: '动态探测' })}</span>
+                                        </button>
+                                    </div>
 
+                                    {/* 生效的 User-Agent 预览 */}
+                                    <div className="bg-gray-50 dark:bg-base-200 border border-gray-200 dark:border-base-300 rounded-lg p-3 text-xs font-mono text-gray-700 dark:text-gray-300 break-all select-all flex items-center justify-between gap-2 mb-3">
+                                        <span className="truncate">
+                                            {hubFingerprint?.user_agent || 'antigravity/hub/2.23.1 (...) cl=998881661'}
+                                        </span>
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                if (hubFingerprint?.user_agent) {
+                                                    copyToClipboard(hubFingerprint.user_agent);
+                                                    setCopiedHubUa(true);
+                                                    setTimeout(() => setCopiedHubUa(false), 2000);
+                                                }
+                                            }}
+                                            className="p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded transition-colors shrink-0"
+                                            title={t('common.copy')}
+                                        >
+                                            {copiedHubUa ? <Check className="w-4 h-4 text-emerald-500" /> : <Copy className="w-4 h-4" />}
+                                        </button>
+                                    </div>
+
+                                    {/* Hub Version & CL 自定义输入框 */}
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                        <div>
+                                            <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                                                {t('proxy.config.hub.version_label', { defaultValue: 'Hub 版本号 (Version)' })}
+                                            </label>
+                                            <input
+                                                type="text"
+                                                value={formData.proxy?.hub_version || ''}
+                                                onChange={(e) => {
+                                                    const v = e.target.value.trim();
+                                                    setFormData({
+                                                        ...formData,
+                                                        proxy: {
+                                                            ...formData.proxy,
+                                                            hub_version: v || undefined,
+                                                        }
+                                                    });
+                                                }}
+                                                placeholder={hubFingerprint?.version || '2.23.1 (自动)'}
+                                                className="w-full px-3 py-2 border border-gray-200 dark:border-base-300 rounded-lg bg-gray-50 dark:bg-base-200 text-sm font-mono text-gray-900 dark:text-base-content focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                                                {t('proxy.config.hub.cl_label', { defaultValue: 'Piper 构建编号 (CL)' })}
+                                            </label>
+                                            <input
+                                                type="text"
+                                                value={formData.proxy?.hub_cl || ''}
+                                                onChange={(e) => {
+                                                    const c = e.target.value.trim();
+                                                    setFormData({
+                                                        ...formData,
+                                                        proxy: {
+                                                            ...formData.proxy,
+                                                            hub_cl: c || undefined,
+                                                        }
+                                                    });
+                                                }}
+                                                placeholder={hubFingerprint?.cl || '998881661 (自动)'}
+                                                className="w-full px-3 py-2 border border-gray-200 dark:border-base-300 rounded-lg bg-gray-50 dark:bg-base-200 text-sm font-mono text-gray-900 dark:text-base-content focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                            />
+                                        </div>
+                                    </div>
+                                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                                        {t('proxy.config.hub.tooltip', { defaultValue: '出站流量对齐 Google 官方 Antigravity Hub 原生客户端特征，自动维护版本号与构建 CL 编号以规避 429 配额限制。' })}
+                                    </p>
+                                </div>
 
                                 {/* Antigravity 缓存清理 */}
                                 <div className="border-t border-gray-200 dark:border-base-200 pt-4">
@@ -2000,8 +2131,8 @@ function Settings() {
                     </div>
                     <div className="modal-backdrop bg-black/60 backdrop-blur-md fixed inset-0 z-[-1]" onClick={() => setIsSupportModalOpen(false)}></div>
                 </div>
-            </div >
-        </div >
+            </div>
+        </motion.div>
     );
 }
 

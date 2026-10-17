@@ -11,6 +11,9 @@ use std::collections::HashMap;
 const CLAUDE_AGENT_SDK_IDENTITY: &str =
     "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
 #[cfg(test)]
+const CLAUDE_AGENT_SDK_CLI_IDENTITY: &str =
+    "You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK.";
+#[cfg(test)]
 const CLAUDE_CODE_CLI_IDENTITY: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
 
 /// Normalize the standalone identity block injected by Claude Agent SDK clients.
@@ -487,6 +490,7 @@ pub fn transform_claude_request_in_timed(
             type_: "enabled".to_string(),
             budget_tokens: Some(default_budget as u32),
             effort: None,
+            display: None,
         });
     }
 
@@ -1963,9 +1967,82 @@ mod tests {
             .filter_map(|part| part["text"].as_str())
             .collect::<Vec<_>>();
 
-        assert!(system_texts.contains(&CLAUDE_CODE_CLI_IDENTITY));
+        assert!(system_texts
+            .contains(&crate::proxy::mappers::prompt_sanitizer::OFFICIAL_ANTIGRAVITY_IDENTITY));
         assert!(!system_texts.contains(&CLAUDE_AGENT_SDK_IDENTITY));
         assert!(!system_texts.contains(&"x-anthropic-billing-header: cc_entrypoint=sdk-cli;"));
+    }
+
+    #[test]
+    fn test_agent_sdk_cli_identity_is_normalized_for_antigravity() {
+        let req: ClaudeRequest = serde_json::from_value(json!({
+            "model": "claude-sonnet-4-6",
+            "messages": [{"role": "user", "content": "Reply with ok"}],
+            "system": [
+                {
+                    "type": "text",
+                    "text": "x-anthropic-billing-header: cc_entrypoint=sdk-cli;"
+                },
+                {
+                    "type": "text",
+                    "text": CLAUDE_AGENT_SDK_CLI_IDENTITY,
+                    "cache_control": {"type": "ephemeral"}
+                }
+            ]
+        }))
+        .expect("Agent SDK CLI request should deserialize");
+
+        let body =
+            transform_claude_request_in(&req, "test-project", false, None, "test-session", None)
+                .expect("Agent SDK CLI request should transform");
+        let system_parts = body["request"]["systemInstruction"]["parts"]
+            .as_array()
+            .expect("system instruction should contain parts");
+        let system_texts = system_parts
+            .iter()
+            .filter_map(|part| part["text"].as_str())
+            .collect::<Vec<_>>();
+
+        assert!(system_texts
+            .contains(&crate::proxy::mappers::prompt_sanitizer::OFFICIAL_ANTIGRAVITY_IDENTITY));
+        assert!(!system_texts.contains(&CLAUDE_AGENT_SDK_CLI_IDENTITY));
+        assert!(!system_texts.contains(&"x-anthropic-billing-header: cc_entrypoint=sdk-cli;"));
+    }
+
+    #[test]
+    fn test_claude_code_cli_identity_is_normalized_for_antigravity() {
+        let req: ClaudeRequest = serde_json::from_value(json!({
+            "model": "claude-sonnet-4-6",
+            "messages": [{"role": "user", "content": "Reply with ok"}],
+            "system": [
+                {
+                    "type": "text",
+                    "text": "x-anthropic-billing-header: cc_entrypoint=cli;"
+                },
+                {
+                    "type": "text",
+                    "text": CLAUDE_CODE_CLI_IDENTITY,
+                    "cache_control": {"type": "ephemeral"}
+                }
+            ]
+        }))
+        .expect("Claude Code CLI request should deserialize");
+
+        let body =
+            transform_claude_request_in(&req, "test-project", false, None, "test-session", None)
+                .expect("Claude Code CLI request should transform");
+        let system_parts = body["request"]["systemInstruction"]["parts"]
+            .as_array()
+            .expect("system instruction should contain parts");
+        let system_texts = system_parts
+            .iter()
+            .filter_map(|part| part["text"].as_str())
+            .collect::<Vec<_>>();
+
+        assert!(system_texts
+            .contains(&crate::proxy::mappers::prompt_sanitizer::OFFICIAL_ANTIGRAVITY_IDENTITY));
+        assert!(!system_texts.contains(&CLAUDE_CODE_CLI_IDENTITY));
+        assert!(!system_texts.contains(&"x-anthropic-billing-header: cc_entrypoint=cli;"));
     }
 
     #[test]
@@ -2294,6 +2371,7 @@ mod tests {
                 type_: "enabled".to_string(),
                 budget_tokens: Some(1024),
                 effort: None,
+                display: None,
             }),
             metadata: None,
             output_config: None,
@@ -2419,6 +2497,7 @@ mod tests {
                 type_: "enabled".to_string(),
                 budget_tokens: Some(1024),
                 effort: None,
+                display: None,
             }),
             metadata: None,
             output_config: None,
@@ -2704,6 +2783,7 @@ mod tests {
                 type_: "enabled".to_string(),
                 budget_tokens: Some(32000),
                 effort: None,
+                display: None,
             }),
             max_tokens: None,
             temperature: None,
@@ -2734,6 +2814,7 @@ mod tests {
                 type_: "enabled".to_string(),
                 budget_tokens: Some(32000),
                 effort: None,
+                display: None,
             }),
             max_tokens: None,
             temperature: None,
@@ -2775,6 +2856,7 @@ mod tests {
                 type_: "enabled".to_string(),
                 budget_tokens: Some(16000),
                 effort: None,
+                display: None,
             }),
             max_tokens: None,
             temperature: None,
@@ -2909,8 +2991,11 @@ mod tests {
         // Set global config to Adaptive + High effort
         let config = ThinkingBudgetConfig {
             mode: crate::proxy::config::ThinkingBudgetMode::Adaptive,
+            claude_mode: crate::proxy::config::ThinkingBudgetMode::Custom,
             custom_value: 0,
             effort: Some("high".to_string()),
+            claude_budget: 16384,
+            claude_high: 16384,
             ..Default::default()
         };
         crate::proxy::config::update_thinking_budget_config(config);
@@ -3199,7 +3284,7 @@ mod tests {
             panic!("Expected array content");
         }
 
-        // 2. transform_claude_request_in 针对 Claude 模型应保留未带签名的纯思考块
+        // 2. transform_claude_request_in 针对 Claude 模型，无有效签名时为防上游 400 应降级为 <think> 文本保留语义
         let req = ClaudeRequest {
             model: "claude-sonnet-4-6".to_string(),
             messages,
@@ -3207,6 +3292,7 @@ mod tests {
                 type_: "enabled".to_string(),
                 budget_tokens: Some(12288),
                 effort: None,
+                display: None,
             }),
             system: None,
             tools: None,
@@ -3231,16 +3317,10 @@ mod tests {
             .expect("Contents array");
         let assistant_parts = contents[1]["parts"].as_array().expect("Assistant parts");
         assert_eq!(assistant_parts.len(), 2);
-        assert_eq!(assistant_parts[0]["thought"], true);
-        assert!(
-            assistant_parts[0].get("thoughtSignature").is_none()
-                || assistant_parts[0]["thoughtSignature"].is_null(),
-            "Sentinel elimination: thoughtSignature must be absent when unsigned"
-        );
-        assert_eq!(
-            assistant_parts[0]["text"],
-            "Considering the question deeply..."
-        );
+        assert!(assistant_parts[0]["text"]
+            .as_str()
+            .unwrap_or("")
+            .contains("Considering the question deeply..."));
         assert_eq!(assistant_parts[1]["text"], "Here is my answer");
     }
 
@@ -3304,6 +3384,7 @@ mod tests {
                 type_: "enabled".to_string(),
                 budget_tokens: Some(12288),
                 effort: None,
+                display: None,
             }),
             system: None,
             tools: None,
@@ -3392,6 +3473,7 @@ mod tests {
                 type_: "enabled".to_string(),
                 budget_tokens: Some(8192),
                 effort: None,
+                display: None,
             }),
             system: None,
             tools: None,
@@ -3560,6 +3642,7 @@ mod tests {
                 type_: "enabled".to_string(),
                 budget_tokens: Some(99999), // 客户端传入过大/错误预算
                 effort: None,
+                display: None,
             }),
             max_tokens: Some(1024),
             temperature: None,

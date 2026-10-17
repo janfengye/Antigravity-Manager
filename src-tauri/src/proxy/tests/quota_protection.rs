@@ -36,11 +36,14 @@ mod tests {
             protected_models: protected_models.iter().map(|s| s.to_string()).collect(),
             health_score: 1.0,
             reset_time: None,
+            weekly_reset_time: None,
             validation_blocked: false,
             validation_blocked_until: 0,
             validation_url: None,
             model_quotas: std::collections::HashMap::new(),
             model_limits: std::collections::HashMap::new(),
+            available_models: std::collections::HashSet::new(),
+            model_metadata: std::collections::HashMap::new(),
         }
     }
 
@@ -1104,11 +1107,14 @@ mod tests {
             protected_models: protected_models.iter().map(|s| s.to_string()).collect(),
             health_score: 1.0,
             reset_time: None,
+            weekly_reset_time: None,
             validation_blocked: false,
             validation_blocked_until: 0,
             validation_url: None,
             model_quotas: std::collections::HashMap::new(),
             model_limits: std::collections::HashMap::new(),
+            available_models: std::collections::HashSet::new(),
+            model_metadata: std::collections::HashMap::new(),
         }
     }
 

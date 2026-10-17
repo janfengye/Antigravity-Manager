@@ -260,36 +260,63 @@ impl CliApp {
                 },
             ],
             CliApp::Codex => {
-                let codex_dir = if home.join(".chatgpt").exists() || !home.join(".codex").exists() {
-                    home.join(".chatgpt")
+                let mut files = Vec::new();
+                let has_chatgpt = home.join(".chatgpt").exists();
+                let has_codex = home.join(".codex").exists();
+                let dirs_to_sync = if has_chatgpt && has_codex {
+                    vec![home.join(".chatgpt"), home.join(".codex")]
+                } else if has_chatgpt {
+                    vec![home.join(".chatgpt")]
                 } else {
-                    home.join(".codex")
+                    vec![home.join(".codex")]
                 };
-                vec![
-                    CliConfigFile {
+
+                for dir in dirs_to_sync {
+                    files.push(CliConfigFile {
                         name: "auth.json".to_string(),
-                        path: codex_dir.join("auth.json"),
+                        path: dir.join("auth.json"),
+                    });
+                    files.push(CliConfigFile {
+                        name: "config.toml".to_string(),
+                        path: dir.join("config.toml"),
+                    });
+                }
+                files
+            }
+            CliApp::Gemini => {
+                let mut files = vec![
+                    CliConfigFile {
+                        name: ".env".to_string(),
+                        path: home.join(".gemini").join(".env"),
                     },
                     CliConfigFile {
-                        name: "config.toml".to_string(),
-                        path: codex_dir.join("config.toml"),
+                        name: "settings.json".to_string(),
+                        path: home.join(".gemini").join("settings.json"),
                     },
-                ]
+                    CliConfigFile {
+                        name: "antigravity-cli/settings.json".to_string(),
+                        path: home
+                            .join(".gemini")
+                            .join("antigravity-cli")
+                            .join("settings.json"),
+                    },
+                    CliConfigFile {
+                        name: "config.json".to_string(),
+                        path: home.join(".gemini").join("config.json"),
+                    },
+                ];
+                #[cfg(target_os = "windows")]
+                files.push(CliConfigFile {
+                    name: "agy.cmd".to_string(),
+                    path: home.join(".gemini").join("agy.cmd"),
+                });
+                #[cfg(not(target_os = "windows"))]
+                files.push(CliConfigFile {
+                    name: "agy.sh".to_string(),
+                    path: home.join(".gemini").join("agy.sh"),
+                });
+                files
             }
-            CliApp::Gemini => vec![
-                CliConfigFile {
-                    name: ".env".to_string(),
-                    path: home.join(".gemini").join(".env"),
-                },
-                CliConfigFile {
-                    name: "settings.json".to_string(),
-                    path: home.join(".gemini").join("settings.json"),
-                },
-                CliConfigFile {
-                    name: "config.json".to_string(),
-                    path: home.join(".gemini").join("config.json"),
-                },
-            ],
             CliApp::OpenCode => vec![CliConfigFile {
                 name: "config.json".to_string(),
                 path: home.join(".opencode").join("config.json"),
@@ -342,87 +369,108 @@ pub struct CliStatus {
     pub is_synced: bool,
     pub has_backup: bool,
     pub current_base_url: Option<String>,
+    pub current_model: Option<String>,
     pub files: Vec<String>, // 返回关联的文件名列表供前端展示
 }
 
 /// 检测 CLI 是否安装并获取版本
 pub fn check_cli_installed(app: &CliApp) -> (bool, Option<String>) {
-    let cmd = app.as_str();
-    // 默认使用命令名，如果 fallback 找到路径则更新为绝对路径
-    let mut executable_path = PathBuf::from(cmd);
-
-    // 1. 优先使用 which/where 检测 (遵循 PATH)
-    let which_output = if cfg!(target_os = "windows") {
-        let mut c = Command::new("where");
-        c.arg(cmd);
-        #[cfg(target_os = "windows")]
-        c.creation_flags(CREATE_NO_WINDOW);
-        c.output()
-    } else {
-        Command::new("which").arg(cmd).output()
+    let candidate_cmds: Vec<&str> = match app {
+        CliApp::Gemini => vec!["agy_cli", "agy", "gemini"],
+        CliApp::JeikCode => vec!["jeikcode", "atomcode"],
+        CliApp::GrokBuild => vec!["grok", "grokbuild"],
+        _ => vec![app.as_str()],
     };
 
-    let mut installed = match &which_output {
-        Ok(out) => out.status.success(),
-        Err(_) => false,
-    };
+    let mut installed = false;
+    let mut executable_path = PathBuf::from(candidate_cmds[0]);
 
-    #[cfg(target_os = "windows")]
-    if installed {
+    for cmd in candidate_cmds {
+        // 1. 优先使用 which/where 检测 (遵循 PATH)
+        let which_output = if cfg!(target_os = "windows") {
+            let mut c = Command::new("where");
+            c.arg(cmd);
+            #[cfg(target_os = "windows")]
+            c.creation_flags(CREATE_NO_WINDOW);
+            c.output()
+        } else {
+            Command::new("which").arg(cmd).output()
+        };
+
         if let Ok(out) = &which_output {
-            if let Some(found_path) = parse_where_output(&out.stdout) {
-                executable_path = found_path;
+            if out.status.success() {
+                installed = true;
+                #[cfg(target_os = "windows")]
+                {
+                    if let Some(found_path) = parse_where_output(&out.stdout) {
+                        executable_path = found_path;
+                    }
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    let trimmed = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                    if !trimmed.is_empty() {
+                        executable_path = PathBuf::from(trimmed);
+                    } else {
+                        executable_path = PathBuf::from(cmd);
+                    }
+                }
+                break;
             }
         }
-    }
 
-    #[cfg(target_os = "windows")]
-    if !installed {
+        #[cfg(target_os = "windows")]
         if let Some(found_path) = scan_windows_cli_paths(cmd) {
             installed = true;
             executable_path = found_path;
+            break;
         }
-    }
 
-    // [FIX #765] macOS 增强检测: 如果 which 失败,显式搜索常用二进制路径
-    // 解决 Tauri 进程 PATH 可能不完整导致检测不到已安装 CLI 的问题
-    if !installed && !cfg!(target_os = "windows") {
-        let home = dirs::home_dir().unwrap_or_default();
-        let mut common_paths = vec![
-            home.join(".local/bin"),
-            home.join(".bun/bin"),
-            home.join(".bun/install/global/node_modules/.bin"),
-            home.join(".npm-global/bin"),
-            home.join(".volta/bin"),
-            home.join("bin"),
-            PathBuf::from("/opt/homebrew/bin"),
-            PathBuf::from("/usr/local/bin"),
-            PathBuf::from("/usr/bin"),
-        ];
+        // [FIX #765] macOS 增强检测: 如果 which 失败,显式搜索常用二进制路径
+        // 解决 Tauri 进程 PATH 可能不完整导致检测不到已安装 CLI 的问题
+        if !cfg!(target_os = "windows") {
+            let home = dirs::home_dir().unwrap_or_default();
+            let mut common_paths = vec![
+                home.join(".local/bin"),
+                home.join(".bun/bin"),
+                home.join(".bun/install/global/node_modules/.bin"),
+                home.join(".npm-global/bin"),
+                home.join(".volta/bin"),
+                home.join("bin"),
+                PathBuf::from("/opt/homebrew/bin"),
+                PathBuf::from("/usr/local/bin"),
+                PathBuf::from("/usr/bin"),
+            ];
 
-        // 增强：扫描 nvm 目录下的所有 node 版本
-        let nvm_base = home.join(".nvm/versions/node");
-        if nvm_base.exists() {
-            if let Ok(entries) = std::fs::read_dir(&nvm_base) {
-                for entry in entries.flatten() {
-                    let bin_path = entry.path().join("bin");
-                    if bin_path.exists() {
-                        common_paths.push(bin_path);
+            // 增强：扫描 nvm 目录下的所有 node 版本
+            let nvm_base = home.join(".nvm/versions/node");
+            if nvm_base.exists() {
+                if let Ok(entries) = std::fs::read_dir(&nvm_base) {
+                    for entry in entries.flatten() {
+                        let bin_path = entry.path().join("bin");
+                        if bin_path.exists() {
+                            common_paths.push(bin_path);
+                        }
                     }
                 }
             }
-        }
 
-        for path in common_paths {
-            let full_path = path.join(cmd);
-            if full_path.exists() {
-                tracing::debug!(
-                    "[CLI-Sync] Detected {} via explicit path: {:?}",
-                    cmd,
-                    full_path
-                );
-                installed = true;
-                executable_path = full_path;
+            let mut found_explicit = false;
+            for path in common_paths {
+                let full_path = path.join(cmd);
+                if full_path.exists() {
+                    tracing::debug!(
+                        "[CLI-Sync] Detected {} via explicit path: {:?}",
+                        cmd,
+                        full_path
+                    );
+                    installed = true;
+                    executable_path = full_path;
+                    found_explicit = true;
+                    break;
+                }
+            }
+            if found_explicit {
                 break;
             }
         }
@@ -496,15 +544,19 @@ pub fn check_cli_installed(app: &CliApp) -> (bool, Option<String>) {
 }
 
 /// 读取当前配置并检测同步状态
-pub fn get_sync_status(app: &CliApp, proxy_url: &str) -> (bool, bool, Option<String>) {
+pub fn get_sync_status(
+    app: &CliApp,
+    proxy_url: &str,
+) -> (bool, bool, Option<String>, Option<String>) {
     let files = app.config_files();
     if files.is_empty() {
-        return (false, false, None);
+        return (false, false, None, None);
     }
 
     let mut all_synced = true;
     let mut has_backup = false;
     let mut current_base_url = None;
+    let mut current_model = None;
 
     for file in &files {
         // 使用更简单的命名规则: original_name + .antigravity.bak
@@ -517,11 +569,14 @@ pub fn get_sync_status(app: &CliApp, proxy_url: &str) -> (bool, bool, Option<Str
         }
 
         // 如果物理文件不存在
-        // 如果物理文件不存在
         if !file.path.exists() {
-            // Gemini 的 settings.json/config.json 只要有一个存在即可，或者都不存在（视为未同步）
+            // Gemini 的 settings.json/config.json/agy.sh/agy.cmd 只要有一个存在即可，或者都不存在（视为未同步）
             if app == &CliApp::Gemini
-                && (file.name == "settings.json" || file.name == "config.json")
+                && (file.name == "settings.json"
+                    || file.name == "config.json"
+                    || file.name == "antigravity-cli/settings.json"
+                    || file.name == "agy.sh"
+                    || file.name == "agy.cmd")
             {
                 continue;
             }
@@ -588,6 +643,31 @@ pub fn get_sync_status(app: &CliApp, proxy_url: &str) -> (bool, bool, Option<Str
                     } else {
                         all_synced = false;
                     }
+
+                    if current_model.is_none() {
+                        let re_m = regex::Regex::new(r#"(?m)^GOOGLE_GEMINI_MODEL=(.*)$"#).unwrap();
+                        if let Some(caps) = re_m.captures(&content) {
+                            let m = caps[1].trim();
+                            if !m.is_empty() {
+                                current_model = Some(m.to_string());
+                            }
+                        }
+                    }
+                } else if file.name == "settings.json"
+                    || file.name == "antigravity-cli/settings.json"
+                {
+                    if current_model.is_none() {
+                        let json: Value = serde_json::from_str(&content).unwrap_or_default();
+                        if let Some(m) = json.get("model").and_then(|v| v.as_str()) {
+                            if !m.is_empty() {
+                                current_model = Some(m.to_string());
+                            }
+                        }
+                    }
+                } else if (file.name == "agy.sh" || file.name == "agy.cmd")
+                    && !content.contains(proxy_url.trim_end_matches('/'))
+                {
+                    all_synced = false;
                 }
             }
             CliApp::OpenCode => {
@@ -716,7 +796,169 @@ pub fn get_sync_status(app: &CliApp, proxy_url: &str) -> (bool, bool, Option<Str
         }
     }
 
-    (all_synced, has_backup, current_base_url)
+    if app == &CliApp::Gemini && current_model.is_none() {
+        if let Some(home) = dirs::home_dir() {
+            let agy_script = home.join(".local/bin/agy");
+            if let Ok(script) = fs::read_to_string(&agy_script) {
+                let re = regex::Regex::new(
+                    r#"(?m)^\s*export\s+GOOGLE_GEMINI_MODEL\s*=\s*['"]?([^'"\r\n]+)['"]?"#,
+                )
+                .unwrap();
+                if let Some(caps) = re.captures(&script) {
+                    current_model = Some(caps[1].trim().to_string());
+                } else {
+                    let re_raw =
+                        regex::Regex::new(r#"(?m)^\s*RAW_MODEL\s*=\s*['"]?([^'"\r\n]+)['"]?"#)
+                            .unwrap();
+                    if let Some(caps) = re_raw.captures(&script) {
+                        current_model = Some(caps[1].trim().to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    (all_synced, has_backup, current_base_url, current_model)
+}
+
+/// 为 Antigravity CLI 创建或更新 Shell Wrapper 脚本
+/// 将真实二进制安全更名为 agy_cli，并在原 agy 位置写入自动注入环境变量并 exec agy_cli 的包装脚本
+pub fn sync_agy_binary_wrapper(
+    proxy_url: &str,
+    api_key: &str,
+    model: Option<&str>,
+) -> Result<(), String> {
+    let home = match dirs::home_dir() {
+        Some(h) => h,
+        None => return Ok(()),
+    };
+
+    // 检查常见安装路径 ~/.local/bin
+    let local_bin = home.join(".local/bin");
+    let agy_path = local_bin.join("agy");
+    let agy_cli_path = local_bin.join("agy_cli");
+
+    if !local_bin.exists() {
+        let _ = fs::create_dir_all(&local_bin);
+    }
+
+    let target_model = match model {
+        Some(m) if !m.is_empty() => m,
+        _ => "gemini-3.8-flash-high",
+    };
+
+    // 隔离历史 Google OAuth token，彻底阻断打向 daily-cloudcode-pa.googleapis.com
+    let token_file = home.join(".gemini/antigravity-cli/antigravity-oauth-token");
+    if token_file.exists() {
+        let bak = home.join(".gemini/antigravity-cli/antigravity-oauth-token.antigravity.bak");
+        let _ = fs::rename(&token_file, &bak);
+    }
+
+    let wrapper_content = format!(
+        "#!/bin/zsh\n\
+         # Generated by Antigravity-Manager\n\
+         export GEMINI_API_KEY=\"{}\"\n\
+         export GOOGLE_GEMINI_BASE_URL=\"{}\"\n\
+         export GOOGLE_GEMINI_MODEL=\"{}\"\n\
+         export DO_NOT_TRACK=1\n\
+         export GEMINI_TELEMETRY_ENABLED=false\n\n\
+         # 智能拆分 base model 与 thinking effort (如 gemini-3.8-flash-low -> --model gemini-3.8-flash --effort low)\n\
+         RAW_MODEL=\"{}\"\n\
+         MODEL_ARGS=()\n\
+         if [[ ! \"$*\" =~ \"--model\" ]]; then\n\
+             EFFORT=\"${{RAW_MODEL##*-}}\"\n\
+             BASE_MODEL=\"${{RAW_MODEL%-*}}\"\n\
+             case \"$EFFORT\" in\n\
+                 high|medium|low|xhigh|max)\n\
+                     MODEL_ARGS=(--model \"$BASE_MODEL\" --effort \"$EFFORT\")\n\
+                     ;;\n\
+                 *)\n\
+                     MODEL_ARGS=(--model \"$RAW_MODEL\")\n\
+                     ;;\n\
+             esac\n\
+         fi\n\n\
+         exec \"$(dirname \"$0\")/agy_cli\" \"${{MODEL_ARGS[@]}}\" \"$@\"\n",
+        api_key, proxy_url, target_model, target_model
+    );
+
+    // 情况 1: 如果已经存在 agy_cli（已经被包装过）
+    if agy_cli_path.exists() {
+        let _ = fs::write(&agy_path, &wrapper_content);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&agy_path, fs::Permissions::from_mode(0o755));
+        }
+        return Ok(());
+    }
+
+    // 情况 2: 如果当前 agy 存在且是真实二进制文件（非脚本）
+    if agy_path.exists() {
+        if let Ok(bytes) = fs::read(&agy_path) {
+            let is_script = bytes.starts_with(b"#!");
+            if !is_script {
+                // 是二进制文件，重命名为 agy_cli
+                if let Err(e) = fs::rename(&agy_path, &agy_cli_path) {
+                    tracing::warn!("[CLI-Sync] Failed to rename agy to agy_cli: {}", e);
+                    return Ok(());
+                }
+                // 写入 wrapper 脚本到 agy_path
+                let _ = fs::write(&agy_path, &wrapper_content);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = fs::set_permissions(&agy_path, fs::Permissions::from_mode(0o755));
+                }
+                tracing::info!(
+                    "[CLI-Sync] Successfully converted agy binary to agy_cli and installed wrapper"
+                );
+            } else {
+                // 是脚本，直接更新内容
+                let _ = fs::write(&agy_path, &wrapper_content);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = fs::set_permissions(&agy_path, fs::Permissions::from_mode(0o755));
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// 恢复 Antigravity CLI 二进制文件：如果存在 agy_cli 且 agy 是脚本，则将 agy_cli 恢复重命名为 agy
+pub fn restore_agy_binary_wrapper() -> Result<(), String> {
+    let home = match dirs::home_dir() {
+        Some(h) => h,
+        None => return Ok(()),
+    };
+
+    let local_bin = home.join(".local/bin");
+    let agy_path = local_bin.join("agy");
+    let agy_cli_path = local_bin.join("agy_cli");
+
+    if agy_cli_path.exists() {
+        let should_restore = if agy_path.exists() {
+            if let Ok(content) = fs::read_to_string(&agy_path) {
+                content.contains("agy_cli") || content.contains("Antigravity-Manager")
+            } else {
+                false
+            }
+        } else {
+            true
+        };
+
+        if should_restore {
+            let _ = fs::remove_file(&agy_path);
+            if let Err(e) = fs::rename(&agy_cli_path, &agy_path) {
+                return Err(format!("恢复 agy 二进制失败: {}", e));
+            }
+            tracing::info!("[CLI-Sync] Restored agy_cli back to agy");
+        }
+    }
+
+    Ok(())
 }
 
 /// 执行同步逻辑
@@ -936,6 +1178,8 @@ pub fn sync_config(
                     let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
                     let mut found_url = false;
                     let mut found_key = false;
+                    let mut found_dnt = false;
+                    let mut found_telemetry = false;
                     for line in lines.iter_mut() {
                         if line.starts_with("GOOGLE_GEMINI_BASE_URL=") {
                             *line = format!("GOOGLE_GEMINI_BASE_URL={}", proxy_url);
@@ -943,6 +1187,12 @@ pub fn sync_config(
                         } else if line.trim().starts_with("GEMINI_API_KEY=") {
                             *line = format!("GEMINI_API_KEY={}", api_key);
                             found_key = true;
+                        } else if line.trim().starts_with("DO_NOT_TRACK=") {
+                            *line = "DO_NOT_TRACK=1".to_string();
+                            found_dnt = true;
+                        } else if line.trim().starts_with("GEMINI_TELEMETRY_ENABLED=") {
+                            *line = "GEMINI_TELEMETRY_ENABLED=false".to_string();
+                            found_telemetry = true;
                         }
                     }
                     if !found_url {
@@ -950,6 +1200,12 @@ pub fn sync_config(
                     }
                     if !found_key {
                         lines.push(format!("GEMINI_API_KEY={}", api_key));
+                    }
+                    if !found_dnt {
+                        lines.push("DO_NOT_TRACK=1".to_string());
+                    }
+                    if !found_telemetry {
+                        lines.push("GEMINI_TELEMETRY_ENABLED=false".to_string());
                     }
                     if let Some(m) = model {
                         let mut found_model = false;
@@ -964,12 +1220,65 @@ pub fn sync_config(
                         }
                     }
                     content = lines.join("\n");
-                } else if file.name == "settings.json" || file.name == "config.json" {
+                } else if file.name == "agy.sh" {
+                    let target_model = match model {
+                        Some(m) if !m.is_empty() => m,
+                        _ => "gemini-3.8-flash-high",
+                    };
+                    content = format!(
+                        "#!/bin/zsh\n\
+                         # Generated by Antigravity-Manager\n\
+                         export GEMINI_API_KEY=\"{}\"\n\
+                         export GOOGLE_GEMINI_BASE_URL=\"{}\"\n\
+                         export GOOGLE_GEMINI_MODEL=\"{}\"\n\
+                         export DO_NOT_TRACK=1\n\
+                         export GEMINI_TELEMETRY_ENABLED=false\n\n\
+                         MODEL_ARG=()\n\
+                         if [[ ! \"$*\" =~ \"--model\" ]]; then\n\
+                             MODEL_ARG=(--model \"{}\")\n\
+                         fi\n\n\
+                         exec agy \"${{MODEL_ARG[@]}}\" \"$@\"\n",
+                        api_key, proxy_url, target_model, target_model
+                    );
+                } else if file.name == "agy.cmd" {
+                    let target_model = match model {
+                        Some(m) if !m.is_empty() => m,
+                        _ => "gemini-3.8-flash-high",
+                    };
+                    content = format!(
+                        "@echo off\r\n\
+                         REM Generated by Antigravity-Manager\r\n\
+                         set \"GEMINI_API_KEY={}\"\r\n\
+                         set \"GOOGLE_GEMINI_BASE_URL={}\"\r\n\
+                         set \"GOOGLE_GEMINI_MODEL={}\"\r\n\
+                         set \"DO_NOT_TRACK=1\"\r\n\
+                         set \"GEMINI_TELEMETRY_ENABLED=false\"\r\n\r\n\
+                         agy --model {} %*\r\n",
+                        api_key, proxy_url, target_model, target_model
+                    );
+                } else if file.name == "settings.json"
+                    || file.name == "config.json"
+                    || file.name == "antigravity-cli/settings.json"
+                {
                     let mut json: Value =
                         serde_json::from_str(&content).unwrap_or_else(|_| serde_json::json!({}));
                     if json.as_object().is_none() {
                         json = serde_json::json!({});
                     }
+
+                    // Antigravity CLI 关键配置：声明 modelProvider 为 gemini 才能脱离 Google OAuth 走 Base URL
+                    if let Some(obj) = json.as_object_mut() {
+                        obj.insert(
+                            "modelProvider".to_string(),
+                            Value::String("gemini".to_string()),
+                        );
+                        if let Some(m) = model {
+                            if !m.is_empty() {
+                                obj.insert("model".to_string(), Value::String(m.to_string()));
+                            }
+                        }
+                    }
+
                     let sec = json
                         .as_object_mut()
                         .unwrap()
@@ -1079,6 +1388,20 @@ pub fn sync_config(
         let tmp_path = file.path.with_extension("tmp");
         fs::write(&tmp_path, &content).map_err(|e| format!("写入临时文件失败: {}", e))?;
         fs::rename(&tmp_path, &file.path).map_err(|e| format!("重命名配置文件失败: {}", e))?;
+
+        #[cfg(unix)]
+        if file.name.ends_with(".sh") {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(metadata) = fs::metadata(&file.path) {
+                let mut perms = metadata.permissions();
+                perms.set_mode(0o755);
+                let _ = fs::set_permissions(&file.path, perms);
+            }
+        }
+    }
+
+    if app == &CliApp::Gemini {
+        let _ = sync_agy_binary_wrapper(proxy_url, api_key, model);
     }
 
     Ok(())
@@ -1090,10 +1413,10 @@ pub fn sync_config(
 pub async fn get_cli_sync_status(app_type: CliApp, proxy_url: String) -> Result<CliStatus, String> {
     tokio::task::spawn_blocking(move || {
         let (installed, version) = check_cli_installed(&app_type);
-        let (is_synced, has_backup, current_base_url) = if installed {
+        let (is_synced, has_backup, current_base_url, current_model) = if installed {
             get_sync_status(&app_type, &proxy_url)
         } else {
-            (false, false, None)
+            (false, false, None, None)
         };
 
         Ok(CliStatus {
@@ -1102,6 +1425,7 @@ pub async fn get_cli_sync_status(app_type: CliApp, proxy_url: String) -> Result<
             is_synced,
             has_backup,
             current_base_url,
+            current_model,
             files: app_type
                 .config_files()
                 .into_iter()
@@ -1132,6 +1456,10 @@ pub async fn execute_cli_restore(app_type: CliApp) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
         let files = app_type.config_files();
         let mut restored_count = 0;
+
+        if app_type == CliApp::Gemini {
+            let _ = restore_agy_binary_wrapper();
+        }
 
         // 尝试从备份恢复
         for file in &files {
@@ -1181,6 +1509,39 @@ pub async fn get_cli_config_content(
         };
 
         if !file.path.exists() {
+            if file.name == "agy.sh" {
+                if let Some(home) = dirs::home_dir() {
+                    let wrapper = home.join(".local/bin/agy");
+                    if wrapper.exists() {
+                        if let Ok(c) = fs::read_to_string(&wrapper) {
+                            return Ok(c);
+                        }
+                    }
+                }
+                return Ok("#!/bin/zsh\n\
+                     # Generated by Antigravity-Manager\n\
+                     export GEMINI_API_KEY=\"sk-...\"\n\
+                     export GOOGLE_GEMINI_BASE_URL=\"http://127.0.0.1:8045\"\n\
+                     export GOOGLE_GEMINI_MODEL=\"gemini-3.8-flash-high\"\n\
+                     export DO_NOT_TRACK=1\n\
+                     export GEMINI_TELEMETRY_ENABLED=false\n\n\
+                     MODEL_ARGS=()\n\
+                     if [[ ! \"$*\" =~ \"--model\" ]]; then\n\
+                         MODEL_ARGS=(--model \"gemini-3.8-flash\" --effort \"high\")\n\
+                     fi\n\n\
+                     exec agy \"${MODEL_ARGS[@]}\" \"$@\"\n"
+                    .to_string());
+            } else if file.name == "agy.cmd" {
+                return Ok("@echo off\r\n\
+                     REM Generated by Antigravity-Manager\r\n\
+                     set \"GEMINI_API_KEY=sk-...\"\r\n\
+                     set \"GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:8045\"\r\n\
+                     set \"GOOGLE_GEMINI_MODEL=gemini-3.8-flash-high\"\r\n\
+                     set \"DO_NOT_TRACK=1\"\r\n\
+                     set \"GEMINI_TELEMETRY_ENABLED=false\"\r\n\r\n\
+                     agy --model gemini-3.8-flash-high %*\r\n"
+                    .to_string());
+            }
             return Err("配置文件不存在".to_string());
         }
         fs::read_to_string(&file.path).map_err(|e| format!("读取配置文件失败: {}", e))
@@ -1198,13 +1559,42 @@ pub struct CoreModel {
 /// 导出网关全量核心模型（仅剔除带 -日期数字 的后缀版本）
 pub fn get_core_gateway_models() -> &'static [CoreModel] {
     &[
-        // Claude 系列 (256k 上下文)
+        // Claude 5 系列 (256k 上下文)
         CoreModel {
-            id: "claude-sonnet-4-6",
+            id: "claude-fable-5",
             context_window: 256_000,
         },
         CoreModel {
-            id: "claude-sonnet-4-6-thinking",
+            id: "claude-fable-5-thinking",
+            context_window: 256_000,
+        },
+        CoreModel {
+            id: "claude-opus-5-5",
+            context_window: 256_000,
+        },
+        CoreModel {
+            id: "claude-opus-5-5-thinking",
+            context_window: 256_000,
+        },
+        CoreModel {
+            id: "claude-sonnet-5-5",
+            context_window: 256_000,
+        },
+        CoreModel {
+            id: "claude-sonnet-5-5-thinking",
+            context_window: 256_000,
+        },
+        CoreModel {
+            id: "claude-haiku-5-5",
+            context_window: 256_000,
+        },
+        CoreModel {
+            id: "claude-haiku-5-5-thinking",
+            context_window: 256_000,
+        },
+        // Claude 系列 (256k 上下文)
+        CoreModel {
+            id: "claude-sonnet-4-6",
             context_window: 256_000,
         },
         CoreModel {
@@ -1258,6 +1648,23 @@ pub fn get_core_gateway_models() -> &'static [CoreModel] {
         CoreModel {
             id: "claude-3-haiku",
             context_window: 256_000,
+        },
+        // Gemini 4 Argon 系列 (Google 旗舰优化推理模型)
+        CoreModel {
+            id: "gemini-4-argon",
+            context_window: 1_000_000,
+        },
+        CoreModel {
+            id: "gemini-4-argon-high",
+            context_window: 1_000_000,
+        },
+        CoreModel {
+            id: "gemini-4-argon-medium",
+            context_window: 1_000_000,
+        },
+        CoreModel {
+            id: "gemini-4-argon-low",
+            context_window: 1_000_000,
         },
         // Gemini 3.x 系列 (1M 上下文)
         CoreModel {
@@ -1664,8 +2071,11 @@ model = "deepseek-chat"
 
         // 验证核心模型已添加
         let models = doc.get("models").unwrap().as_table().unwrap();
+        assert!(models.contains_key("claude-fable-5"));
+        assert!(models.contains_key("claude-opus-5-5"));
+        assert!(models.contains_key("claude-sonnet-5-5"));
+        assert!(models.contains_key("claude-haiku-5-5"));
         assert!(models.contains_key("claude-sonnet-4-6"));
-        assert!(models.contains_key("claude-sonnet-4-6-thinking"));
         assert!(models.contains_key("claude-opus-4-6"));
         assert!(models.contains_key("gemini-3.8-flash"));
         assert!(models.contains_key("gemini-3.8-flash-tiered"));

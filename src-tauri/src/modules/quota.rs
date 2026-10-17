@@ -1,15 +1,29 @@
 use crate::models::QuotaData;
 use crate::modules::config;
+use once_cell::sync::Lazy;
 use rquest;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+/// 配额模块专属端点健康追踪器（独立观察期 60s），
+/// 与主代理网关的 GLOBAL_ENDPOINT_HEALTH 严格解耦，
+/// 坚决杜绝后台配额轮询与 project_id 探针超时污染推理主力端点（Issue #3506, PR #3680）
+static QUOTA_ENDPOINT_HEALTH: Lazy<crate::proxy::upstream::client::EndpointHealthTracker> =
+    Lazy::new(|| {
+        crate::proxy::upstream::client::EndpointHealthTracker::new(std::time::Duration::from_secs(
+            60,
+        ))
+    });
+
+pub fn get_quota_endpoint_health() -> &'static crate::proxy::upstream::client::EndpointHealthTracker
+{
+    &QUOTA_ENDPOINT_HEALTH
+}
+
 // Quota API endpoints (fallback order: Daily → Sandbox → Prod)
 //
 // [FIX Issue #3525] Daily 优先，与官方 Antigravity language_server 的出站端点一致。
-// Sandbox 在部分地区会对合规账号返回终止性 400 `User location is not supported for the API use.`；
-// 本函数的回退条件只覆盖 429 / 5xx，400 会直接终止整轮配额刷新，因此不能让 Sandbox 排首位。
-// 官方从不访问 sandbox 端点；保留它仅作为可用性兜底，回退判定规则不变。
+// Daily 为官方主力端点；Sandbox 为快速沙箱备用；Prod 为深层兜底。
 const QUOTA_API_ENDPOINTS: [&str; 3] = [
     "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
     "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:fetchAvailableModels",
@@ -17,7 +31,6 @@ const QUOTA_API_ENDPOINTS: [&str; 3] = [
 ];
 
 // Quota Summary API endpoints (weekly + 5h grouped quota, fallback order: Daily → Sandbox → Prod)
-// 顺序理由同上：优先与官方客户端一致的 Daily 端点。
 const QUOTA_SUMMARY_ENDPOINTS: [&str; 3] = [
     "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
     "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:retrieveUserQuotaSummary",
@@ -125,7 +138,6 @@ async fn create_long_standard_client(account_id: Option<&str>) -> rquest::Client
 }
 
 // 项目 / 档位解析端点（fallback order: Daily → Sandbox → Prod）
-// [FIX Issue #3525] 与官方 Antigravity language_server 的出站端点保持一致，理由见上文 QUOTA_API_ENDPOINTS。
 const CLOUD_CODE_LOAD_PROJECT_ENDPOINTS: [&str; 3] = [
     "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
     "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:loadCodeAssist",
@@ -140,10 +152,14 @@ async fn fetch_project_id(
 ) -> (Option<String>, Option<String>) {
     let client = create_standard_client(account_id).await;
     let meta = json!({"metadata": {"ideType": "ANTIGRAVITY"}});
+    let health_tracker = get_quota_endpoint_health();
+    let candidate_endpoints =
+        health_tracker.get_ordered_endpoints(&CLOUD_CODE_LOAD_PROJECT_ENDPOINTS);
 
-    for (ep_idx, ep_url) in CLOUD_CODE_LOAD_PROJECT_ENDPOINTS.iter().enumerate() {
+    for (ep_idx, ep_url) in candidate_endpoints.iter().enumerate() {
         let res = client
             .post(*ep_url)
+            .timeout(std::time::Duration::from_secs(15))
             .header(
                 rquest::header::AUTHORIZATION,
                 format!("Bearer {}", access_token),
@@ -151,7 +167,7 @@ async fn fetch_project_id(
             .header(rquest::header::CONTENT_TYPE, "application/json")
             .header(
                 rquest::header::USER_AGENT,
-                crate::constants::NATIVE_OAUTH_USER_AGENT.as_str(),
+                crate::constants::USER_AGENT.as_str(),
             )
             .json(&meta)
             .send()
@@ -159,7 +175,9 @@ async fn fetch_project_id(
 
         match res {
             Ok(res) => {
-                if res.status().is_success() {
+                let status = res.status();
+                if status.is_success() {
+                    health_tracker.mark_success(ep_url);
                     if let Ok(data) = res.json::<LoadProjectResponse>().await {
                         let project_id = data.project_id.clone();
 
@@ -210,24 +228,29 @@ async fn fetch_project_id(
 
                         if ep_idx > 0 {
                             crate::modules::logger::log_info(&format!(
-                                "loadCodeAssist fallback succeeded at endpoint #{}",
-                                ep_idx + 1
+                                "loadCodeAssist fallback succeeded at endpoint #{} ({})",
+                                ep_idx + 1,
+                                ep_url
                             ));
                         }
 
                         return (project_id, subscription_tier);
                     }
                 } else {
+                    if crate::proxy::upstream::client::should_try_next_endpoint_for_url(
+                        status, ep_url,
+                    ) {
+                        health_tracker.mark_failure(ep_url);
+                    }
                     crate::modules::logger::log_warn(&format!(
                         "⚠️  [{}] loadCodeAssist failed at {}: Status: {}",
-                        email,
-                        ep_url,
-                        res.status()
+                        email, ep_url, status
                     ));
                     continue;
                 }
             }
             Err(e) => {
+                health_tracker.mark_failure(ep_url);
                 crate::modules::logger::log_error(&format!(
                     "❌ [{}] loadCodeAssist network error at {}: {}",
                     email, ep_url, e
@@ -290,16 +313,19 @@ pub async fn fetch_quota_with_cache(
     };
 
     let mut last_error: Option<AppError> = None;
+    let health_tracker = get_quota_endpoint_health();
+    let candidate_endpoints = health_tracker.get_ordered_endpoints(&QUOTA_API_ENDPOINTS);
 
-    for (ep_idx, ep_url) in QUOTA_API_ENDPOINTS.iter().enumerate() {
-        let has_next = ep_idx + 1 < QUOTA_API_ENDPOINTS.len();
+    for (ep_idx, ep_url) in candidate_endpoints.iter().enumerate() {
+        let has_next = ep_idx + 1 < candidate_endpoints.len();
 
         match client
             .post(*ep_url)
+            .timeout(std::time::Duration::from_secs(15))
             .bearer_auth(access_token)
             .header(
                 rquest::header::USER_AGENT,
-                crate::constants::NATIVE_OAUTH_USER_AGENT.as_str(),
+                crate::constants::USER_AGENT.as_str(),
             )
             .json(&payload)
             .send()
@@ -310,19 +336,49 @@ pub async fn fetch_quota_with_cache(
                 if let Err(_) = response.error_for_status_ref() {
                     let status = response.status();
 
+                    if crate::proxy::upstream::client::should_try_next_endpoint_for_url(
+                        status, ep_url,
+                    ) {
+                        health_tracker.mark_failure(ep_url);
+                    }
+
                     // 403 说明该账号本身不可用（未验证 / 被限制）。
-                    //
-                    // 这里曾经有一段「剥离 project 后重试」的逻辑，现已删除：
-                    // 实测上游完全忽略 project 字段，剥离后仍是同一个 403，
-                    // 只会白白多打一次请求、拖慢判定。
                     if status == rquest::StatusCode::FORBIDDEN {
+                        let text = response.text().await.unwrap_or_default();
                         crate::modules::logger::log_warn(&format!(
-                            "Account unauthorized (403 Forbidden), marking as forbidden"
+                            "Account unauthorized (403 Forbidden): {}",
+                            text
                         ));
                         let mut q = QuotaData::new();
                         q.is_forbidden = true;
+                        q.forbidden_reason = Some(text.clone());
                         // 保留本次 loadCodeAssist 拿到的等级；拿不到才回退到已存值
                         q.subscription_tier = subscription_tier.clone();
+
+                        // 智能识别上游返回信息并分类处理
+                        if let Some(id) = account_id {
+                            let text_lower = text.to_lowercase();
+                            let is_validation = text_lower.contains("validation_required")
+                                || text_lower.contains("verify your account")
+                                || text_lower.contains("validation_url");
+
+                            if is_validation {
+                                let block_minutes = 10i64;
+                                let block_until =
+                                    chrono::Utc::now().timestamp() + (block_minutes * 60);
+                                let _ = crate::modules::account::mark_account_validation_blocked(
+                                    id,
+                                    block_until,
+                                    &text,
+                                );
+                            } else {
+                                let _ = crate::modules::account::mark_account_forbidden(
+                                    id,
+                                    &format!("Forbidden (403): {}", text),
+                                );
+                            }
+                        }
+
                         return Ok((q, project_id.clone()));
                     }
 
@@ -348,10 +404,13 @@ pub async fn fetch_quota_with_cache(
                     )));
                 }
 
+                health_tracker.mark_success(ep_url);
+
                 if ep_idx > 0 {
                     crate::modules::logger::log_info(&format!(
-                        "Quota API fallback succeeded at endpoint #{}",
-                        ep_idx + 1
+                        "Quota API fallback succeeded at endpoint #{} ({})",
+                        ep_idx + 1,
+                        ep_url
                     ));
                 }
 
@@ -427,21 +486,31 @@ pub async fn fetch_quota_with_cache(
                 if let Some(ref groups) = quota_groups {
                     for model in quota_data.models.iter_mut() {
                         let name_lower = model.name.to_lowercase();
-                        let is_claude_or_gpt =
-                            name_lower.starts_with("claude") || name_lower.starts_with("gpt");
-                        let is_gemini = name_lower.starts_with("gemini");
+                        let is_argon = name_lower.contains("argon");
+                        let is_claude_or_gpt = !is_argon
+                            && (name_lower.starts_with("claude") || name_lower.starts_with("gpt"));
+                        let is_gemini = !is_argon && name_lower.starts_with("gemini");
 
                         for group in groups {
                             let gname = group.display_name.to_lowercase();
-                            let matches_group = if is_claude_or_gpt {
-                                gname.contains("claude")
+                            let is_argon_group = gname.contains("argon");
+                            let is_claude_group = !is_argon_group
+                                && (gname.contains("claude")
                                     || gname.contains("gpt")
-                                    || gname.contains("3p")
-                            } else if is_gemini {
-                                gname.contains("gemini")
+                                    || gname.contains("3p"));
+                            let is_gemini_group = !is_argon_group
+                                && !is_claude_group
+                                && (gname.contains("gemini")
                                     || (!gname.contains("claude")
                                         && !gname.contains("gpt")
-                                        && !gname.contains("3p"))
+                                        && !gname.contains("3p")));
+
+                            let matches_group = if is_argon {
+                                is_argon_group
+                            } else if is_claude_or_gpt {
+                                is_claude_group
+                            } else if is_gemini {
+                                is_gemini_group
                             } else {
                                 false
                             };
@@ -534,13 +603,17 @@ async fn fetch_quota_summary(
         json!({})
     };
 
-    for ep_url in QUOTA_SUMMARY_ENDPOINTS.iter() {
+    let health_tracker = get_quota_endpoint_health();
+    let candidate_endpoints = health_tracker.get_ordered_endpoints(&QUOTA_SUMMARY_ENDPOINTS);
+
+    for (ep_idx, ep_url) in candidate_endpoints.iter().enumerate() {
         let res = client
             .post(*ep_url)
+            .timeout(std::time::Duration::from_secs(15))
             .bearer_auth(access_token)
             .header(
                 rquest::header::USER_AGENT,
-                crate::constants::NATIVE_OAUTH_USER_AGENT.as_str(),
+                crate::constants::USER_AGENT.as_str(),
             )
             .json(&payload)
             .send()
@@ -550,11 +623,25 @@ async fn fetch_quota_summary(
             Ok(response) => {
                 let status = response.status();
                 if !status.is_success() {
+                    if crate::proxy::upstream::client::should_try_next_endpoint_for_url(
+                        status, ep_url,
+                    ) {
+                        health_tracker.mark_failure(ep_url);
+                    }
                     crate::modules::logger::log_warn(&format!(
                         "QuotaSummary API {} returned {}, trying next endpoint",
                         ep_url, status
                     ));
                     continue;
+                }
+
+                health_tracker.mark_success(ep_url);
+                if ep_idx > 0 {
+                    crate::modules::logger::log_info(&format!(
+                        "QuotaSummary API fallback succeeded at endpoint #{} ({})",
+                        ep_idx + 1,
+                        ep_url
+                    ));
                 }
 
                 let summary: QuotaSummaryResponse = match response.json().await {
@@ -597,6 +684,7 @@ async fn fetch_quota_summary(
                 return Some(groups);
             }
             Err(e) => {
+                health_tracker.mark_failure(ep_url);
                 crate::modules::logger::log_warn(&format!(
                     "QuotaSummary API request failed at {}: {}",
                     ep_url, e
@@ -783,16 +871,34 @@ pub async fn warm_up_all_accounts() -> Result<String, String> {
 
             for handle in handles {
                 if let Ok(Some((id, email, token, pid, Some((fresh_quota, _))))) = handle.await {
-                    // [FIX] 预热阶段检测到 403 时，使用统一禁用逻辑，确保账号文件和索引同时更新
+                    // [FIX] 预热阶段检测到 403 时，区分是否属于临时验证并使用统一禁用逻辑
                     if fresh_quota.is_forbidden {
-                        crate::modules::logger::log_warn(&format!(
-                            "[Warmup] Account {} returned 403 Forbidden during quota fetch, marking as forbidden",
-                            email
-                        ));
-                        let _ = crate::modules::account::mark_account_forbidden(
-                            &id,
-                            "Warmup: 403 Forbidden - quota fetch denied",
-                        );
+                        let is_validation =
+                            fresh_quota.forbidden_reason.as_deref().map_or(false, |r| {
+                                let lower = r.to_lowercase();
+                                lower.contains("validation_required")
+                                    || lower.contains("verify your account")
+                                    || lower.contains("validation_url")
+                            });
+
+                        if is_validation {
+                            crate::modules::logger::log_warn(&format!(
+                                "[Warmup] Account {} requires validation (VALIDATION_REQUIRED), skipping warmup",
+                                email
+                            ));
+                        } else {
+                            crate::modules::logger::log_warn(&format!(
+                                "[Warmup] Account {} returned 403 Forbidden during quota fetch, marking as forbidden",
+                                email
+                            ));
+                            let _ = crate::modules::account::mark_account_forbidden(
+                                &id,
+                                fresh_quota
+                                    .forbidden_reason
+                                    .as_deref()
+                                    .unwrap_or("Warmup: 403 Forbidden - quota fetch denied"),
+                            );
+                        }
                         continue;
                     }
                     let mut account_warmed_series = std::collections::HashSet::new();
@@ -954,16 +1060,33 @@ pub async fn warm_up_account(account_id: &str) -> Result<String, String> {
             .await
             .map_err(|e| format!("Failed to fetch quota: {}", e))?;
 
-    // [FIX] 预热阶段检测到 403 时，使用统一的 mark_account_forbidden 逻辑，
-    // 确保账号文件和索引文件同时更新，且前端刷新后能感知到禁用状态
+    // [FIX] 预热阶段检测到 403 时，区分是否属于临时验证并使用统一禁用逻辑
     if fresh_quota.is_forbidden {
-        crate::modules::logger::log_warn(&format!(
-            "[Warmup] Account {} returned 403 Forbidden during quota fetch, marking as forbidden",
-            email
-        ));
-        let reason = "Warmup: 403 Forbidden - quota fetch denied";
-        let _ = crate::modules::account::mark_account_forbidden(account_id, reason);
-        return Err("Account is forbidden (403)".to_string());
+        let is_validation = fresh_quota.forbidden_reason.as_deref().map_or(false, |r| {
+            let lower = r.to_lowercase();
+            lower.contains("validation_required")
+                || lower.contains("verify your account")
+                || lower.contains("validation_url")
+        });
+
+        if is_validation {
+            crate::modules::logger::log_warn(&format!(
+                "[Warmup] Account {} requires validation (VALIDATION_REQUIRED), skipping warmup",
+                email
+            ));
+            return Err("Account requires validation (VALIDATION_REQUIRED)".to_string());
+        } else {
+            crate::modules::logger::log_warn(&format!(
+                "[Warmup] Account {} returned 403 Forbidden during quota fetch, marking as forbidden",
+                email
+            ));
+            let reason = fresh_quota
+                .forbidden_reason
+                .as_deref()
+                .unwrap_or("Warmup: 403 Forbidden - quota fetch denied");
+            let _ = crate::modules::account::mark_account_forbidden(account_id, reason);
+            return Err("Account is forbidden (403)".to_string());
+        }
     }
 
     let mut models_to_warm = Vec::new();
@@ -1006,4 +1129,64 @@ pub async fn warm_up_account(account_id: &str) -> Result<String, String> {
         "Successfully triggered warmup for {} model series",
         warmed_count
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_quota_and_load_project_endpoints_health_reordering() {
+        let tracker = crate::proxy::upstream::client::EndpointHealthTracker::new(
+            std::time::Duration::from_secs(60),
+        );
+
+        // 默认顺序为 Daily -> Sandbox -> Prod
+        assert_eq!(
+            tracker.get_ordered_endpoints(&CLOUD_CODE_LOAD_PROJECT_ENDPOINTS)[0],
+            "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"
+        );
+        assert_eq!(
+            tracker.get_ordered_endpoints(&QUOTA_API_ENDPOINTS)[0],
+            "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels"
+        );
+        assert_eq!(
+            tracker.get_ordered_endpoints(&QUOTA_SUMMARY_ENDPOINTS)[0],
+            "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
+        );
+
+        // 标记 Daily 故障（如日常请求中发生超时或连接失败）
+        tracker.mark_failure("https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist");
+
+        // 所有相关接口都应自动跳过 Daily，优先尝试备用的 Sandbox
+        assert_eq!(
+            tracker.get_ordered_endpoints(&CLOUD_CODE_LOAD_PROJECT_ENDPOINTS)[0],
+            "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:loadCodeAssist"
+        );
+        assert_eq!(
+            tracker.get_ordered_endpoints(&QUOTA_API_ENDPOINTS)[0],
+            "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:fetchAvailableModels"
+        );
+        assert_eq!(
+            tracker.get_ordered_endpoints(&QUOTA_SUMMARY_ENDPOINTS)[0],
+            "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:retrieveUserQuotaSummary"
+        );
+
+        // 若 Sandbox 也发生故障，所有接口自动降级到 Prod 兜底
+        tracker.mark_failure(
+            "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:fetchAvailableModels",
+        );
+        assert_eq!(
+            tracker.get_ordered_endpoints(&CLOUD_CODE_LOAD_PROJECT_ENDPOINTS)[0],
+            "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"
+        );
+        assert_eq!(
+            tracker.get_ordered_endpoints(&QUOTA_API_ENDPOINTS)[0],
+            "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels"
+        );
+        assert_eq!(
+            tracker.get_ordered_endpoints(&QUOTA_SUMMARY_ENDPOINTS)[0],
+            "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
+        );
+    }
 }

@@ -26,6 +26,9 @@ export interface VirtualizedPayloadViewerProps {
     isCopied: boolean;
     duration?: number;
     timingNode?: React.ReactNode;
+    headerSectionTitle?: string;
+    hideHeadersSection?: boolean;
+    hideCardHeader?: boolean;
 }
 
 interface SearchMatch {
@@ -333,8 +336,18 @@ export const VirtualizedPayloadViewer: React.FC<VirtualizedPayloadViewerProps> =
     onCopy,
     isCopied,
     timingNode,
+    headerSectionTitle,
+    hideHeadersSection = false,
+    hideCardHeader = false,
 }) => {
     const { t } = useTranslation();
+    const resolvedHeaderTitle = useMemo(() => {
+        if (headerSectionTitle) return headerSectionTitle;
+        if (cardId === 'req') return t('monitor.details.req_headers', '请求头 (Headers)');
+        if (cardId === 'upstream') return t('monitor.details.upstream_headers', '转出请求头 (Headers)');
+        if (cardId === 'resp') return t('monitor.details.resp_headers', '响应头 (Headers)');
+        return t('monitor.details.headers', 'Headers');
+    }, [headerSectionTitle, cardId, t]);
     const [searchTerm, setSearchTerm] = useState('');
     const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
     const [caseSensitive, setCaseSensitive] = useState(false);
@@ -704,31 +717,33 @@ export const VirtualizedPayloadViewer: React.FC<VirtualizedPayloadViewerProps> =
             }}
         >
             {/* Card Header */}
-            <div className="px-3.5 py-2 border-b border-gray-200 dark:border-base-300 bg-white/95 dark:bg-base-200 flex items-center justify-between gap-2 shrink-0 select-none">
-                <div className="flex items-center gap-2 min-w-0">
-                    <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider border shrink-0 ${badgeStyle}`}>
-                        {badge}
-                    </span>
-                    <h3 className="text-xs font-bold text-gray-800 dark:text-gray-200 truncate" title={title}>
-                        {title}
-                    </h3>
-                </div>
-
-                <div className="flex items-center gap-1.5 shrink-0">
-                    <button
-                        type="button"
-                        onClick={() => onCopy(copyPayload)}
-                        disabled={!formattedContent && !prettyHeaders}
-                        className="btn btn-ghost btn-xs gap-1 h-7 px-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-base-300"
-                        title={isCopied ? t('proxy.config.btn_copied', '已复制') : t('proxy.config.btn_copy', '复制')}
-                    >
-                        {isCopied ? <CheckCircle size={12} className="text-emerald-500" /> : <Copy size={12} />}
-                        <span className="text-[10px] font-medium">
-                            {isCopied ? t('proxy.config.btn_copied', '已复制') : t('proxy.config.btn_copy', '复制')}
+            {!hideCardHeader && (
+                <div className="px-3.5 py-2 border-b border-gray-200 dark:border-base-300 bg-white/95 dark:bg-base-200 flex items-center justify-between gap-2 shrink-0 select-none">
+                    <div className="flex items-center gap-2 min-w-0">
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider border shrink-0 ${badgeStyle}`}>
+                            {badge}
                         </span>
-                    </button>
+                        <h3 className="text-xs font-bold text-gray-800 dark:text-gray-200 truncate" title={title}>
+                            {title}
+                        </h3>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                            type="button"
+                            onClick={() => onCopy(copyPayload)}
+                            disabled={!formattedContent && !prettyHeaders}
+                            className="btn btn-ghost btn-xs gap-1 h-7 px-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-base-300"
+                            title={isCopied ? t('proxy.config.btn_copied', '已复制') : t('proxy.config.btn_copy', '复制')}
+                        >
+                            {isCopied ? <CheckCircle size={12} className="text-emerald-500" /> : <Copy size={12} />}
+                            <span className="text-[10px] font-medium">
+                                {isCopied ? t('proxy.config.btn_copied', '已复制') : t('proxy.config.btn_copy', '复制')}
+                            </span>
+                        </button>
+                    </div>
                 </div>
-            </div>
+            )}
 
             {/* Browser-Grade Search & Control Toolbar */}
             <div className="px-2.5 py-1.5 bg-gray-100/70 dark:bg-base-300/40 border-b border-gray-200 dark:border-base-300 flex items-center gap-1.5 shrink-0">
@@ -838,7 +853,7 @@ export const VirtualizedPayloadViewer: React.FC<VirtualizedPayloadViewerProps> =
             <div className="shrink-0 bg-gray-50 dark:bg-base-200 border-b border-gray-200 dark:border-base-300">
                 {timingNode}
 
-                {prettyHeaders && (
+                {!hideHeadersSection && prettyHeaders && (
                     <div className="border-t border-gray-200 dark:border-base-300">
                         <div
                             onClick={() => setIsHeadersExpanded((prev) => !prev)}
@@ -846,7 +861,7 @@ export const VirtualizedPayloadViewer: React.FC<VirtualizedPayloadViewerProps> =
                         >
                             <div className="flex items-center gap-1.5">
                                 <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-gray-600 dark:text-gray-300">
-                                    {t('monitor.details.headers', 'Headers')}
+                                    {resolvedHeaderTitle}
                                 </span>
                                 <span className="text-[9px] font-mono text-gray-400 dark:text-gray-500">
                                     ({prettyHeaders.split('\n').length} 行)

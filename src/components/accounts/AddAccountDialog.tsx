@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { Plus, Database, Globe, FileClock, Loader2, CheckCircle2, XCircle, Copy, Check, Info, Link2 } from 'lucide-react';
+import { Plus, Database, Globe, Loader2, CheckCircle2, XCircle, Copy, Check, Info, Link2 } from 'lucide-react';
 import { useAccountStore } from '../../stores/useAccountStore';
 import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
@@ -30,7 +30,7 @@ function AddAccountDialog({ onAdd, showText = true }: AddAccountDialogProps) {
     const [status, setStatus] = useState<Status>('idle');
     const [message, setMessage] = useState('');
 
-    const { startOAuthLogin, completeOAuthLogin, cancelOAuthLogin, importFromDb, importV1Accounts, importFromCustomDb } = useAccountStore();
+    const { startOAuthLogin, completeOAuthLogin, cancelOAuthLogin, importFromDb, importFromCustomDb } = useAccountStore();
 
     const oauthUrlRef = useRef(oauthUrl);
     const statusRef = useRef(status);
@@ -412,10 +412,6 @@ function AddAccountDialog({ onAdd, showText = true }: AddAccountDialogProps) {
         });
     };
 
-    const handleImportV1 = () => {
-        handleAction(t('accounts.add.import.btn_v1'), importV1Accounts);
-    };
-
     const handleImportCustomDb = async () => {
         try {
             if (!isTauri()) {
@@ -648,13 +644,13 @@ function AddAccountDialog({ onAdd, showText = true }: AddAccountDialogProps) {
 
                             {/* 从数据库导入 */}
                             {activeTab === 'import' && (
-                                <div className="space-y-6 py-2">
+                                <div className="space-y-4 py-2">
                                     <div className="space-y-2">
                                         <h4 className="font-semibold flex items-center gap-2 text-gray-800 dark:text-gray-200">
-                                            <Database className="w-4 h-4 text-gray-600 dark:text-gray-400" />
+                                            <Database className="w-4 h-4 text-blue-600 dark:text-blue-400" />
                                             {t('accounts.add.import.scheme_a')}
                                         </h4>
-                                        <p className="text-xs text-gray-500 dark:text-gray-400">
+                                        <p className="text-xs text-gray-500 dark:text-gray-400 leading-relaxed">
                                             {t('accounts.add.import.scheme_a_desc')}
                                         </p>
                                         <button
@@ -662,7 +658,7 @@ function AddAccountDialog({ onAdd, showText = true }: AddAccountDialogProps) {
                                             onClick={handleImportDb}
                                             disabled={status === 'loading' || status === 'success'}
                                         >
-                                            <CheckCircle2 className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-opacity" />
+                                            <CheckCircle2 className="w-4 h-4 text-blue-500 opacity-80" />
                                             {t('accounts.add.import.btn_db')}
                                         </button>
                                         <button
@@ -670,28 +666,8 @@ function AddAccountDialog({ onAdd, showText = true }: AddAccountDialogProps) {
                                             onClick={handleImportCustomDb}
                                             disabled={status === 'loading' || status === 'success'}
                                         >
-                                            <Database className="w-4 h-4" />
+                                            <Database className="w-4 h-4 opacity-70" />
                                             {t('accounts.add.import.btn_custom_db') || 'Custom DB (state.vscdb)'}
-                                        </button>
-                                    </div>
-
-                                    <div className="divider text-xs text-gray-300 dark:text-gray-600">{t('accounts.add.import.or')}</div>
-
-                                    <div className="space-y-2">
-                                        <h4 className="font-semibold flex items-center gap-2 text-gray-800 dark:text-gray-200">
-                                            <FileClock className="w-4 h-4 text-gray-600 dark:text-gray-400" />
-                                            {t('accounts.add.import.scheme_b')}
-                                        </h4>
-                                        <p className="text-xs text-gray-500 dark:text-gray-400">
-                                            {t('accounts.add.import.scheme_b_desc')}
-                                        </p>
-                                        <button
-                                            className="w-full px-4 py-3 bg-gray-50 dark:bg-base-200 text-gray-700 dark:text-gray-300 font-medium rounded-xl border border-gray-200 dark:border-base-300 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 hover:border-emerald-200 dark:hover:border-emerald-800 hover:text-emerald-600 dark:hover:text-emerald-400 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
-                                            onClick={handleImportV1}
-                                            disabled={status === 'loading' || status === 'success'}
-                                        >
-                                            <FileClock className="w-4 h-4" />
-                                            {t('accounts.add.import.btn_v1')}
                                         </button>
                                     </div>
                                 </div>

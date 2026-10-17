@@ -18,6 +18,8 @@ pub struct ProxyRequestLog {
     pub duration: u64,                // ms
     pub model: Option<String>,        // 客户端请求的模型名
     pub mapped_model: Option<String>, // 实际路由后使用的模型名
+    #[serde(default)]
+    pub upstream_model: Option<String>,
     pub account_email: Option<String>,
     pub client_ip: Option<String>, // 客户端 IP 地址
     pub error: Option<String>,
@@ -33,6 +35,7 @@ pub struct ProxyRequestLog {
     pub input_tokens: Option<u32>,
     pub output_tokens: Option<u32>,
     pub cached_tokens: Option<u32>,
+    pub reasoning_tokens: Option<u32>,
     pub protocol: Option<String>, // 协议类型: "openai", "anthropic", "gemini"
     pub username: Option<String>, // User token username
     #[serde(default)]
@@ -131,6 +134,54 @@ pub(crate) mod prompt_log_tests {
         monitor.log_request(sample_log("disabled", 4096)).await;
         assert!(crate::modules::proxy_db::get_log_detail("disabled").is_err());
     }
+
+    #[test]
+    fn test_proxy_request_log_upstream_model_serialization() {
+        let json_data = serde_json::json!({
+            "id": "test-123",
+            "timestamp": 1234567890,
+            "method": "POST",
+            "url": "/v1/chat/completions",
+            "status": 200,
+            "duration": 50,
+            "model": "gpt-4o",
+            "mapped_model": "gemini-2.5-pro",
+            "upstream_model": "gemini-2.5-pro-preview-05-06"
+        });
+
+        let log: ProxyRequestLog = serde_json::from_value(json_data).unwrap();
+        assert_eq!(
+            log.upstream_model.as_deref(),
+            Some("gemini-2.5-pro-preview-05-06")
+        );
+
+        // Summary retains upstream_model
+        let summary = log.summary();
+        assert_eq!(
+            summary.upstream_model.as_deref(),
+            Some("gemini-2.5-pro-preview-05-06")
+        );
+
+        // Round-trip serialization
+        let serialized = serde_json::to_string(&log).unwrap();
+        let deserialized: ProxyRequestLog = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(
+            deserialized.upstream_model.as_deref(),
+            Some("gemini-2.5-pro-preview-05-06")
+        );
+
+        // Default when omitted
+        let json_no_upstream = serde_json::json!({
+            "id": "test-456",
+            "timestamp": 1234567890,
+            "method": "POST",
+            "url": "/v1/chat/completions",
+            "status": 200,
+            "duration": 50
+        });
+        let log_default: ProxyRequestLog = serde_json::from_value(json_no_upstream).unwrap();
+        assert_eq!(log_default.upstream_model, None);
+    }
 }
 
 impl ProxyRequestLog {
@@ -144,6 +195,7 @@ impl ProxyRequestLog {
             duration: self.duration,
             model: self.model.clone(),
             mapped_model: self.mapped_model.clone(),
+            upstream_model: self.upstream_model.clone(),
             account_email: self.account_email.clone(),
             client_ip: self.client_ip.clone(),
             error: self
@@ -155,10 +207,11 @@ impl ProxyRequestLog {
             response_body: None,
             request_headers: None,
             upstream_request_headers: None,
-            response_headers: None,
+            response_headers: self.response_headers.clone(),
             input_tokens: self.input_tokens,
             output_tokens: self.output_tokens,
             cached_tokens: self.cached_tokens,
+            reasoning_tokens: self.reasoning_tokens,
             protocol: self.protocol.clone(),
             username: self.username.clone(),
             session_id: self.session_id.clone(),
@@ -170,6 +223,7 @@ impl ProxyRequestLog {
 pub(crate) struct UpstreamCapture {
     body: Option<String>,
     headers: Option<String>,
+    attempts: Option<Vec<crate::proxy::upstream::client::FallbackAttemptLog>>,
 }
 
 #[derive(Clone, Default)]
@@ -211,6 +265,16 @@ impl UpstreamRequestBodyHolder {
 
     pub fn take_headers(&self) -> Option<String> {
         self.0.lock().ok().and_then(|mut g| g.headers.take())
+    }
+
+    pub fn set_attempts(&self, attempts: Vec<crate::proxy::upstream::client::FallbackAttemptLog>) {
+        if let Ok(mut lock) = self.0.lock() {
+            lock.attempts = Some(attempts);
+        }
+    }
+
+    pub fn take_attempts(&self) -> Option<Vec<crate::proxy::upstream::client::FallbackAttemptLog>> {
+        self.0.lock().ok().and_then(|mut g| g.attempts.take())
     }
 }
 
@@ -402,9 +466,10 @@ impl ProxyMonitor {
             let model = log.model.clone().unwrap_or_else(|| "unknown".to_string());
             let account = account.clone();
             let cached = log.cached_tokens.unwrap_or(0);
+            let reasoning = log.reasoning_tokens.unwrap_or(0);
             tokio::task::spawn_blocking(move || {
                 if let Err(e) = crate::modules::token_stats::record_usage(
-                    &account, &model, input, output, cached,
+                    &account, &model, input, output, cached, reasoning,
                 ) {
                     tracing::debug!("Failed to record token stats: {}", e);
                 }

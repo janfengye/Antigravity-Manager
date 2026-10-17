@@ -373,6 +373,10 @@ pub fn transform_openai_request_with_session(
                     &name
                 };
                 tool_id_to_name.insert(call.id.clone(), final_name.to_string());
+                let norm_id = crate::proxy::common::utils::normalize_tool_id(&call.id);
+                if norm_id.as_ref() != call.id {
+                    tool_id_to_name.insert(norm_id.into_owned(), final_name.to_string());
+                }
             }
         }
     }
@@ -673,16 +677,18 @@ pub fn transform_openai_request_with_session(
 
             // Handle tool response
             if msg.role == "tool" || msg.role == "function" {
-                let name = msg.name.as_deref().unwrap_or("unknown");
-                // 优先从紧邻的前置 assistant 消息中查找匹配该 tool_call_id 的工具名称 (精准杜绝长会话 ID 碰撞时全局 Map 覆盖错误)
+                let name = msg.name.as_deref().unwrap_or("");
+                // 优先从前置 assistant 消息中查找匹配该 tool_call_id 的工具名称 (精准杜绝长会话 ID 碰撞时全局 Map 覆盖错误)
                 let matched_preceding_name = if let Some(ref target_id) = msg.tool_call_id {
+                    let norm_target_id = crate::proxy::common::utils::normalize_tool_id(target_id);
                     let mut found = None;
                     for prev_idx in (0..msg_index).rev() {
                         if let Some(prev_msg) = request.messages.get(prev_idx) {
                             if prev_msg.role == "assistant" {
                                 if let Some(ref calls) = prev_msg.tool_calls {
                                     for call in calls {
-                                        if call.id == *target_id {
+                                        let norm_call_id = crate::proxy::common::utils::normalize_tool_id(&call.id);
+                                        if call.id == *target_id || norm_call_id.as_ref() == norm_target_id.as_ref() {
                                             found = if let Some(ref func) = call.function {
                                                 Some(if func.name == "local_shell_call" { "shell".to_string() } else { func.name.clone() })
                                             } else if call.operation.is_some() || call.r#type == "apply_patch_call" {
@@ -694,9 +700,14 @@ pub fn transform_openai_request_with_session(
                                         }
                                     }
                                 }
-                                break;
+                                if found.is_some() {
+                                    break;
+                                }
                             } else if prev_msg.role != "tool" && prev_msg.role != "function" {
-                                break;
+                                // 允许跳过中间的 user/system 消息（如提示信息或多步会话），但最多回溯合理深度
+                                if msg_index.saturating_sub(prev_idx) > 10 {
+                                    break;
+                                }
                             }
                         }
                     }
@@ -705,15 +716,40 @@ pub fn transform_openai_request_with_session(
                     None
                 };
 
-                let final_name = if let Some(ref p_name) = matched_preceding_name {
+                let mut final_name = if let Some(ref p_name) = matched_preceding_name {
                     p_name.as_str()
                 } else if name == "local_shell_call" {
                     "shell"
                 } else if let Some(id) = &msg.tool_call_id {
-                    tool_id_to_name.get(id).map(|s| s.as_str()).unwrap_or(name)
-                } else {
+                    let norm_id = crate::proxy::common::utils::normalize_tool_id(id);
+                    tool_id_to_name
+                        .get(id)
+                        .or_else(|| tool_id_to_name.get(norm_id.as_ref()))
+                        .map(|s| s.as_str())
+                        .unwrap_or(if name.is_empty() { "unknown" } else { name })
+                } else if !name.is_empty() {
                     name
+                } else {
+                    "unknown"
                 };
+
+                let mut fallback_inferred_name: Option<String> = None;
+                // 兜底单工具自愈：若客户端未带 name 且上下文未匹配到，但 request.tools 仅声明了唯一函数，自愈为该函数名
+                if (final_name == "unknown" || final_name.is_empty()) && request.tools.is_some() {
+                    if let Some(ref tools) = request.tools {
+                        let flat = flatten_tools(tools);
+                        if flat.len() == 1 {
+                            if let Some(declared_name) = flat[0]
+                                .get("function")
+                                .and_then(|f| f.get("name"))
+                                .and_then(|v| v.as_str())
+                            {
+                                fallback_inferred_name = Some(declared_name.to_string());
+                            }
+                        }
+                    }
+                }
+                let final_name = fallback_inferred_name.as_deref().unwrap_or(final_name);
 
                 let mut extra_parts = Vec::new();
 

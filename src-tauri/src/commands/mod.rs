@@ -192,6 +192,14 @@ pub async fn get_current_account() -> Result<Option<Account>, String> {
     }
 }
 
+/// 获取经典款、Antigravity IDE、Antigravity CLI 三大客户端独立生效的当前账号状态
+#[tauri::command]
+pub async fn get_active_clients_status() -> Result<crate::models::ActiveClientsStatus, String> {
+    tokio::task::spawn_blocking(modules::account::detect_active_clients_status)
+        .await
+        .unwrap_or_else(|_| Err("Task panicked".to_string()))
+}
+
 /// 导出账号（包含 refresh_token）
 use crate::models::AccountExportResponse;
 
@@ -296,10 +304,17 @@ pub async fn refresh_all_quotas_internal(
     }
 
     // 发送全局刷新事件给 UI (如果需要)
-    if let Some(handle) = app_handle {
+    if let Some(handle) = app_handle.as_ref() {
         use tauri::Emitter;
         let _ = handle.emit("accounts://refreshed", ());
     }
+
+    // 经典款配额耗尽自动热切换检查与执行
+    let _ = crate::modules::auto_switch::check_and_auto_switch_classic(
+        proxy_state,
+        app_handle.as_ref(),
+    )
+    .await;
 
     Ok(stats)
 }
@@ -438,16 +453,22 @@ pub async fn save_config(
     let _ = app.emit("config://updated", ());
 
     // 同步全局内存配置（无论反代服务当前是否处于运行状态）
+    crate::modules::hub_version::update_hub_fingerprint(
+        config.proxy.hub_version.as_deref(),
+        config.proxy.hub_cl.as_deref(),
+    );
     crate::proxy::update_thinking_budget_config(config.proxy.thinking_budget.clone());
     crate::proxy::update_global_system_prompt_config(config.proxy.global_system_prompt.clone());
     crate::proxy::update_image_thinking_mode(config.proxy.image_thinking_mode.clone());
     crate::proxy::update_multimodal_config(config.proxy.multimodal.clone());
+    crate::proxy::update_stream_timeout_config(config.proxy.stream_timeouts.clone());
     crate::proxy::config::update_global_audit_config(
         config.proxy.experimental.payload_storage_mode.clone(),
         config.proxy.experimental.log_retention_days,
         config.proxy.experimental.thinking_store_enabled,
         config.proxy.experimental.thinking_retention_days,
         Some(config.proxy.experimental.thinking_max_memory_turns),
+        Some(config.proxy.experimental.enable_global_compaction_strip),
     );
 
     // 同步健康检查日志捕获开关
@@ -492,12 +513,14 @@ pub async fn save_config(
         // [NEW] 更新全局图像思维模式配置
         crate::proxy::update_image_thinking_mode(config.proxy.image_thinking_mode.clone());
         crate::proxy::update_multimodal_config(config.proxy.multimodal.clone());
+        crate::proxy::update_stream_timeout_config(config.proxy.stream_timeouts.clone());
         crate::proxy::config::update_global_audit_config(
             config.proxy.experimental.payload_storage_mode.clone(),
             config.proxy.experimental.log_retention_days,
             config.proxy.experimental.thinking_store_enabled,
             config.proxy.experimental.thinking_retention_days,
             Some(config.proxy.experimental.thinking_max_memory_turns),
+            Some(config.proxy.experimental.enable_global_compaction_strip),
         );
         // 更新代理池配置
         instance
@@ -510,6 +533,34 @@ pub async fn save_config(
             .update_circuit_breaker_config(config.circuit_breaker.clone())
             .await;
         tracing::debug!("已同步热更新反代服务配置");
+    }
+
+    // [FIX #3280, #3285] 同步热更新管理服务 (Admin Server)，确保在仅运行管理端或服务未手动启动时配置立即生效
+    let admin_lock = proxy_state.admin_server.read().await;
+    if let Some(admin) = admin_lock.as_ref() {
+        admin.axum_server.update_mapping(&config.proxy).await;
+        admin
+            .axum_server
+            .update_only_raw_quota_models(config.proxy.only_raw_quota_models)
+            .await;
+        admin
+            .axum_server
+            .update_proxy(config.proxy.upstream_proxy.clone())
+            .await;
+        admin.axum_server.update_security(&config.proxy).await;
+        admin.axum_server.update_experimental(&config.proxy).await;
+        admin.axum_server.update_debug_logging(&config.proxy).await;
+        admin.axum_server.update_user_agent(&config.proxy).await;
+        admin
+            .axum_server
+            .update_proxy_pool(config.proxy.proxy_pool.clone())
+            .await;
+        admin
+            .axum_server
+            .token_manager
+            .update_circuit_breaker_config(config.circuit_breaker.clone())
+            .await;
+        tracing::debug!("已同步热更新管理服务器 (Admin Server) 配置");
     }
 
     Ok(())
@@ -1270,41 +1321,8 @@ pub async fn toggle_proxy_status(
         if enable { "启用" } else { "禁用" }
     ));
 
-    // 1. 读取账号文件
-    let data_dir = modules::account::get_data_dir()?;
-    let account_path = data_dir
-        .join("accounts")
-        .join(format!("{}.json", account_id));
-
-    if !account_path.exists() {
-        return Err(format!("账号文件不存在: {}", account_id));
-    }
-
-    let content =
-        std::fs::read_to_string(&account_path).map_err(|e| format!("读取账号文件失败: {}", e))?;
-
-    let mut account_json: serde_json::Value =
-        serde_json::from_str(&content).map_err(|e| format!("解析账号文件失败: {}", e))?;
-
-    // 2. 更新 proxy_disabled 字段
-    if enable {
-        // 启用反代
-        account_json["proxy_disabled"] = serde_json::Value::Bool(false);
-        account_json["proxy_disabled_reason"] = serde_json::Value::Null;
-        account_json["proxy_disabled_at"] = serde_json::Value::Null;
-    } else {
-        // 禁用反代
-        let now = chrono::Utc::now().timestamp();
-        account_json["proxy_disabled"] = serde_json::Value::Bool(true);
-        account_json["proxy_disabled_at"] = serde_json::Value::Number(now.into());
-        account_json["proxy_disabled_reason"] =
-            serde_json::Value::String(reason.unwrap_or_else(|| "用户手动禁用".to_string()));
-    }
-
-    // 3. 保存到磁盘
-    let json_str = serde_json::to_string_pretty(&account_json)
-        .map_err(|e| format!("序列化账号数据失败: {}", e))?;
-    std::fs::write(&account_path, json_str).map_err(|e| format!("写入账号文件失败: {}", e))?;
+    // 1. 调用统一模块更新账号反代状态（同步持久化账号文件与 accounts.json 索引，避免状态漂移）
+    modules::account::toggle_proxy_status(&account_id, enable, reason.as_deref())?;
 
     modules::logger::log_info(&format!(
         "账号反代状态已更新: {} ({})",
@@ -1453,6 +1471,14 @@ pub async fn save_http_api_settings(
 pub use crate::modules::token_stats::{AccountTokenStats, TokenStatsAggregated, TokenStatsSummary};
 
 #[tauri::command]
+pub async fn get_token_stats_minute(
+    minutes: i64,
+    step_minutes: i64,
+) -> Result<Vec<TokenStatsAggregated>, String> {
+    crate::modules::token_stats::get_minute_stats(minutes, step_minutes)
+}
+
+#[tauri::command]
 pub async fn get_token_stats_hourly(hours: i64) -> Result<Vec<TokenStatsAggregated>, String> {
     crate::modules::token_stats::get_hourly_stats(hours)
 }
@@ -1485,6 +1511,14 @@ pub async fn get_token_stats_by_model(
 }
 
 #[tauri::command]
+pub async fn get_token_stats_model_trend_minute(
+    minutes: i64,
+    step_minutes: i64,
+) -> Result<Vec<crate::modules::token_stats::ModelTrendPoint>, String> {
+    crate::modules::token_stats::get_model_trend_minute(minutes, step_minutes)
+}
+
+#[tauri::command]
 pub async fn get_token_stats_model_trend_hourly(
     hours: i64,
 ) -> Result<Vec<crate::modules::token_stats::ModelTrendPoint>, String> {
@@ -1496,6 +1530,14 @@ pub async fn get_token_stats_model_trend_daily(
     days: i64,
 ) -> Result<Vec<crate::modules::token_stats::ModelTrendPoint>, String> {
     crate::modules::token_stats::get_model_trend_daily(days)
+}
+
+#[tauri::command]
+pub async fn get_token_stats_account_trend_minute(
+    minutes: i64,
+    step_minutes: i64,
+) -> Result<Vec<crate::modules::token_stats::AccountTrendPoint>, String> {
+    crate::modules::token_stats::get_account_trend_minute(minutes, step_minutes)
 }
 
 #[tauri::command]

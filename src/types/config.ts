@@ -23,12 +23,21 @@ export interface ProxyConfig {
     experimental?: ExperimentalConfig;
     user_agent_override?: string;
     saved_user_agent?: string;
+    hub_version?: string;
+    hub_cl?: string;
     thinking_budget?: ThinkingBudgetConfig;
     global_system_prompt?: GlobalSystemPromptConfig;
     image_thinking_mode?: 'enabled' | 'disabled'; // [NEW] 图像思维模式开关
     only_raw_quota_models?: boolean; // [NEW] 是否只暴露真实配额模型
     proxy_pool?: ProxyPoolConfig;
     multimodal?: MultimodalConfig;
+    stream_timeouts?: StreamTimeoutConfig;
+}
+
+export interface StreamTimeoutConfig {
+    initial_ttft_secs?: number;
+    transition_secs?: number;
+    streaming_sliding_secs?: number;
 }
 
 export interface MultimodalConfig {
@@ -121,6 +130,7 @@ export type SchedulingMode = 'CacheFirst' | 'Balance' | 'PerformanceFirst';
 export interface StickySessionConfig {
     mode: SchedulingMode;
     max_wait_seconds: number;
+    max_spillover_accounts?: number;
 }
 
 export interface ScheduledWarmupConfig {
@@ -148,12 +158,19 @@ export interface ExperimentalConfig {
     enable_cowork_auto_compact?: boolean;
     cowork_compact_threshold?: number;
     enable_cowork_manual_compact?: boolean;
+    enable_global_compaction_strip?: boolean;
 }
 
 export interface CircuitBreakerConfig {
     enabled: boolean;
     backoff_steps: number[];
     lock_on_zero_quota?: boolean;
+}
+
+export interface ClassicAutoSwitchConfig {
+    enabled: boolean;
+    threshold_percentage: number;
+    monitored_models: string[];
 }
 
 export interface AppConfig {
@@ -163,6 +180,8 @@ export interface AppConfig {
     refresh_interval: number;
     auto_sync: boolean;
     sync_interval: number;
+    auto_switch_classic_depleted?: boolean; // [NEW] 兼容旧版开关
+    classic_auto_switch?: ClassicAutoSwitchConfig; // [NEW] 经典款配额自动热切换配置
     default_export_path?: string;
     antigravity_executable?: string; // [NEW] 手动指定的反重力程序路径
     antigravity_ide_executable?: string; // [NEW] 手动指定的 Antigravity IDE 程序路径
@@ -246,3 +265,11 @@ export interface ProxyPoolConfig {
     strategy: ProxySelectionStrategy;
     account_bindings?: Record<string, string>;
 }
+
+export interface HubFingerprint {
+    version: string;
+    cl: string;
+    user_agent: string;
+    source: 'custom' | 'remote' | 'local' | 'baseline';
+}
+

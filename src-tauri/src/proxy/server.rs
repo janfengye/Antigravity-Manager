@@ -291,6 +291,12 @@ struct AccountResponse {
     validation_blocked: bool,
     validation_blocked_until: Option<i64>,
     validation_blocked_reason: Option<String>,
+    /// 403 VALIDATION_REQUIRED 时上游下发的验证链接。
+    ///
+    /// 已经提取并持久化到账号文件（见 token_manager.rs 的 #1522 逻辑），但此前没有
+    /// 出现在响应里，前端 AccountErrorDialog 的首选分支因此恒为 undefined、只能回退去
+    /// 解析 validation_blocked_reason 里的嵌套 JSON（issue #3631）。
+    validation_url: Option<String>,
     quota: Option<QuotaResponse>,
     device_bound: bool,
     last_used: i64,
@@ -403,6 +409,7 @@ fn to_account_response(
         validation_blocked: account.validation_blocked,
         validation_blocked_until: account.validation_blocked_until,
         validation_blocked_reason: account.validation_blocked_reason.clone(),
+        validation_url: account.validation_url.clone(),
     }
 }
 
@@ -1017,7 +1024,9 @@ impl AxumServer {
                 get(admin_list_user_tokens).post(admin_create_user_token),
             )
             .route("/user-tokens/summary", get(admin_get_user_token_summary))
+            .route("/user-tokens/ranking", get(admin_get_user_tokens_ranking))
             .route("/user-tokens/:id/renew", post(admin_renew_user_token))
+            .route("/user-tokens/:id/stats", get(admin_get_user_token_stats))
             .route(
                 "/user-tokens/:id",
                 delete(admin_delete_user_token).patch(admin_update_user_token),
@@ -1372,6 +1381,7 @@ async fn admin_list_accounts(
                 validation_blocked: acc.validation_blocked,
                 validation_blocked_until: acc.validation_blocked_until,
                 validation_blocked_reason: acc.validation_blocked_reason,
+                validation_url: acc.validation_url,
                 quota,
                 device_bound: acc.device_profile.is_some(),
                 last_used: acc.last_used,
@@ -1454,6 +1464,7 @@ async fn admin_get_current_account(
                 validation_blocked: acc.validation_blocked,
                 validation_blocked_until: acc.validation_blocked_until,
                 validation_blocked_reason: acc.validation_blocked_reason,
+                validation_url: acc.validation_url,
                 quota,
                 device_bound: acc.device_profile.is_some(),
                 last_used: acc.last_used,
@@ -1881,12 +1892,14 @@ async fn admin_save_config(
     crate::proxy::update_global_system_prompt_config(new_config.proxy.global_system_prompt.clone());
     crate::proxy::update_image_thinking_mode(new_config.proxy.image_thinking_mode.clone());
     crate::proxy::update_multimodal_config(new_config.proxy.multimodal.clone());
+    crate::proxy::update_stream_timeout_config(new_config.proxy.stream_timeouts.clone());
     crate::proxy::config::update_global_audit_config(
         new_config.proxy.experimental.payload_storage_mode.clone(),
         new_config.proxy.experimental.log_retention_days,
         new_config.proxy.experimental.thinking_store_enabled,
         new_config.proxy.experimental.thinking_retention_days,
         Some(new_config.proxy.experimental.thinking_max_memory_turns),
+        Some(new_config.proxy.experimental.enable_global_compaction_strip),
     );
 
     Ok(StatusCode::OK)
@@ -2478,6 +2491,40 @@ async fn admin_update_user_token(
             )
         })?;
     Ok(StatusCode::OK)
+}
+
+#[derive(Deserialize)]
+struct TokenStatsQuery {
+    time_range: Option<String>,
+}
+
+async fn admin_get_user_token_stats(
+    Path(id): Path<String>,
+    Query(query): Query<TokenStatsQuery>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    let stats = crate::commands::user_token::get_user_token_stats(id, query.time_range)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse { error: e }),
+            )
+        })?;
+    Ok(Json(stats))
+}
+
+async fn admin_get_user_tokens_ranking(
+    Query(query): Query<TokenStatsQuery>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    let list = crate::commands::user_token::get_user_tokens_ranking(query.time_range)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse { error: e }),
+            )
+        })?;
+    Ok(Json(list))
 }
 
 async fn admin_should_check_updates() -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)>

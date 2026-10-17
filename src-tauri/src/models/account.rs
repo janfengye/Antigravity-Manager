@@ -194,6 +194,23 @@ pub struct AccountIndex {
     pub current_account_id: Option<String>,
     #[serde(default)]
     pub current_target_ide: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_classic_account_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_ide_account_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_agy_account_id: Option<String>,
+}
+
+/// 客户端独立当前账号状态（同时指示经典款、Antigravity IDE、Antigravity CLI 三端状态）
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct ActiveClientsStatus {
+    pub classic_account_id: Option<String>,
+    pub classic_email: Option<String>,
+    pub ide_account_id: Option<String>,
+    pub ide_email: Option<String>,
+    pub agy_account_id: Option<String>,
+    pub agy_email: Option<String>,
 }
 
 /// 账号摘要信息
@@ -220,6 +237,9 @@ impl AccountIndex {
             accounts: Vec::new(),
             current_account_id: None,
             current_target_ide: None,
+            current_classic_account_id: None,
+            current_ide_account_id: None,
+            current_agy_account_id: None,
         }
     }
 }

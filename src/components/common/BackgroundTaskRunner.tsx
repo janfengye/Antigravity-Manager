@@ -8,7 +8,6 @@ function BackgroundTaskRunner() {
 
     // Use refs to track previous state to detect "off -> on" transitions
     const prevAutoRefreshRef = useRef(false);
-    const prevAutoSyncRef = useRef(false);
 
     // Auto Refresh Quota Effect
     useEffect(() => {
@@ -39,37 +38,6 @@ function BackgroundTaskRunner() {
             }
         };
     }, [config?.auto_refresh, config?.refresh_interval]);
-
-    // Auto Sync Current Account Effect
-    useEffect(() => {
-        if (!config) return;
-
-        let intervalId: ReturnType<typeof setTimeout> | null = null;
-        const { auto_sync, sync_interval } = config;
-        const { syncAccountFromDb } = useAccountStore.getState();
-
-        // Check if we just turned it on
-        if (auto_sync && !prevAutoSyncRef.current) {
-            console.log('[BackgroundTask] Auto-sync enabled, executing immediately...');
-            syncAccountFromDb();
-        }
-        prevAutoSyncRef.current = auto_sync;
-
-        if (auto_sync && sync_interval > 0) {
-            console.log(`[BackgroundTask] Starting auto-sync account timer: ${sync_interval} mins`);
-            intervalId = setInterval(() => {
-                console.log('[BackgroundTask] Auto-syncing current account from DB...');
-                syncAccountFromDb();
-            }, Math.min(sync_interval * 60 * 1000, 2147483647));
-        }
-
-        return () => {
-            if (intervalId) {
-                console.log('[BackgroundTask] Clearing auto-sync timer');
-                clearInterval(intervalId);
-            }
-        };
-    }, [config?.auto_sync, config?.sync_interval]);
 
     // Render nothing
     return null;

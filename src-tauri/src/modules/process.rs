@@ -1384,18 +1384,23 @@ fn get_process_info(target_ide: Option<&str>) -> (Option<std::path::PathBuf>, Op
                 .unwrap_or_default();
 
             // Extract actual arguments from command line (skipping exe path)
-            let args = args
-                .map(|arg| arg.to_string_lossy().to_lowercase())
+            // 保留命令行参数原始大小写，防止 Linux / macOS 区分大小写的文件系统下工作区路径被破坏
+            let raw_args = args
+                .map(|arg| arg.to_string_lossy().to_string())
                 .collect::<Vec<String>>();
 
-            let args_str = args.join(" ");
+            let args_lower_str = raw_args
+                .iter()
+                .map(|arg| arg.to_lowercase())
+                .collect::<Vec<String>>()
+                .join(" ");
 
             // Common helper process exclusion logic (strictly excludes language_server and sub-processes)
-            let is_helper = is_helper_process(&name, &args_str, &exe_path)
-                || is_helper_process(&name, &args_str, &argv0);
+            let is_helper = is_helper_process(&name, &args_lower_str, &exe_path)
+                || is_helper_process(&name, &args_lower_str, &argv0);
 
             // Sanitize snapshot arguments to prevent engine parameters like --standalone from leaking into relaunch
-            let clean_args = sanitize_restart_args(&args);
+            let clean_args = sanitize_restart_args(&raw_args);
             let path = Some(exe.to_path_buf());
             let args = Some(clean_args);
 
@@ -1710,6 +1715,8 @@ fn check_standard_locations(target_ide: Option<&str>) -> Option<std::path::PathB
                     std::path::PathBuf::from(format!("/opt/{}/{}", folder_name, exe_name)),
                     std::path::PathBuf::from(format!("/opt/{}/{}", exe_name, exe_name)),
                     std::path::PathBuf::from(format!("/usr/share/{}/{}", folder_name, exe_name)),
+                    std::path::PathBuf::from(format!("/usr/lib64/{}/{}", folder_name, exe_name)),
+                    std::path::PathBuf::from(format!("/usr/lib/{}/{}", folder_name, exe_name)),
                     std::path::PathBuf::from(format!("/var/lib/flatpak/exports/bin/{}", exe_name)),
                     std::path::PathBuf::from(format!("/snap/bin/{}", exe_name)),
                 ];
@@ -1951,6 +1958,17 @@ mod tests {
         assert!(!cleaned.contains(&"--subclient_type".to_string()));
         assert!(cleaned.contains(&"--user-data-dir=/tmp/test".to_string()));
         assert!(cleaned.contains(&"/path/to/project".to_string()));
+    }
+
+    #[test]
+    fn test_sanitize_restart_args_preserves_case() {
+        let mixed_case_args = vec![
+            "--standalone".to_string(),
+            "/Users/Developer/MyProject".to_string(),
+            "-R".to_string(),
+        ];
+        let cleaned = sanitize_restart_args(&mixed_case_args);
+        assert_eq!(cleaned, vec!["/Users/Developer/MyProject", "-R"]);
     }
 
     #[test]

@@ -36,6 +36,7 @@ pub fn to_claude_usage(
         cache_read_input_tokens: val["cache_read_input_tokens"].as_u64().map(|v| v as u32),
         cache_creation_input_tokens: Some(0),
         server_tool_use: None,
+        ..Default::default()
     }
 }
 

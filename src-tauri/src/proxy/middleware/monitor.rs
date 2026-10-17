@@ -455,6 +455,7 @@ fn consolidate_non_streaming_response(
     raw_json: &Value,
     log: &ProxyRequestLog,
     headers_map: &serde_json::Map<String, Value>,
+    upstream_attempts: Option<Vec<crate::proxy::upstream::client::FallbackAttemptLog>>,
 ) -> Option<Value> {
     // 若本就已是统一的 consolidated 格式 (例如带有顶层 thinking/tool_calls 且无 choices/candidates)，直接返回 None
     if (raw_json.get("thinking").is_some()
@@ -643,6 +644,7 @@ fn consolidate_non_streaming_response(
         "norm_ms",
         "thinking_ms",
         "ttft_ms",
+        "ttft_overhead_ms",
         "stream_ms",
         "total_ms",
     ] {
@@ -652,6 +654,26 @@ fn consolidate_non_streaming_response(
                 let out_key = key.replace("_ms", "_s");
                 timing_obj.insert(out_key, serde_json::json!(n / 1000.0));
             }
+        }
+    }
+    if let (Some(ttft), Some(overhead)) = (
+        timing_obj.get("ttft_s").and_then(|v| v.as_f64()),
+        timing_obj.get("ttft_overhead_s").and_then(|v| v.as_f64()),
+    ) {
+        if overhead > 0.0 {
+            timing_obj.insert(
+                "ttft_total_wait_s".to_string(),
+                serde_json::json!(ttft + overhead),
+            );
+        }
+    }
+
+    if let Some(attempts) = upstream_attempts {
+        if !attempts.is_empty() {
+            timing_obj.insert(
+                "ttft_attempts".to_string(),
+                serde_json::to_value(&attempts).unwrap_or(serde_json::Value::Null),
+            );
         }
     }
     if !timing_obj.contains_key("total_s") {
@@ -856,6 +878,7 @@ pub async fn monitor_middleware(
         .await;
     let upstream_request_body = upstream_holder.take();
     let upstream_request_headers = upstream_holder.take_headers();
+    let upstream_attempts = upstream_holder.take_attempts();
     let response_headers_json =
         crate::proxy::payload_audit::headers_to_redacted_json(response.headers());
 
@@ -891,6 +914,13 @@ pub async fn monitor_middleware(
     let mapped_model = response
         .headers()
         .get("X-Mapped-Model")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    // Extract upstream model from X-Upstream-Model header if present
+    let upstream_model = response
+        .headers()
+        .get("X-Upstream-Model")
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
 
@@ -933,6 +963,7 @@ pub async fn monitor_middleware(
         duration,
         model,
         mapped_model,
+        upstream_model,
         account_email,
         client_ip,
         error: None,
@@ -945,6 +976,7 @@ pub async fn monitor_middleware(
         input_tokens: None,
         output_tokens: None,
         cached_tokens: None,
+        reasoning_tokens: None,
         protocol,
         username,
         session_id,
@@ -955,6 +987,7 @@ pub async fn monitor_middleware(
         let mut stream = body.into_data_stream();
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         let start_instant = start;
+        let attempts_for_stream = upstream_attempts.clone();
 
         tokio::spawn(async move {
             let stream_start = std::time::Instant::now();
@@ -1023,6 +1056,12 @@ pub async fn monitor_middleware(
                     }
 
                     if let Ok(json) = serde_json::from_str::<Value>(json_str) {
+                        if let Some(mv) = json.get("modelVersion").and_then(|v| v.as_str()) {
+                            if !mv.trim().is_empty() {
+                                log.upstream_model = Some(mv.to_string());
+                            }
+                        }
+
                         // OpenAI format: choices[0].delta.content / reasoning_content / tool_calls
                         if let Some(choices) = json.get("choices").and_then(|c| c.as_array()) {
                             for choice in choices {
@@ -1344,6 +1383,7 @@ pub async fn monitor_middleware(
                             log.cached_tokens = log.cached_tokens.or(cached_tokens);
                             reasoning_tokens =
                                 reasoning_tokens.or_else(|| extract_reasoning_tokens(usage));
+                            log.reasoning_tokens = log.reasoning_tokens.or(reasoning_tokens);
 
                             if log.input_tokens.is_none() && log.output_tokens.is_none() {
                                 log.output_tokens = usage
@@ -1379,9 +1419,40 @@ pub async fn monitor_middleware(
                         timing_obj.insert("thinking_s".to_string(), serde_json::json!(n / 1000.0));
                     }
                 }
+                let mut ttft_val = 0.0;
                 if let Some(ttft) = headers_map.get("x-timing-ttft-ms").and_then(|v| v.as_str()) {
                     if let Ok(n) = ttft.parse::<f64>() {
-                        timing_obj.insert("ttft_s".to_string(), serde_json::json!(n / 1000.0));
+                        ttft_val = n / 1000.0;
+                        timing_obj.insert("ttft_s".to_string(), serde_json::json!(ttft_val));
+                    }
+                }
+                if let Some(oh) = headers_map
+                    .get("x-timing-ttft-overhead-ms")
+                    .and_then(|v| v.as_str())
+                {
+                    if let Ok(n) = oh.parse::<f64>() {
+                        let overhead_s = n / 1000.0;
+                        if overhead_s > 0.0 {
+                            timing_obj.insert(
+                                "ttft_overhead_s".to_string(),
+                                serde_json::json!(overhead_s),
+                            );
+                            if ttft_val > 0.0 {
+                                timing_obj.insert(
+                                    "ttft_total_wait_s".to_string(),
+                                    serde_json::json!(ttft_val + overhead_s),
+                                );
+                            }
+                        }
+                    }
+                }
+
+                if let Some(attempts) = attempts_for_stream {
+                    if !attempts.is_empty() {
+                        timing_obj.insert(
+                            "ttft_attempts".to_string(),
+                            serde_json::to_value(&attempts).unwrap_or(serde_json::Value::Null),
+                        );
                     }
                 }
                 timing_obj.insert(
@@ -1400,6 +1471,14 @@ pub async fn monitor_middleware(
                             {
                                 let json_str = line.trim_start_matches("data: ").trim();
                                 if let Ok(json) = serde_json::from_str::<Value>(json_str) {
+                                    if let Some(mv) =
+                                        json.get("modelVersion").and_then(|v| v.as_str())
+                                    {
+                                        if !mv.trim().is_empty() {
+                                            log.upstream_model = Some(mv.to_string());
+                                        }
+                                    }
+
                                     if let Some(usage) = json
                                         .get("usage")
                                         .or(json.get("usageMetadata"))
@@ -1580,6 +1659,16 @@ pub async fn monitor_middleware(
             Ok(bytes) => {
                 if let Ok(s) = std::str::from_utf8(&bytes) {
                     if let Ok(json) = serde_json::from_str::<Value>(&s) {
+                        if let Some(mv) = json
+                            .get("modelVersion")
+                            .or_else(|| json.get("response").and_then(|r| r.get("modelVersion")))
+                            .and_then(|v| v.as_str())
+                        {
+                            if !mv.trim().is_empty() {
+                                log.upstream_model = Some(mv.to_string());
+                            }
+                        }
+
                         // 支持 OpenAI "usage" 或 Gemini "usageMetadata"
                         if let Some(usage) = json
                             .get("usage")
@@ -1591,6 +1680,9 @@ pub async fn monitor_middleware(
                             log.output_tokens = extract_output_tokens(usage);
                             log.cached_tokens =
                                 log.cached_tokens.or_else(|| extract_cached_tokens(usage));
+                            log.reasoning_tokens = log
+                                .reasoning_tokens
+                                .or_else(|| extract_reasoning_tokens(usage));
 
                             if log.input_tokens.is_none() && log.output_tokens.is_none() {
                                 log.output_tokens = usage
@@ -1608,9 +1700,12 @@ pub async fn monitor_middleware(
                             .or_else(|| Some(s.to_string()));
                     } else if let Ok(json) = serde_json::from_str::<Value>(&s) {
                         // 🌟 非流式响应入库统一转换为满血简要版 (包含网关权威签名回填与防雪崩确定性 Tool ID)
-                        if let Some(canonical) =
-                            consolidate_non_streaming_response(&json, &log, &headers_map)
-                        {
+                        if let Some(canonical) = consolidate_non_streaming_response(
+                            &json,
+                            &log,
+                            &headers_map,
+                            upstream_attempts.clone(),
+                        ) {
                             log.response_body = serde_json::to_string_pretty(&canonical)
                                 .ok()
                                 .or_else(|| Some(s.to_string()));

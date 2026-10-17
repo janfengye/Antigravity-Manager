@@ -464,9 +464,7 @@ impl NonStreamingProcessor {
             .unwrap_or(Usage {
                 input_tokens: 0,
                 output_tokens: 0,
-                cache_read_input_tokens: None,
-                cache_creation_input_tokens: None,
-                server_tool_use: None,
+                ..Default::default()
             });
 
         ClaudeResponse {

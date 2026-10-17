@@ -691,6 +691,309 @@ pub fn get_username_for_ip(ip: &str) -> Result<Option<String>, String> {
     Ok(result)
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserTokenDetailedSummary {
+    pub total_requests: i64,
+    pub total_input_tokens: i64,
+    pub total_output_tokens: i64,
+    pub total_tokens: i64,
+    pub success_requests: i64,
+    pub failed_requests: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserTokenTrendPoint {
+    pub timestamp_label: String,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub total_tokens: i64,
+    pub requests: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserTokenModelStat {
+    pub model: String,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub total_tokens: i64,
+    pub requests: i64,
+    pub percentage: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserTokenDetailedStats {
+    pub token: UserToken,
+    pub summary: UserTokenDetailedSummary,
+    pub trend: Vec<UserTokenTrendPoint>,
+    pub models: Vec<UserTokenModelStat>,
+    pub recent_ips: Vec<TokenIpBinding>,
+}
+
+/// 查询单个 User Token 的详细统计数据
+pub fn get_token_detailed_stats(
+    token_id: &str,
+    time_range: &str,
+) -> Result<UserTokenDetailedStats, String> {
+    let token = get_token_by_id(token_id)?
+        .ok_or_else(|| format!("User token with id {} not found", token_id))?;
+
+    let conn = connect_db()?;
+    let now = Utc::now().timestamp();
+
+    let (start_time, time_format) = match time_range {
+        "24h" => (now - 86400, "%m-%d %H:00"),
+        "7d" => (now - 7 * 86400, "%m-%d"),
+        "30d" => (now - 30 * 86400, "%m-%d"),
+        _ => (0, "%Y-%m-%d"),
+    };
+
+    // 1. 查询概览指标
+    let summary: UserTokenDetailedSummary = conn
+        .query_row(
+            "SELECT 
+                COUNT(*),
+                COALESCE(SUM(input_tokens), 0),
+                COALESCE(SUM(output_tokens), 0),
+                COALESCE(SUM(input_tokens + output_tokens), 0),
+                COALESCE(SUM(CASE WHEN status >= 200 AND status < 400 THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END), 0)
+            FROM token_usage_logs
+            WHERE token_id = ?1 AND request_time >= ?2",
+            params![token_id, start_time],
+            |row| {
+                Ok(UserTokenDetailedSummary {
+                    total_requests: row.get(0)?,
+                    total_input_tokens: row.get(1)?,
+                    total_output_tokens: row.get(2)?,
+                    total_tokens: row.get(3)?,
+                    success_requests: row.get(4)?,
+                    failed_requests: row.get(5)?,
+                })
+            },
+        )
+        .map_err(|e| format!("Failed to query token summary: {}", e))?;
+
+    // 2. 查询时间走势
+    let mut trend_stmt = conn
+        .prepare(
+            "SELECT 
+                strftime(?1, datetime(request_time, 'unixepoch', 'localtime')) as time_group,
+                COALESCE(SUM(input_tokens), 0),
+                COALESCE(SUM(output_tokens), 0),
+                COALESCE(SUM(input_tokens + output_tokens), 0),
+                COUNT(*)
+            FROM token_usage_logs
+            WHERE token_id = ?2 AND request_time >= ?3
+            GROUP BY time_group
+            ORDER BY time_group ASC",
+        )
+        .map_err(|e| format!("Failed to prepare trend query: {}", e))?;
+
+    let trend_rows = trend_stmt
+        .query_map(params![time_format, token_id, start_time], |row| {
+            Ok(UserTokenTrendPoint {
+                timestamp_label: row.get(0)?,
+                input_tokens: row.get(1)?,
+                output_tokens: row.get(2)?,
+                total_tokens: row.get(3)?,
+                requests: row.get(4)?,
+            })
+        })
+        .map_err(|e| format!("Failed to execute trend query: {}", e))?;
+
+    let mut trend = Vec::new();
+    for row in trend_rows {
+        if let Ok(point) = row {
+            trend.push(point);
+        }
+    }
+
+    // 3. 查询模型分布
+    let mut model_stmt = conn
+        .prepare(
+            "SELECT 
+                COALESCE(NULLIF(model, ''), 'unknown') as model_name,
+                COALESCE(SUM(input_tokens), 0),
+                COALESCE(SUM(output_tokens), 0),
+                COALESCE(SUM(input_tokens + output_tokens), 0) as total_toks,
+                COUNT(*)
+            FROM token_usage_logs
+            WHERE token_id = ?1 AND request_time >= ?2
+            GROUP BY model_name
+            ORDER BY total_toks DESC",
+        )
+        .map_err(|e| format!("Failed to prepare model query: {}", e))?;
+
+    let model_rows = model_stmt
+        .query_map(params![token_id, start_time], |row| {
+            let model: String = row.get(0)?;
+            let input_tokens: i64 = row.get(1)?;
+            let output_tokens: i64 = row.get(2)?;
+            let total_tokens: i64 = row.get(3)?;
+            let requests: i64 = row.get(4)?;
+            Ok((model, input_tokens, output_tokens, total_tokens, requests))
+        })
+        .map_err(|e| format!("Failed to execute model query: {}", e))?;
+
+    let mut models_raw = Vec::new();
+    let mut grand_total_tokens: i64 = 0;
+    for row in model_rows {
+        if let Ok((model, input_tokens, output_tokens, total_tokens, requests)) = row {
+            grand_total_tokens += total_tokens;
+            models_raw.push((model, input_tokens, output_tokens, total_tokens, requests));
+        }
+    }
+
+    let models = models_raw
+        .into_iter()
+        .map(
+            |(model, input_tokens, output_tokens, total_tokens, requests)| {
+                let percentage = if grand_total_tokens > 0 {
+                    (total_tokens as f64 / grand_total_tokens as f64) * 100.0
+                } else {
+                    0.0
+                };
+                UserTokenModelStat {
+                    model,
+                    input_tokens,
+                    output_tokens,
+                    total_tokens,
+                    requests,
+                    percentage: (percentage * 10.0).round() / 10.0,
+                }
+            },
+        )
+        .collect();
+
+    // 4. 获取前 5 个最近 IP 绑定
+    let all_ips = get_token_ips(token_id).unwrap_or_default();
+    let recent_ips = all_ips.into_iter().take(5).collect();
+
+    Ok(UserTokenDetailedStats {
+        token,
+        summary,
+        trend,
+        models,
+        recent_ips,
+    })
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserTokenRankItem {
+    pub id: String,
+    pub token: String,
+    pub username: String,
+    pub description: Option<String>,
+    pub enabled: bool,
+    pub expires_type: String,
+    pub expires_at: Option<i64>,
+    pub max_ips: i32,
+    pub total_tokens: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub requests: i64,
+    pub percentage: f64,
+}
+
+/// 查询用户 Token 的消耗排行榜
+pub fn get_user_tokens_ranking(time_range: &str) -> Result<Vec<UserTokenRankItem>, String> {
+    let conn = connect_db()?;
+    let now = Utc::now().timestamp();
+
+    let start_time = match time_range {
+        "minute" => now - 3600,
+        "hourly" | "24h" => now - 86400,
+        "daily" | "7d" => now - 7 * 86400,
+        "weekly" | "30d" => now - 30 * 86400,
+        _ => 0,
+    };
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT 
+                t.id,
+                t.token,
+                t.username,
+                t.description,
+                t.enabled,
+                t.expires_type,
+                t.expires_at,
+                t.max_ips,
+                t.total_tokens_used,
+                t.total_requests,
+                COALESCE(SUM(l.input_tokens + l.output_tokens), 0) as period_tokens,
+                COALESCE(SUM(l.input_tokens), 0) as period_in,
+                COALESCE(SUM(l.output_tokens), 0) as period_out,
+                COUNT(l.id) as period_requests
+            FROM user_tokens t
+            LEFT JOIN token_usage_logs l ON t.id = l.token_id AND l.request_time >= ?1
+            GROUP BY t.id
+            ORDER BY period_tokens DESC, t.total_tokens_used DESC",
+        )
+        .map_err(|e| format!("Failed to prepare ranking query: {}", e))?;
+
+    let rows = stmt
+        .query_map(params![start_time], |row| {
+            let id: String = row.get(0)?;
+            let token: String = row.get(1)?;
+            let username: String = row.get(2)?;
+            let description: Option<String> = row.get(3)?;
+            let enabled: bool = row.get(4)?;
+            let expires_type: String = row.get(5)?;
+            let expires_at: Option<i64> = row.get(6)?;
+            let max_ips: i32 = row.get(7)?;
+            let legacy_tokens: i64 = row.get(8)?;
+            let legacy_requests: i64 = row.get(9)?;
+            let period_tokens: i64 = row.get(10)?;
+            let period_in: i64 = row.get(11)?;
+            let period_out: i64 = row.get(12)?;
+            let period_requests: i64 = row.get(13)?;
+
+            // 若选全部历史且日志尚未覆盖历史总额，回退到 legacy 累计值
+            let (total_tokens, input_tokens, output_tokens, requests) =
+                if start_time == 0 && period_tokens == 0 && legacy_tokens > 0 {
+                    (legacy_tokens, legacy_tokens, 0, legacy_requests)
+                } else {
+                    (period_tokens, period_in, period_out, period_requests)
+                };
+
+            Ok(UserTokenRankItem {
+                id,
+                token,
+                username,
+                description,
+                enabled,
+                expires_type,
+                expires_at,
+                max_ips,
+                total_tokens,
+                input_tokens,
+                output_tokens,
+                requests,
+                percentage: 0.0,
+            })
+        })
+        .map_err(|e| format!("Failed to execute ranking query: {}", e))?;
+
+    let mut list = Vec::new();
+    let mut grand_total: i64 = 0;
+    for r in rows {
+        if let Ok(item) = r {
+            grand_total += item.total_tokens;
+            list.push(item);
+        }
+    }
+
+    for item in &mut list {
+        if grand_total > 0 {
+            item.percentage =
+                ((item.total_tokens as f64 / grand_total as f64) * 1000.0).round() / 10.0;
+        }
+    }
+
+    Ok(list)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -743,5 +1046,45 @@ mod tests {
             "Token with expires_type never must be valid, reason: {:?}",
             reason
         );
+    }
+
+    #[test]
+    fn test_get_token_detailed_stats() {
+        let _ = init_db();
+        let username = format!("StatsUser_{}", Uuid::new_v4());
+        let token_res = create_token(
+            username.clone(),
+            "month".to_string(),
+            Some("Stats token".to_string()),
+            0,
+            None,
+            None,
+            None,
+        );
+        assert!(token_res.is_ok());
+        let token = token_res.unwrap();
+
+        // 记录一条使用用量
+        let _ = record_token_usage_and_ip(
+            &token.id,
+            "127.0.0.1",
+            "gemini-2.5-flash",
+            100,
+            200,
+            200,
+            Some("test-agent".to_string()),
+        );
+
+        let stats_res = get_token_detailed_stats(&token.id, "7d");
+        assert!(stats_res.is_ok());
+        let stats = stats_res.unwrap();
+        assert_eq!(stats.summary.total_requests, 1);
+        assert_eq!(stats.summary.total_input_tokens, 100);
+        assert_eq!(stats.summary.total_output_tokens, 200);
+        assert_eq!(stats.summary.total_tokens, 300);
+        assert_eq!(stats.models.len(), 1);
+        assert_eq!(stats.models[0].model, "gemini-2.5-flash");
+        assert_eq!(stats.recent_ips.len(), 1);
+        assert_eq!(stats.recent_ips[0].ip_address, "127.0.0.1");
     }
 }

@@ -841,5 +841,36 @@ mod tests {
             .unwrap();
         assert_eq!(wrapped_max, 1024);
         assert_eq!(wrapped_budget, 0);
+        assert_eq!(wrapped_gc["thinkingConfig"]["includeThoughts"], false);
+    }
+
+    #[test]
+    fn test_zero_budget_disables_include_thoughts() {
+        use crate::proxy::config::{
+            update_thinking_budget_config, ThinkingBudgetConfig, ThinkingBudgetMode,
+            TEST_CONFIG_LOCK,
+        };
+        use crate::proxy::pipeline::inbound::ClientThinkingSwitch;
+
+        let _lock = TEST_CONFIG_LOCK.lock().unwrap();
+        let mut tb = ThinkingBudgetConfig::default();
+        tb.flash_mode = ThinkingBudgetMode::Custom;
+        tb.flash_low = 0;
+        update_thinking_budget_config(tb);
+
+        let mut gc = json!({});
+        InboundThinkingPipeline::configure_inbound_thinking(
+            "gemini-3.8-flash-low",
+            &mut gc,
+            ClientThinkingSwitch::Default,
+            None,
+            None,
+            None,
+        );
+
+        assert_eq!(gc["thinkingConfig"]["thinkingBudget"], 0);
+        assert_eq!(gc["thinkingConfig"]["includeThoughts"], false);
+
+        update_thinking_budget_config(ThinkingBudgetConfig::default());
     }
 }

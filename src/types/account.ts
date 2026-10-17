@@ -24,6 +24,15 @@ export interface Account {
     last_used: number;
 }
 
+export interface ActiveClientsStatus {
+    classic_account_id?: string | null;
+    classic_email?: string | null;
+    ide_account_id?: string | null;
+    ide_email?: string | null;
+    agy_account_id?: string | null;
+    agy_email?: string | null;
+}
+
 export interface LiveLimitStatus {
     model: string;
     status: number;

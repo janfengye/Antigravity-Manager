@@ -400,6 +400,9 @@ mod tests {
             ],
             current_account_id: Some("acc-1".to_string()),
             current_target_ide: None,
+            current_classic_account_id: None,
+            current_ide_account_id: None,
+            current_agy_account_id: None,
         };
 
         // Save the index
@@ -468,6 +471,9 @@ mod tests {
             }],
             current_account_id: None,
             current_target_ide: None,
+            current_classic_account_id: None,
+            current_ide_account_id: None,
+            current_agy_account_id: None,
         };
         save_account_index_in_dir(dir.path(), &index).unwrap();
 
@@ -488,6 +494,137 @@ mod tests {
         assert_eq!(index.current_target_ide, None);
 
         // Clean up environment variable
+        std::env::remove_var("ABV_DATA_DIR");
+    }
+
+    #[test]
+    fn test_toggle_proxy_status_synchronizes_index_and_account_file() {
+        let _guard = SHARED_TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = TestDataDir::new();
+        std::env::set_var("ABV_DATA_DIR", dir.path());
+
+        create_account_file(dir.path(), "acc-toggle", "toggle@example.com");
+        let now = chrono::Utc::now().timestamp();
+        let index = AccountIndex {
+            version: "2.0".to_string(),
+            accounts: vec![AccountSummary {
+                id: "acc-toggle".to_string(),
+                email: "toggle@example.com".to_string(),
+                name: Some("Toggle User".to_string()),
+                disabled: false,
+                proxy_disabled: false,
+                protected_models: HashSet::new(),
+                created_at: now,
+                last_used: now,
+            }],
+            current_account_id: Some("acc-toggle".to_string()),
+            current_target_ide: None,
+            current_classic_account_id: None,
+            current_ide_account_id: None,
+            current_agy_account_id: None,
+        };
+        save_account_index_in_dir(dir.path(), &index).unwrap();
+
+        // 1. Disable proxy
+        toggle_proxy_status("acc-toggle", false, Some("testing disable")).unwrap();
+
+        let loaded_account = load_account("acc-toggle").unwrap();
+        assert!(loaded_account.proxy_disabled);
+        assert_eq!(
+            loaded_account.proxy_disabled_reason.as_deref(),
+            Some("testing disable")
+        );
+
+        let loaded_index = load_account_index_in_dir(dir.path()).unwrap();
+        assert!(
+            loaded_index
+                .accounts
+                .iter()
+                .find(|a| a.id == "acc-toggle")
+                .unwrap()
+                .proxy_disabled,
+            "Index must be synchronized when proxy is disabled"
+        );
+
+        // 2. Re-enable proxy
+        toggle_proxy_status("acc-toggle", true, None).unwrap();
+
+        let reloaded_account = load_account("acc-toggle").unwrap();
+        assert!(!reloaded_account.proxy_disabled);
+        assert!(reloaded_account.proxy_disabled_reason.is_none());
+
+        let reloaded_index = load_account_index_in_dir(dir.path()).unwrap();
+        assert!(
+            !reloaded_index
+                .accounts
+                .iter()
+                .find(|a| a.id == "acc-toggle")
+                .unwrap()
+                .proxy_disabled,
+            "Index must be synchronized when proxy is re-enabled"
+        );
+
+        std::env::remove_var("ABV_DATA_DIR");
+    }
+
+    #[test]
+    fn test_list_accounts_synchronizes_index_drift_from_entity() {
+        let _guard = SHARED_TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = TestDataDir::new();
+        std::env::set_var("ABV_DATA_DIR", dir.path());
+
+        create_account_file(dir.path(), "acc-drift", "drift@example.com");
+        let now = chrono::Utc::now().timestamp();
+        let index = AccountIndex {
+            version: "2.0".to_string(),
+            accounts: vec![AccountSummary {
+                id: "acc-drift".to_string(),
+                email: "drift@example.com".to_string(),
+                name: Some("Drift User".to_string()),
+                disabled: true,
+                proxy_disabled: true,
+                protected_models: HashSet::new(),
+                created_at: now,
+                last_used: now,
+            }],
+            current_account_id: Some("acc-drift".to_string()),
+            current_target_ide: None,
+            current_classic_account_id: None,
+            current_ide_account_id: None,
+            current_agy_account_id: None,
+        };
+        save_account_index_in_dir(dir.path(), &index).unwrap();
+
+        let accounts = list_accounts().unwrap();
+        assert_eq!(accounts.len(), 1);
+        assert!(
+            !accounts[0].disabled,
+            "Account must remain enabled as in entity file"
+        );
+        assert!(
+            !accounts[0].proxy_disabled,
+            "Account proxy must remain enabled as in entity file"
+        );
+
+        let loaded_index = load_account_index_in_dir(dir.path()).unwrap();
+        let summary = loaded_index
+            .accounts
+            .iter()
+            .find(|a| a.id == "acc-drift")
+            .unwrap();
+        assert!(
+            !summary.disabled,
+            "Index disabled flag must be synced from entity"
+        );
+        assert!(
+            !summary.proxy_disabled,
+            "Index proxy_disabled flag must be synced from entity"
+        );
+
         std::env::remove_var("ABV_DATA_DIR");
     }
 
@@ -1129,6 +1266,9 @@ fn rebuild_index_from_accounts_in_dir(data_dir: &PathBuf) -> Result<AccountIndex
         accounts: summaries,
         current_account_id,
         current_target_ide: None,
+        current_classic_account_id: None,
+        current_ide_account_id: None,
+        current_agy_account_id: None,
     })
 }
 
@@ -1293,12 +1433,24 @@ pub fn update_account_priority(account_id: &str, priority: u8) -> Result<(), Str
 /// List all accounts
 pub fn list_accounts() -> Result<Vec<Account>, String> {
     crate::modules::logger::log_info("Listing accounts...");
-    let index = load_account_index()?;
+    let mut index = load_account_index()?;
     let mut accounts = Vec::new();
+    let mut index_dirty = false;
 
-    for summary in &index.accounts {
+    for summary in &mut index.accounts {
         match load_account(&summary.id) {
-            Ok(account) => accounts.push(account),
+            Ok(account) => {
+                // 实体文件是账号状态的权威来源。若索引中的停用状态与实体文件发生漂移，以实体文件为准并同步修正索引
+                if summary.disabled != account.disabled {
+                    summary.disabled = account.disabled;
+                    index_dirty = true;
+                }
+                if summary.proxy_disabled != account.proxy_disabled {
+                    summary.proxy_disabled = account.proxy_disabled;
+                    index_dirty = true;
+                }
+                accounts.push(account);
+            }
             Err(e) => {
                 crate::modules::logger::log_error(&format!(
                     "Failed to load account {}: {}",
@@ -1309,6 +1461,10 @@ pub fn list_accounts() -> Result<Vec<Account>, String> {
                 // This prevents account loss during version upgrades or temporary FS issues.
             }
         }
+    }
+
+    if index_dirty {
+        let _ = save_account_index(&index);
     }
 
     if let Err(error) = crate::modules::token_stats::populate_weekly_usage(&mut accounts) {
@@ -1729,6 +1885,45 @@ fn is_validation_required_error(err: &crate::error::AppError) -> bool {
         || text.contains("validation_url")
         || text.contains("appeal_url")
         || text.contains("validation required")
+        || text.contains("validation_required")
+}
+
+pub fn extract_action_url(reason: &str) -> Option<String> {
+    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(reason) {
+        let metadata_url = parsed
+            .get("error")
+            .and_then(|e| e.get("details"))
+            .and_then(|d| d.as_array())
+            .and_then(|arr| arr.iter().find_map(|item| item.get("metadata")))
+            .and_then(|m| m.get("validation_url").or_else(|| m.get("appeal_url")))
+            .and_then(|u| u.as_str())
+            .map(|s| s.replace("\\u0026", "&"));
+
+        if metadata_url.is_some() {
+            return metadata_url;
+        }
+
+        let link_url = parsed
+            .get("error")
+            .and_then(|e| e.get("details"))
+            .and_then(|d| d.as_array())
+            .and_then(|arr| arr.iter().find_map(|item| item.get("links")))
+            .and_then(|links| links.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|item| item.get("url"))
+            .and_then(|u| u.as_str())
+            .map(|s| s.replace("\\u0026", "&"));
+
+        if link_url.is_some() {
+            return link_url;
+        }
+    }
+
+    let url_regex = regex::Regex::new(r#"https://[^\s"'\\]+"#).ok()?;
+    url_regex.find(reason).map(|m| {
+        let raw_url = m.as_str().to_string();
+        raw_url.replace("\\u0026", "&")
+    })
 }
 
 fn is_account_access_blocked_message(message: &str) -> bool {
@@ -1738,6 +1933,7 @@ fn is_account_access_blocked_message(message: &str) -> bool {
         || text.contains("validation_url")
         || text.contains("appeal_url")
         || text.contains("validation required")
+        || text.contains("validation_required")
         || text.contains("unauthorized_client")
         || text.contains("invalid_client")
         || text.contains("invalid_grant")
@@ -1763,6 +1959,7 @@ fn format_switch_refresh_error(message: &str) -> String {
         || lower.contains("validation_url")
         || lower.contains("appeal_url")
         || lower.contains("validation required")
+        || lower.contains("validation_required")
     {
         return format!(
             "Token refresh failed: account requires additional verification. Please finish verification in Antigravity, then retry account switch. Raw error: {}",
@@ -1788,12 +1985,28 @@ fn format_rate_limit_block_reason(err: &crate::error::AppError) -> String {
 }
 
 fn mark_validation_blocked(account: &mut Account, reason: &str) {
-    if account.validation_blocked && account.validation_blocked_reason.as_deref() == Some(reason) {
+    let now = chrono::Utc::now().timestamp();
+    let block_until = now + (10 * 60);
+    let extracted_url = extract_action_url(reason);
+
+    if account.validation_blocked
+        && account.validation_blocked_reason.as_deref() == Some(reason)
+        && account.validation_url == extracted_url
+    {
         return;
     }
 
     account.validation_blocked = true;
+    account.validation_blocked_until = Some(block_until);
     account.validation_blocked_reason = Some(reason.to_string());
+    if let Some(url) = extracted_url {
+        account.validation_url = Some(url);
+    }
+    if let Some(ref mut q) = account.quota {
+        q.is_forbidden = true;
+        q.forbidden_reason = Some(reason.to_string());
+    }
+
     if let Err(e) = save_account(account) {
         crate::modules::logger::log_warn(&format!(
             "Failed to persist validation_blocked state for {}: {}",
@@ -1803,7 +2016,12 @@ fn mark_validation_blocked(account: &mut Account, reason: &str) {
 }
 
 fn clear_validation_blocked(account: &mut Account) {
-    if !account.validation_blocked {
+    if !account.validation_blocked
+        && account.validation_blocked_until.is_none()
+        && account.validation_blocked_reason.is_none()
+        && account.validation_url.is_none()
+        && !account.proxy_disabled
+    {
         return;
     }
 
@@ -1811,6 +2029,24 @@ fn clear_validation_blocked(account: &mut Account) {
     account.validation_blocked_until = None;
     account.validation_blocked_reason = None;
     account.validation_url = None;
+    if let Some(ref mut q) = account.quota {
+        q.is_forbidden = false;
+        q.forbidden_reason = None;
+    }
+
+    // Auto-recover proxy_disabled if it was caused by 403 or validation
+    if account.proxy_disabled
+        && account.proxy_disabled_reason.as_ref().map_or(false, |r| {
+            r.starts_with("Forbidden (403)")
+                || r.contains("403 Forbidden")
+                || r.contains("VALIDATION_REQUIRED")
+        })
+    {
+        account.proxy_disabled = false;
+        account.proxy_disabled_reason = None;
+        account.proxy_disabled_at = None;
+    }
+
     if let Err(e) = save_account(account) {
         crate::modules::logger::log_warn(&format!(
             "Failed to clear validation_blocked state for {}: {}",
@@ -2013,7 +2249,151 @@ pub fn set_current_account_id_with_target(
     let mut index = load_account_index()?;
     index.current_account_id = Some(account_id.to_string());
     index.current_target_ide = target_ide.map(|s| s.to_string());
+    match target_ide {
+        Some("classic") => index.current_classic_account_id = Some(account_id.to_string()),
+        Some("ide") => index.current_ide_account_id = Some(account_id.to_string()),
+        Some("agy") => index.current_agy_account_id = Some(account_id.to_string()),
+        _ => {
+            index.current_classic_account_id = Some(account_id.to_string());
+        }
+    }
     save_account_index(&index)
+}
+
+/// 智能探查并获取经典款、Antigravity IDE、Antigravity CLI 三大客户端当前各自生效的账号状态
+pub fn detect_active_clients_status() -> Result<crate::models::ActiveClientsStatus, String> {
+    let index = load_account_index()?;
+    let mut status = crate::models::ActiveClientsStatus {
+        classic_account_id: index.current_classic_account_id.clone(),
+        classic_email: None,
+        ide_account_id: index.current_ide_account_id.clone(),
+        ide_email: None,
+        agy_account_id: index.current_agy_account_id.clone(),
+        agy_email: None,
+    };
+
+    let accounts = list_accounts().unwrap_or_default();
+    let find_by_rt = |rt: &str| -> Option<Account> {
+        accounts
+            .iter()
+            .find(|a| a.token.refresh_token == rt)
+            .cloned()
+    };
+    let find_by_id =
+        |id: &str| -> Option<Account> { accounts.iter().find(|a| a.id == id).cloned() };
+
+    // 1. 探测 IDE 款当前账号 (state.vscdb)
+    if let Ok(db_path) = crate::modules::db::get_db_path(Some("ide")) {
+        if db_path.exists() {
+            if let Ok(oauth_state) =
+                crate::modules::migration::extract_oauth_state_from_file(&db_path)
+            {
+                if let Some(acc) = find_by_rt(&oauth_state.refresh_token) {
+                    status.ide_account_id = Some(acc.id.clone());
+                    status.ide_email = Some(acc.email);
+                }
+            }
+        }
+    }
+    if status.ide_email.is_none() {
+        if let Some(ref id) = status.ide_account_id {
+            if let Some(acc) = find_by_id(id) {
+                status.ide_email = Some(acc.email);
+            }
+        }
+    }
+
+    // 2. 读取底层凭据
+    // 系统钥匙串（Keyring / Secret Service）：Antigravity 2.0+ 原生经典款与 CLI 共享的核心凭据
+    let keyring_acc = crate::modules::integration::read_from_system_keyring_only()
+        .ok()
+        .and_then(|st| find_by_rt(&st.refresh_token));
+
+    // CLI 专属独立文件凭据 (~/.gemini/antigravity-cli/antigravity-oauth-token)
+    let cli_file_acc = crate::modules::integration::read_antigravity_cli_credentials()
+        .first()
+        .and_then(|st| find_by_rt(&st.refresh_token));
+
+    // 经典款旧版 SQLite 数据库 (Antigravity < 2.0.0)
+    let classic_db_acc = crate::modules::db::get_db_path(Some("classic"))
+        .ok()
+        .filter(|p| p.exists())
+        .and_then(|p| crate::modules::migration::extract_oauth_state_from_file(&p).ok())
+        .and_then(|st| find_by_rt(&st.refresh_token));
+
+    // 判断经典款是否为 2.0+ 原生版本（>= 2.0.0 使用 Keyring，< 2.0.0 使用 SQLite）
+    let is_classic_v2 =
+        crate::modules::version::get_antigravity_version_with_path(Some("classic"), None)
+            .map(|v| {
+                crate::modules::version::compare_version(&v.short_version, "2.0.0")
+                    != std::cmp::Ordering::Less
+            })
+            .unwrap_or(true);
+
+    // 3. 确定经典款当前账号
+    if is_classic_v2 {
+        if let Some(ref k_acc) = keyring_acc {
+            if index.current_target_ide.as_deref() != Some("agy")
+                || index.current_classic_account_id.as_deref() == Some(&k_acc.id)
+            {
+                status.classic_account_id = Some(k_acc.id.clone());
+                status.classic_email = Some(k_acc.email.clone());
+            }
+        }
+    } else if let Some(ref db_acc) = classic_db_acc {
+        status.classic_account_id = Some(db_acc.id.clone());
+        status.classic_email = Some(db_acc.email.clone());
+    }
+    if status.classic_email.is_none() {
+        if let Some(ref id) = status.classic_account_id {
+            if let Some(acc) = find_by_id(id) {
+                status.classic_email = Some(acc.email);
+            }
+        }
+    }
+
+    // 4. 确定 CLI (agy) 当前账号
+    if let Some(ref c_acc) = cli_file_acc {
+        if index.current_target_ide.as_deref() == Some("agy")
+            || index.current_agy_account_id.as_deref() == Some(&c_acc.id)
+        {
+            status.agy_account_id = Some(c_acc.id.clone());
+            status.agy_email = Some(c_acc.email.clone());
+        }
+    }
+    if status.agy_email.is_none() {
+        if let Some(ref k_acc) = keyring_acc {
+            if index.current_target_ide.as_deref() == Some("agy")
+                || index.current_agy_account_id.as_deref() == Some(&k_acc.id)
+            {
+                status.agy_account_id = Some(k_acc.id.clone());
+                status.agy_email = Some(k_acc.email.clone());
+            }
+        }
+    }
+    if status.agy_email.is_none() {
+        if let Some(ref id) = status.agy_account_id {
+            if let Some(acc) = find_by_id(id) {
+                status.agy_email = Some(acc.email);
+            }
+        }
+    }
+
+    // Fallback if index has current_account_id and current_target_ide
+    if status.classic_account_id.is_none()
+        && status.ide_account_id.is_none()
+        && status.agy_account_id.is_none()
+    {
+        if let Some(ref curr_id) = index.current_account_id {
+            match index.current_target_ide.as_deref() {
+                Some("ide") => status.ide_account_id = Some(curr_id.clone()),
+                Some("agy") => status.agy_account_id = Some(curr_id.clone()),
+                _ => status.classic_account_id = Some(curr_id.clone()),
+            }
+        }
+    }
+
+    Ok(status)
 }
 
 /// Update account quota
@@ -2098,6 +2478,29 @@ pub fn update_account_quota(account_id: &str, quota: QuotaData) -> Result<(), St
     }
     // --- Quota protection logic end ---
 
+    // If quota retrieval succeeded and quota is not forbidden, auto-recover 403 / validation locks
+    if let Some(ref q) = account.quota {
+        if !q.is_forbidden {
+            clear_validation_blocked(&mut account);
+            if account.proxy_disabled
+                && account.proxy_disabled_reason.as_ref().map_or(false, |r| {
+                    r == "quota_protection"
+                        || r.starts_with("Forbidden (403)")
+                        || r.contains("403 Forbidden")
+                        || r.contains("VALIDATION_REQUIRED")
+                })
+            {
+                crate::modules::logger::log_info(&format!(
+                    "[Quota] Account {} recovered successfully, clearing proxy_disabled",
+                    account.email
+                ));
+                account.proxy_disabled = false;
+                account.proxy_disabled_reason = None;
+                account.proxy_disabled_at = None;
+            }
+        }
+    }
+
     // Quota snapshots may recover before an explicit long image lock expires. Other live
     // records retain the baseline percentage-based cleanup behavior.
     if let Some(ref q) = account.quota {
@@ -2126,6 +2529,8 @@ pub fn update_account_quota(account_id: &str, quota: QuotaData) -> Result<(), St
         if let Ok(mut index) = load_account_index() {
             if let Some(summary) = index.accounts.iter_mut().find(|a| a.id == account_id) {
                 summary.protected_models = account.protected_models.clone();
+                summary.proxy_disabled = account.proxy_disabled;
+                summary.disabled = account.disabled;
                 let _ = save_account_index(&index);
             }
         }
@@ -2191,6 +2596,11 @@ pub fn mark_account_forbidden(account_id: &str, reason: &str) -> Result<(), Stri
 
     let mut account = load_account(account_id)?;
 
+    // Extract action URL (appeal_url or validation_url)
+    if let Some(url) = extract_action_url(reason) {
+        account.validation_url = Some(url);
+    }
+
     // 1. Update quota status
     if let Some(ref mut q) = account.quota {
         q.is_forbidden = true;
@@ -2209,7 +2619,12 @@ pub fn mark_account_forbidden(account_id: &str, reason: &str) -> Result<(), Stri
 
     // 2. Disable proxy for this account
     account.proxy_disabled = true;
-    account.proxy_disabled_reason = Some(format!("Forbidden (403): {}", reason));
+    let formatted_reason = if reason.starts_with("Forbidden (403):") {
+        reason.to_string()
+    } else {
+        format!("Forbidden (403): {}", reason)
+    };
+    account.proxy_disabled_reason = Some(formatted_reason);
     account.proxy_disabled_at = Some(chrono::Utc::now().timestamp());
 
     save_account(&account)?;
@@ -2224,6 +2639,32 @@ pub fn mark_account_forbidden(account_id: &str, reason: &str) -> Result<(), Stri
     // 4. Notify frontend to refresh account list
     crate::modules::log_bridge::emit_accounts_refreshed();
 
+    Ok(())
+}
+
+pub fn mark_account_validation_blocked(
+    account_id: &str,
+    block_until: i64,
+    reason: &str,
+) -> Result<(), String> {
+    let _lock = ACCOUNT_INDEX_LOCK
+        .lock()
+        .map_err(|e| format!("failed_to_acquire_lock: {}", e))?;
+
+    let mut account = load_account(account_id)?;
+
+    mark_validation_blocked(&mut account, reason);
+    account.validation_blocked_until = Some(block_until);
+
+    save_account(&account)?;
+
+    // Update index summary to keep state synchronized
+    let mut index = load_account_index()?;
+    if let Some(_summary) = index.accounts.iter_mut().find(|a| a.id == account_id) {
+        save_account_index(&index)?;
+    }
+
+    crate::modules::log_bridge::emit_accounts_refreshed();
     Ok(())
 }
 
@@ -2468,7 +2909,9 @@ pub async fn fetch_quota_with_retry(account: &mut Account) -> crate::error::AppR
 
                 match retry_result {
                     Ok((q, _)) => {
-                        clear_validation_blocked(account);
+                        if !q.is_forbidden {
+                            clear_validation_blocked(account);
+                        }
                         return Ok(q);
                     }
                     Err(e) => {
@@ -2493,7 +2936,9 @@ pub async fn fetch_quota_with_retry(account: &mut Account) -> crate::error::AppR
     // fetch_quota already handles 403, with additional local fallback/validation handling.
     match result {
         Ok((q, _)) => {
-            clear_validation_blocked(account);
+            if !q.is_forbidden {
+                clear_validation_blocked(account);
+            }
             Ok(q)
         }
         Err(e) => {
@@ -2543,15 +2988,26 @@ pub async fn refresh_all_quotas_logic() -> Result<RefreshStats, String> {
         .filter(|account| {
             // [MOD] Now we allow refreshing disabled and proxy_disabled accounts
             // to support forced re-sync from UI.
-            // Only strictly skip forbidden accounts if necessary, but even those
-            // might want a retry to see if they are unbanned.
+            //
+            // 只跳过「验证封禁仍在生效期内」的账号。封禁过期后必须放行刷新 —— 刷新
+            // 正是判断"还封不封"的手段；跳过它会让 quota.is_forbidden 永远是 true：
+            // 403 把它置 true、只有刷新成功才会写回 false，而刷新又在这里被跳过，
+            // 形成环形依赖，账号再也回不来（issue #3630）。
             if let Some(ref q) = account.quota {
                 if q.is_forbidden {
+                    let now = chrono::Utc::now().timestamp();
+                    let until = account.validation_blocked_until.unwrap_or(0);
+                    if account.validation_blocked && now < until {
+                        crate::modules::logger::log_info(&format!(
+                            "  - Skipping {} (Forbidden, 验证封禁中)",
+                            account.email
+                        ));
+                        return false;
+                    }
                     crate::modules::logger::log_info(&format!(
-                        "  - Skipping {} (Forbidden)",
+                        "  - Retrying {} (Forbidden 但验证封禁已过期，重新探测)",
                         account.email
                     ));
-                    return false;
                 }
             }
             true

@@ -37,11 +37,17 @@ pub fn get_max_output_tokens(model_id: &str, token: Option<&ProxyToken>) -> u64 
     // 1. 尝试从账号动态数据中读取
     if let Some(t) = token {
         if let Some(&limit) = t.model_limits.get(&std_id) {
-            return limit;
+            // [FIX #3215] 保护输出上限：避免某些 agent 专属通道配置的 2048 小限额卡死模型长文本生成能力
+            return limit.max(8192);
         }
         // 如果原始 ID 没找到，尝试用归一化后的 ID 找
         if let Some(&limit) = t.model_limits.get(model_id) {
-            return limit;
+            return limit.max(8192);
+        }
+        // [NEW] 剥离档位后缀后再次尝试从 model_limits 读取
+        let base = crate::proxy::common::model_mapping::strip_tier_suffix(model_id);
+        if let Some(&limit) = t.model_limits.get(&base) {
+            return limit.max(8192);
         }
     }
 
@@ -65,24 +71,29 @@ pub fn get_thinking_budget(model_id: &str, _token: Option<&ProxyToken>) -> u64 {
     let std_id = resolve_alias(model_id);
     let lower = std_id.to_lowercase();
 
-    // 1. 显式档位匹配（支持 Flash / Pro 的 high, medium, low, extra-low, max 等分级）
+    // 1. 显式档位匹配（支持所有模型的通用分级）
+    // 规则：只要不是轻量级（flash/lite），带 high 档位的均按顶级模型赋予思考预算
+    let is_lightweight = lower.contains("flash") || lower.contains("lite");
     if lower.contains("high") || lower.contains("agent") || lower.contains("max") {
-        if lower.contains("pro") {
-            return 10001; // Google 官方 gemini-3.1-pro-high / gemini-pro-agent 规范预算
+        if !is_lightweight {
+            return 10001; // 高级/旗舰模型（Pro / Opus / 新一代代号模型等）满血思考规范预算
         }
-        return 10000; // gemini-3.x-flash-high 满血思考规范预算
+        return 10000; // Flash 等高速轻量模型 high 满血思考规范预算
     }
     if lower.contains("medium") {
-        return 4000; // gemini-3.x-flash-medium 内置逆向规范预算
+        return 4000; // medium 内置逆向规范预算
     }
     if lower.contains("extra-low") {
-        return 1000; // gemini-3.5-flash-extra-low 规范预算
+        return 1000; // extra-low 规范预算
     }
     if lower.contains("low") {
-        if lower.contains("pro") {
-            return 1001; // gemini-3.1-pro-low 规范预算
+        if is_gemini_v4_or_above(&std_id) || lower.contains("argon") {
+            return 1024; // Gemini 4 (Argon) 思考预算下限必须 >= 1024，防止触发 THINKING_LEVEL_MINIMAL 400
         }
-        return 1000; // gemini-3.x-flash-low 规范预算
+        if !is_lightweight {
+            return 1001; // 高级模型 low 规范预算
+        }
+        return 1000; // flash-low 规范预算
     }
 
     // 2. 静态 JSON 配置 (model_specs.json)
@@ -375,6 +386,34 @@ pub fn is_bare_gemini_v3_flash(model: &str) -> bool {
 /// 兼容旧接口别名
 pub fn is_bare_gemini_v36_or_above_flash(model: &str) -> bool {
     is_bare_gemini_v3_flash(model)
+}
+
+/// 检查是否为 Gemini >= 4.0 系列新一代高级模型（纯数值/语义版本通配，不依赖硬编码代号）
+pub fn is_gemini_v4_or_above(model: &str) -> bool {
+    let lower = model.to_lowercase();
+    if !lower.contains("gemini") {
+        return false;
+    }
+    if let Some(idx) = lower.find("gemini-") {
+        let rest = &lower[idx + "gemini-".len()..];
+        let version_part: String = rest
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '.')
+            .collect();
+        if let Ok(ver) = version_part.parse::<f32>() {
+            return ver >= 4.0;
+        }
+    }
+    // 通配检测：匹配类似 gemini-4、gemini-5 等主版本形态
+    if let Some(idx) = lower.find("gemini-") {
+        let after = &lower[idx + "gemini-".len()..];
+        if let Some(first_char) = after.chars().next() {
+            if let Some(digit) = first_char.to_digit(10) {
+                return digit >= 4;
+            }
+        }
+    }
+    false
 }
 
 /// 检查是否为 Claude >= 5.0 版本模型（含裸模型与档位变体）
@@ -736,18 +775,18 @@ pub fn resolve_custom_budget(
             || (!has_explicit_suffix && matches!(eff.as_deref(), Some("low") | Some("extra-low")));
 
         if is_low {
-            if tb_config.pro_low > 0 {
+            if tb_config.pro_low >= 0 {
                 Some(tb_config.pro_low as i64)
-            } else if tb_config.flash_low > 0 {
+            } else if tb_config.flash_low >= 0 {
                 Some(tb_config.flash_low as i64)
             } else {
                 None
             }
         } else {
             // High 档位（包含未指定 effort、medium 等，均由 High 档位接管保证 Pro 深度推理）
-            if tb_config.pro_high > 0 {
+            if tb_config.pro_high >= 0 {
                 Some(tb_config.pro_high as i64)
-            } else if tb_config.flash_high > 0 {
+            } else if tb_config.flash_high >= 0 {
                 Some(tb_config.flash_high as i64)
             } else {
                 None
@@ -762,14 +801,14 @@ pub fn resolve_custom_budget(
             if let Some(level) = client_level {
                 match level {
                     "LOW" => {
-                        if tb_config.flash_low > 0 {
+                        if tb_config.flash_low >= 0 {
                             Some(tb_config.flash_low as i64)
                         } else {
                             Some(1000) // 官方 low 默认值 1000
                         }
                     }
                     "HIGH" => {
-                        if tb_config.flash_high > 0 {
+                        if tb_config.flash_high >= 0 {
                             Some(tb_config.flash_high as i64)
                         } else {
                             Some(-1) // 官方 high 默认值 -1 (无上限自适应深度思考)
@@ -777,7 +816,7 @@ pub fn resolve_custom_budget(
                     }
                     _ => {
                         // MEDIUM
-                        if tb_config.flash_medium > 0 {
+                        if tb_config.flash_medium >= 0 {
                             Some(tb_config.flash_medium as i64)
                         } else {
                             Some(4000) // 官方 medium 默认值 4000
@@ -788,7 +827,7 @@ pub fn resolve_custom_budget(
                 // 客户端未传思考参数：看网关 flash_tiered 配置，未配或为 -1 则走官方默认 -1
                 if tb_config.flash_mode == ThinkingBudgetMode::Default {
                     Some(-1)
-                } else if tb_config.flash_tiered > 0 {
+                } else if tb_config.flash_tiered >= 0 {
                     Some(tb_config.flash_tiered as i64)
                 } else {
                     Some(-1)
@@ -822,26 +861,26 @@ pub fn resolve_custom_budget(
                 || (is_bare && matches!(eff_level, Some("HIGH")));
 
             if is_low {
-                if tb_config.flash_low > 0 {
+                if tb_config.flash_low >= 0 {
                     Some(tb_config.flash_low as i64)
                 } else {
                     Some(1000) // 官方 low 默认值 1000
                 }
             } else if is_medium {
-                if tb_config.flash_medium > 0 {
+                if tb_config.flash_medium >= 0 {
                     Some(tb_config.flash_medium as i64)
                 } else {
                     Some(4000) // 官方 medium 默认值 4000
                 }
             } else if is_high {
-                if tb_config.flash_high > 0 {
+                if tb_config.flash_high >= 0 {
                     Some(tb_config.flash_high as i64)
                 } else {
                     Some(-1) // 官方 high 默认值 -1
                 }
             } else {
                 // 未指定任何档位的默认平衡档位 (Medium)
-                if tb_config.flash_medium > 0 {
+                if tb_config.flash_medium >= 0 {
                     Some(tb_config.flash_medium as i64)
                 } else {
                     Some(4000) // 官方 medium 默认值 4000
@@ -914,6 +953,11 @@ mod tests {
         assert_eq!(get_thinking_budget("gemini-3.1-pro-high", None), 10001);
         assert_eq!(get_thinking_budget("gemini-pro-agent", None), 10001);
         assert_eq!(get_thinking_budget("gemini-3.1-pro-low", None), 1001);
+
+        // Gemini 4 Argon 系列
+        assert_eq!(get_thinking_budget("gemini-4-argon-high", None), 10001);
+        assert_eq!(get_thinking_budget("gemini-4-argon-medium", None), 4000);
+        assert_eq!(get_thinking_budget("gemini-4-argon-low", None), 1024);
     }
 
     #[test]

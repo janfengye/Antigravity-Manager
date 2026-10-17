@@ -278,16 +278,16 @@ pub async fn import_from_custom_db_path(path_str: String) -> Result<Account, Str
     account::upsert_account(email.clone(), user_info.name, token_data)
 }
 
-/// Scan all local sources (Keyring/Keychain, IDE Databases, V1/CLI Directories) and import all unique accounts
+/// Scan all local Antigravity sources (Keyring/Keychain, IDE & Classic Databases, Antigravity CLI) and import all unique accounts
 pub async fn import_all_local_accounts(target_ide: Option<&str>) -> Result<Vec<Account>, String> {
     use crate::modules::{integration, oauth};
 
     let mut imported_accounts = Vec::new();
     let mut seen_refresh_tokens = std::collections::HashSet::new();
 
-    // 1. Check System Keyring / Keychain (仅在未显式指定目标或为经典原生版时探测，严禁穿透至 IDE)
+    // 1. 系统 Keyring / Keychain（仅在未指定目标或显式为经典款时探测，避免影响单纯 IDE 导入）
     if target_ide != Some("ide") {
-        if let Ok(oauth_state) = integration::read_from_system_keyring() {
+        if let Ok(oauth_state) = integration::read_from_system_keyring_only() {
             let refresh_token = oauth_state.refresh_token.clone();
             if !refresh_token.is_empty() && seen_refresh_tokens.insert(refresh_token.clone()) {
                 crate::modules::logger::log_info(
@@ -318,15 +318,51 @@ pub async fn import_all_local_accounts(target_ide: Option<&str>) -> Result<Vec<A
         }
     }
 
-    // 2. Scan all candidate database paths
-    let candidate_paths = db::get_all_candidate_db_paths(target_ide);
+    // 2. Antigravity CLI (agy) 原生凭据与备份
+    for oauth_state in integration::read_antigravity_cli_credentials() {
+        let refresh_token = oauth_state.refresh_token.clone();
+        if !refresh_token.is_empty() && seen_refresh_tokens.insert(refresh_token.clone()) {
+            crate::modules::logger::log_info(
+                "Discovered OAuth state in Antigravity CLI credentials",
+            );
+            if let Ok(token_resp) = oauth::refresh_access_token(&refresh_token, None).await {
+                let email = match oauth::get_user_info(&token_resp.access_token, None).await {
+                    Ok(info) => info.email,
+                    Err(_) => "Unknown".to_string(),
+                };
+                let token_data = TokenData::new(
+                    token_resp.access_token,
+                    refresh_token,
+                    token_resp.expires_in,
+                    Some(email.clone()),
+                    oauth_state.project_id,
+                    None,
+                    oauth_state.is_gcp_tos,
+                    token_resp.id_token,
+                )
+                .with_oauth_client_key(token_resp.oauth_client_key);
+
+                if let Ok(acc) = account::upsert_account(email, None, token_data) {
+                    imported_accounts.push(acc);
+                }
+            }
+        }
+    }
+
+    // 3. 扫描本地所有 Antigravity 数据库（同时覆盖经典款 Antigravity 与 IDE 款 Antigravity IDE）
+    let candidate_paths = if target_ide.is_none() || target_ide == Some("all") {
+        db::get_all_antigravity_db_paths()
+    } else {
+        db::get_all_candidate_db_paths(target_ide)
+    };
+
     for db_path in candidate_paths {
         if db_path.exists() {
             if let Ok(oauth_state) = extract_oauth_state_from_file(&db_path) {
                 let refresh_token = oauth_state.refresh_token.clone();
                 if !refresh_token.is_empty() && seen_refresh_tokens.insert(refresh_token.clone()) {
                     crate::modules::logger::log_info(&format!(
-                        "Discovered OAuth state in DB path: {:?}",
+                        "Discovered OAuth state in Antigravity DB path: {:?}",
                         db_path
                     ));
                     if let Ok(token_resp) = oauth::refresh_access_token(&refresh_token, None).await
@@ -357,18 +393,9 @@ pub async fn import_all_local_accounts(target_ide: Option<&str>) -> Result<Vec<A
         }
     }
 
-    // 3. Scan V1 / CLI agent directory (~/.antigravity-agent)
-    if let Ok(v1_accounts) = import_from_v1().await {
-        for acc in v1_accounts {
-            if seen_refresh_tokens.insert(acc.token.refresh_token.clone()) {
-                imported_accounts.push(acc);
-            }
-        }
-    }
-
     if imported_accounts.is_empty() {
         return Err(
-            "No login state data found across Keyring, IDE databases, or CLI directories"
+            "No login state data found across Antigravity Keyring, IDE/Classic databases, or CLI credentials"
                 .to_string(),
         );
     }
@@ -423,7 +450,7 @@ fn extract_enterprise_project_id_from_conn(
     }
 }
 
-fn extract_oauth_state_from_file(db_path: &PathBuf) -> Result<ImportedOAuthState, String> {
+pub fn extract_oauth_state_from_file(db_path: &PathBuf) -> Result<ImportedOAuthState, String> {
     use base64::{engine::general_purpose, Engine as _};
 
     if !db_path.exists() {
@@ -449,7 +476,10 @@ fn extract_oauth_state_from_file(db_path: &PathBuf) -> Result<ImportedOAuthState
         crate::modules::logger::log_info(
             "Detected new format database (antigravityUnifiedStateSync.oauthToken)",
         );
-        let (sentinel_key, oauth_info_blob) = protobuf::decode_unified_state_entry(&outer_b64)?;
+        let (sentinel_key, oauth_info_blob) = protobuf::decode_unified_state_entry_with_target(
+            &outer_b64,
+            Some("oauthTokenInfoSentinelKey"),
+        )?;
         if sentinel_key != "oauthTokenInfoSentinelKey" {
             return Err(format!("Unexpected OAuth sentinel key: {}", sentinel_key));
         }

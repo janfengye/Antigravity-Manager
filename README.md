@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> Professional Account Management & Protocol Proxy System for AI Services (v4.9.6)
+> Professional Account Management & Protocol Proxy System for AI Services (v4.9.8)
 
 <div align="center">
   <img src="public/icon.png" width="100" height="100" alt="Antigravity Tools Logo">
@@ -11,7 +11,7 @@
       <img src="https://img.shields.io/github/v/release/lbjlaq/Antigravity-Manager?color=blue&style=flat-square" alt="GitHub release">
     </a>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.9.6-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.9.8-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -301,11 +301,17 @@ env WEBKIT_DISABLE_DMABUF_RENDERER=1 ANTIGRAVITY_FORCE_WAYLAND=1 antigravity-too
 ```bash
 export ANTHROPIC_BASE_URL="http://127.0.0.1:8045"
 export ANTHROPIC_API_KEY="sk-antigravity"
-jeikcode --model claude-sonnet-4-6-thinking
+jeikcode --model claude-sonnet-4-6
 ```
 > For complete manual configuration and tuning, see the [JeikCode Integration Guide](./docs/jeikcode_integration.md).
 
 ### How to use with Claude Code CLI?
+> **Recommended Client Versions**:
+> - **Stable Production Recommendation**: `Claude Code v2.1.28x` (more permissive stream termination verification, highest resilience under network jitter);
+> - **Latest Versions Support**: `Claude Code v2.1.293 ~ v2.1.295` (requires deploying the gateway version with stream hang prevention and keepalive optimizations, see [Diagnosis Guide](./docs/CLAUDE_CODE_STREAM_DIAGNOSIS.md)).
+> 
+> Install recommended stable version: `npm install -g @anthropic-ai/claude-code@2.1.284`
+
 1. Start Antigravity service in the "API Proxy" tab.
 2. In your terminal:
 ```bash
@@ -487,7 +493,7 @@ In clients that support OpenAI protocol (e.g., Cherry Studio), you can configure
 
 ## 📝 Changelog
 
-> Latest version **v4.9.6** (2026-10-06) — full republish of v4.9.5 (its release pipeline was cancelled by hosted runner starvation and produced no Release assets; codebase is identical): Eliminates thinking budget 32768 overwriting, enforces absolute highest priority for named model suffixes (`-low`, `-medium`, `-high`), restores default mode fallback, and decouples Claude adapter (PR #3611, Fixes #3610); lowers Cowork pruning budget to 8k deep archive reducing residual context to 40k~45k tokens (60%+ compaction ratio), merges dual compaction state machines, introduces dynamic headroom anti-thrashing, adds Claude desktop process lifecycle management with legacy patch alerts and seamless upgrade, and safeguards macOS binary signing with rollback (PR #3604, #3609, #3603); caps single-request 429 pool traversal to `min(pool_size, 2)` with tiered backoff and Layer 2 optimistic reset to eliminate false 503 circuit-breaker failures, unifies long-lived sticky session unbinding and cross-protocol success counter recovery, and normalizes unified Claude quota protection groups (PR #3608, #3606, #3602, Fixes #3506, #3517, #3509); supports `antigravity-ide` naming variants, blocks Keyring credential leakage, hardens kernel-level process detection, and isolates `state.vscdb` (PR #3608, #3600, Fixes #3598); sanitizes Gemini JSON Schema enums, propagates real-time SSE stream errors (504/503/429), injects node search paths for OpenCode, corrects agy CLI Keyring D-Bus path and aligns Web/Headless APIs (PR #3601, #3606, #3607, thanks to @cubelikeplayDaniel, @diannaaav); resolves GNOME Wayland rendering freezes with DMA-BUF injection and fixes transparent window logic under X11/Xwayland (Fixes #3605, Ref #3581, thanks to @jeikl).
+> Latest version **v4.9.8** (2026-10-17): Automatic seamless hot-switch for Antigravity Classic upon quota depletion or threshold breach with streamlined dual-pool cards (Ref #3509); native evolution supporting Antigravity CLI (`agy`) with automatic shell wrapper injection, thinking effort disassembly, and independent 3-client active account detection with contextual badges (Ref #3686, Ref #3630); comprehensive 403 error body capture and action URL extraction (captcha verification/appeal) with closed-loop self-healing recovery (Ref #3630, Ref #3684); Claude Code 2.1.301 protocol alignment with anti-WAF identity sanitization, full-link `request-id` injection, and Claude 5 model family integration (PR #3689, Ref #3684, Ref #3686); active reference tracking in JSON Schema recursive flattening to eliminate exponential replication and Linux VPS OOM (SIGKILL 137) crashes, array schema normalization with terminal ARRAY items guards to prevent Gemini 400 errors, adaptive first-chunk Peek timeout extension to 60s/90s/120s for reasoning models, zero-downtime atomic pool reload eliminating 503 errors, and anti-regression rate limit protection (PR #3694, Fixes #3690, Ref #3682, Ref #3693); complete removal of 100% 429-yielding Prod endpoints, relaxed streaming first-chunk watchdog to 120s baseline, multi-turn role preservation for Responses array inputs, and elimination of 0ms optimistic reset storms (PR #3691, PR #3672, PR #3687, PR #3685, Fixes #3506, Ref #3525); traffic monitor inspector overhaul with Postman-style single-tab view, structured vs raw code views, key-value headers tables with Bearer masking, standard dual-link HAR 1.2 export, and 12-language localization coverage (thanks to @cubelikeplayDaniel, @EricZhou05, @blackdm666, @jeikl).
 
 👉 **[View Full Changelog → CHANGELOG_EN.md](CHANGELOG_EN.md)**
 

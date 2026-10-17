@@ -1,5 +1,21 @@
 {
   "models": {
+    "gemini-4-argon": {
+      "displayName": "Gemini 4 Argon",
+      "supportsImages": true,
+      "supportsThinking": true,
+      "thinkingBudget": -1,
+      "minThinkingBudget": 32,
+      "recommended": true,
+      "maxTokens": 1048576,
+      "maxOutputTokens": 65536,
+      "model": "MODEL_PLACEHOLDER_M421",
+      "apiProvider": "API_PROVIDER_GOOGLE_GEMINI",
+      "modelProvider": "MODEL_PROVIDER_GOOGLE",
+      "supportsVideo": true,
+      "tagTitle": "Ultra",
+      "tagDescription": "Gemini 4 Argon"
+    },
     "gemini-3.8-flash-low": {
       "displayName": "Gemini 3.8 Flash (Low)",
       "supportsImages": true,

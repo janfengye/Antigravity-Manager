@@ -43,6 +43,7 @@ interface CliStatus {
     is_synced: boolean;
     has_backup: boolean;
     current_base_url: string | null;
+    current_model?: string | null;
     files: string[];
     synced_count?: number;
 }
@@ -153,6 +154,12 @@ export const CliSyncCard = ({ proxyUrl, apiKey, className }: CliSyncCardProps) =
 
             const status = await invoke<CliStatus>(command, params);
             setStatuses(prev => ({ ...prev, [app]: status }));
+            if (status.current_model) {
+                setSelectedModels(prev => ({
+                    ...prev,
+                    [app]: status.current_model!
+                }));
+            }
         } catch (error) {
             console.error(`Failed to check ${app} status:`, error);
         } finally {
@@ -198,7 +205,12 @@ export const CliSyncCard = ({ proxyUrl, apiKey, className }: CliSyncCardProps) =
                 : { appType: app, proxyUrl: formattedUrl, apiKey: apiKey, model: selectedModels[app] };
 
             await invoke(command, params);
-            showToast(t(app === 'OpenCode' ? 'proxy.opencode_sync.toast.sync_success' : 'proxy.cli_sync.toast.sync_success', { name: app, defaultValue: `${app} synced successfully` }), 'success');
+            const currentSelectedModel = selectedModels[app];
+            const appDisplayName = app === 'Gemini' ? 'Antigravity CLI (agy)' : app;
+            const successMsg = currentSelectedModel
+                ? t('proxy.cli_sync.toast.sync_success_with_model', { name: appDisplayName, model: currentSelectedModel, defaultValue: `${appDisplayName} 已成功同步模型: ${currentSelectedModel}` })
+                : t(app === 'OpenCode' ? 'proxy.opencode_sync.toast.sync_success' : 'proxy.cli_sync.toast.sync_success', { name: appDisplayName, defaultValue: `${appDisplayName} synced successfully` });
+            showToast(successMsg, 'success');
             await checkStatus(app);
         } catch (error: any) {
             showToast(t(app === 'OpenCode' ? 'proxy.opencode_sync.toast.sync_error' : 'proxy.cli_sync.toast.sync_error', { name: app, error: error.toString(), defaultValue: `Sync failed: ${error.toString()}` }), 'error');
@@ -587,7 +599,7 @@ export const CliSyncCard = ({ proxyUrl, apiKey, className }: CliSyncCardProps) =
                     <div className="w-full h-full bg-[#18181b] dark:bg-[#121214] flex items-center justify-center">
                         <Gemini.Color size={24} />
                     </div>
-                ), 'Gemini CLI')}
+                ), t('proxy.cli_sync.apps.gemini', { defaultValue: 'Antigravity CLI (agy)' }))}
                 {renderCliItem('Droid', (
                     <div className="w-full h-full bg-gradient-to-br from-orange-500 via-amber-500 to-orange-600 flex items-center justify-center text-white">
                         <Bot size={22} className="text-white drop-shadow-sm" />

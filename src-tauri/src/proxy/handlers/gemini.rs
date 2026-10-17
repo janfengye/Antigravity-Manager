@@ -7,6 +7,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde_json::{json, Value};
+use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
 use crate::proxy::common::client_adapter::CLIENT_ADAPTERS;
@@ -114,6 +115,7 @@ pub async fn handle_generate(
     let mut norm_ms: f64 = 0.0;
     let mut think_fill_ms: f64 = 0.0;
     let mut ttft_ms: f64 = 0.0;
+    let mut fallback_overhead_ms: f64 = 0.0;
 
     // 1. 验证方法
     // [NEW] :countTokens 冒号语法，直接代理到上游 v1internal:countTokens
@@ -324,6 +326,8 @@ pub async fn handle_generate(
             }
         };
 
+        let in_flight_guard = Arc::new(token_manager.acquire_in_flight(&account_id));
+
         let mapped_model = token_manager
             .resolve_dynamic_model_for_account(&account_id, &mapped_model)
             .await;
@@ -444,8 +448,14 @@ pub async fn handle_generate(
             }
         };
 
+        let effective_attempt_start = call_result.effective_attempt_start;
+        let mut fallback_attempts = call_result.fallback_attempts.clone();
+        fallback_overhead_ms = call_result.fallback_overhead_s() * 1000.0;
+        let attempts_b64 =
+            crate::proxy::handlers::common::encode_attempts_header(&fallback_attempts);
+
         // [NEW] 记录端点降级日志到 debug 文件
-        if !call_result.fallback_attempts.is_empty() && debug_logger::is_enabled(&debug_cfg) {
+        if call_result.has_fallback() && debug_logger::is_enabled(&debug_cfg) {
             let fallback_entries: Vec<serde_json::Value> = call_result
                 .fallback_attempts
                 .iter()
@@ -553,7 +563,17 @@ pub async fn handle_generate(
                             tracing::warn!("[Gemini] Empty first chunk received, retrying...");
                             retry_gemini = true;
                         } else {
-                            ttft_ms = upstream_req_start.elapsed().as_micros() as f64 / 1000.0;
+                            ttft_ms = effective_attempt_start.elapsed().as_micros() as f64 / 1000.0;
+                            if let Some(effective_item) =
+                                fallback_attempts.iter_mut().find(|a| a.is_effective)
+                            {
+                                effective_item.duration_s = ttft_ms / 1000.0;
+                            }
+                            let _ = crate::proxy::monitor::CURRENT_UPSTREAM_CAPTURE.try_with(
+                                |holder| {
+                                    holder.set_attempts(fallback_attempts.clone());
+                                },
+                            );
                             first_chunk = Some(bytes);
                         }
                     }
@@ -586,7 +606,9 @@ pub async fn handle_generate(
                 let image_success_account = account_id.clone();
                 let image_success_model = mapped_model.clone();
                 let causal_anchor_clone = causal_anchor.clone();
+                let in_flight_guard_for_stream = Arc::clone(&in_flight_guard);
                 let stream = async_stream::stream! {
+                    let _in_flight = in_flight_guard_for_stream;
                     let _image_permit = image_permit_for_stream;
                     let mut first_data = first_chunk;
                     let mut meta_sent = false;
@@ -794,12 +816,21 @@ pub async fn handle_generate(
                         .header("X-Accel-Buffering", "no")
                         .header("X-Account-Email", &email)
                         .header("X-Mapped-Model", &mapped_model)
+                        .header("X-Upstream-Model", config.final_model.as_str())
                         .header("X-Session-Id", &client_session_id)
                         .header("X-Antigravity-Session-Id", &client_session_id)
                         .header("X-Timing-Clean-Ms", format!("{:.3}", clean_ms))
                         .header("X-Timing-Norm-Ms", format!("{:.3}", norm_ms))
                         .header("X-Timing-Thinking-Ms", format!("{:.3}", think_fill_ms))
                         .header("X-Timing-Ttft-Ms", format!("{:.3}", ttft_ms))
+                        .header(
+                            "X-Timing-Ttft-Overhead-Ms",
+                            format!("{:.3}", fallback_overhead_ms),
+                        )
+                        .header(
+                            "X-Timing-Ttft-Attempts",
+                            attempts_b64.as_deref().unwrap_or(""),
+                        )
                         .body(body)
                         .unwrap()
                         .into_response());
@@ -832,12 +863,17 @@ pub async fn handle_generate(
                                     .header("Content-Type", "application/json")
                                     .header("X-Account-Email", &email)
                                     .header("X-Mapped-Model", &mapped_model)
+                                    .header("X-Upstream-Model", config.final_model.as_str())
                                     .header("X-Session-Id", &client_session_id)
                                     .header("X-Antigravity-Session-Id", &client_session_id)
                                     .header("X-Timing-Clean-Ms", format!("{:.3}", clean_ms))
                                     .header("X-Timing-Norm-Ms", format!("{:.3}", norm_ms))
                                     .header("X-Timing-Thinking-Ms", format!("{:.3}", think_fill_ms))
                                     .header("X-Timing-Ttft-Ms", format!("{:.3}", ttft_ms))
+                                    .header(
+                                        "X-Timing-Ttft-Overhead-Ms",
+                                        format!("{:.3}", fallback_overhead_ms),
+                                    )
                                     .body(Body::from(serde_json::to_string(&unwrapped).unwrap()))
                                     .unwrap()
                                     .into_response());
@@ -852,12 +888,17 @@ pub async fn handle_generate(
                                 .header("Content-Type", "application/json")
                                 .header("X-Account-Email", &email)
                                 .header("X-Mapped-Model", &mapped_model)
+                                .header("X-Upstream-Model", config.final_model.as_str())
                                 .header("X-Session-Id", &client_session_id)
                                 .header("X-Antigravity-Session-Id", &client_session_id)
                                 .header("X-Timing-Clean-Ms", format!("{:.3}", clean_ms))
                                 .header("X-Timing-Norm-Ms", format!("{:.3}", norm_ms))
                                 .header("X-Timing-Thinking-Ms", format!("{:.3}", think_fill_ms))
                                 .header("X-Timing-Ttft-Ms", format!("{:.3}", ttft_ms))
+                                .header(
+                                    "X-Timing-Ttft-Overhead-Ms",
+                                    format!("{:.3}", fallback_overhead_ms),
+                                )
                                 .body(Body::from(serde_json::to_string(&unwrapped).unwrap()))
                                 .unwrap()
                                 .into_response());
@@ -876,6 +917,7 @@ pub async fn handle_generate(
                                 .header("Content-Type", "application/json")
                                 .header("X-Account-Email", &email)
                                 .header("X-Mapped-Model", &mapped_model)
+                                .header("X-Upstream-Model", config.final_model.as_str())
                                 .header("X-Session-Id", &client_session_id)
                                 .header("X-Antigravity-Session-Id", &client_session_id)
                                 .body(Body::from(serde_json::to_string(&error_json).unwrap()))
@@ -886,7 +928,13 @@ pub async fn handle_generate(
                 }
             }
 
-            ttft_ms = upstream_req_start.elapsed().as_micros() as f64 / 1000.0;
+            ttft_ms = effective_attempt_start.elapsed().as_micros() as f64 / 1000.0;
+            if let Some(effective_item) = fallback_attempts.iter_mut().find(|a| a.is_effective) {
+                effective_item.duration_s = ttft_ms / 1000.0;
+            }
+            let _ = crate::proxy::monitor::CURRENT_UPSTREAM_CAPTURE.try_with(|holder| {
+                holder.set_attempts(fallback_attempts.clone());
+            });
             let mut gemini_resp: Value = response
                 .json()
                 .await
@@ -942,12 +990,21 @@ pub async fn handle_generate(
                 .header("Content-Type", "application/json")
                 .header("X-Account-Email", &email)
                 .header("X-Mapped-Model", &mapped_model)
+                .header("X-Upstream-Model", config.final_model.as_str())
                 .header("X-Session-Id", &client_session_id)
                 .header("X-Antigravity-Session-Id", &client_session_id)
                 .header("X-Timing-Clean-Ms", format!("{:.3}", clean_ms))
                 .header("X-Timing-Norm-Ms", format!("{:.3}", norm_ms))
                 .header("X-Timing-Thinking-Ms", format!("{:.3}", think_fill_ms))
                 .header("X-Timing-Ttft-Ms", format!("{:.3}", ttft_ms))
+                .header(
+                    "X-Timing-Ttft-Overhead-Ms",
+                    format!("{:.3}", fallback_overhead_ms),
+                )
+                .header(
+                    "X-Timing-Ttft-Attempts",
+                    attempts_b64.as_deref().unwrap_or(""),
+                )
                 .body(Body::from(serde_json::to_string(&unwrapped).unwrap()))
                 .unwrap()
                 .into_response());
@@ -1010,11 +1067,11 @@ pub async fn handle_generate(
                     {
                         tracing::error!("Failed to set validation block: {}", e);
                     }
-                }
-
-                // 设置 is_forbidden 状态并持久化
-                if let Err(e) = token_manager.set_forbidden(&acc_id, &error_text).await {
-                    tracing::error!("Failed to set forbidden status: {}", e);
+                } else {
+                    // 设置 is_forbidden 状态并持久化（仅当真正非人机验证类 403 时才进入永久禁用）
+                    if let Err(e) = token_manager.set_forbidden(&acc_id, &error_text).await {
+                        tracing::error!("Failed to set forbidden status: {}", e);
+                    }
                 }
             }
         }
@@ -1095,6 +1152,7 @@ pub async fn handle_generate(
                 [
                     ("X-Account-Email", email.as_str()),
                     ("X-Mapped-Model", mapped_model.as_str()),
+                    ("X-Upstream-Model", config.final_model.as_str()),
                 ],
                 Json(dual_err),
             )
@@ -1204,6 +1262,7 @@ pub async fn handle_generate(
             [
                 ("X-Account-Email", email.as_str()),
                 ("X-Mapped-Model", mapped_model.as_str()),
+                ("X-Upstream-Model", config.final_model.as_str()),
             ],
             Json(dual_err),
         )
@@ -1231,24 +1290,41 @@ pub async fn handle_generate(
 pub async fn handle_list_models(
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    use crate::proxy::common::model_mapping::get_all_dynamic_models;
+    use crate::proxy::common::model_mapping::{
+        get_all_dynamic_models, get_all_dynamic_models_metadata,
+    };
 
     // 获取所有动态模型列表（与 /v1/models 一致）
     let only_raw = *state.only_raw_quota_models.read().await;
     let model_ids =
         get_all_dynamic_models(&state.custom_mapping, Some(&state.token_manager), only_raw).await;
+    let metadata_map = get_all_dynamic_models_metadata(
+        &state.custom_mapping,
+        Some(&state.token_manager),
+        only_raw,
+    )
+    .await;
 
     // 转换为 Gemini API 格式
     let models: Vec<_> = model_ids
         .into_iter()
         .map(|id| {
+            let meta = metadata_map
+                .get(&id)
+                .or_else(|| metadata_map.get(&id.to_lowercase()));
+            let display_name = meta
+                .and_then(|m| m.display_name.clone())
+                .unwrap_or_else(|| id.clone());
+            let input_limit = meta.and_then(|m| m.max_tokens).unwrap_or(128000);
+            let output_limit = meta.and_then(|m| m.max_output_tokens).unwrap_or(8192);
+
             json!({
                 "name": format!("models/{}", id),
                 "version": "001",
-                "displayName": id.clone(),
+                "displayName": display_name,
                 "description": "",
-                "inputTokenLimit": 128000,
-                "outputTokenLimit": 8192,
+                "inputTokenLimit": input_limit,
+                "outputTokenLimit": output_limit,
                 "supportedGenerationMethods": ["generateContent", "countTokens"],
                 "temperature": 1.0,
                 "topP": 0.95,
@@ -1264,7 +1340,9 @@ pub async fn handle_get_model(
     State(state): State<AppState>,
     Path(model_name): Path<String>,
 ) -> impl IntoResponse {
-    use crate::proxy::common::model_mapping::find_dynamic_model;
+    use crate::proxy::common::model_mapping::{
+        find_dynamic_model, get_all_dynamic_models_metadata,
+    };
 
     let only_raw = *state.only_raw_quota_models.read().await;
     if let Some(matched_id) = find_dynamic_model(
@@ -1275,15 +1353,31 @@ pub async fn handle_get_model(
     )
     .await
     {
+        let metadata_map = get_all_dynamic_models_metadata(
+            &state.custom_mapping,
+            Some(&state.token_manager),
+            only_raw,
+        )
+        .await;
+
+        let meta = metadata_map
+            .get(&matched_id)
+            .or_else(|| metadata_map.get(&matched_id.to_lowercase()));
+        let display_name = meta
+            .and_then(|m| m.display_name.clone())
+            .unwrap_or_else(|| matched_id.clone());
+        let input_limit = meta.and_then(|m| m.max_tokens).unwrap_or(128000);
+        let output_limit = meta.and_then(|m| m.max_output_tokens).unwrap_or(8192);
+
         (
             StatusCode::OK,
             Json(json!({
                 "name": format!("models/{}", matched_id),
                 "version": "001",
-                "displayName": matched_id,
+                "displayName": display_name,
                 "description": "",
-                "inputTokenLimit": 128000,
-                "outputTokenLimit": 8192,
+                "inputTokenLimit": input_limit,
+                "outputTokenLimit": output_limit,
                 "supportedGenerationMethods": ["generateContent", "countTokens"],
                 "temperature": 1.0,
                 "topP": 0.95,
@@ -1400,6 +1494,7 @@ pub async fn execute_count_tokens(
                 [
                     ("X-Account-Email", "offline-estimate"),
                     ("X-Mapped-Model", mapped_model.as_str()),
+                    ("X-Upstream-Model", config.final_model.as_str()),
                 ],
                 Json(json!({ "totalTokens": local_tokens })),
             )
@@ -1444,6 +1539,7 @@ pub async fn execute_count_tokens(
                 [
                     ("X-Account-Email", email.as_str()),
                     ("X-Mapped-Model", mapped_model.as_str()),
+                    ("X-Upstream-Model", config.final_model.as_str()),
                 ],
                 Json(json!({ "totalTokens": local_tokens })),
             )
@@ -1467,6 +1563,7 @@ pub async fn execute_count_tokens(
             [
                 ("X-Account-Email", email.as_str()),
                 ("X-Mapped-Model", mapped_model.as_str()),
+                ("X-Upstream-Model", config.final_model.as_str()),
             ],
             Json(json!({ "totalTokens": local_tokens })),
         )
@@ -1498,6 +1595,7 @@ pub async fn execute_count_tokens(
         [
             ("X-Account-Email", email.as_str()),
             ("X-Mapped-Model", mapped_model.as_str()),
+            ("X-Upstream-Model", config.final_model.as_str()),
         ],
         Json(json!({ "totalTokens": total_tokens })),
     )
