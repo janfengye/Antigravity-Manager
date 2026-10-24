@@ -51,6 +51,7 @@ pub struct TrayTexts {
     pub switch_next: String,
     pub refresh_current: String,
     pub show_window: String,
+    pub mini_view: String,
     pub quit: String,
     pub no_account: String,
     pub unknown_quota: String,
@@ -119,6 +120,10 @@ pub fn get_tray_texts(lang: &str) -> TrayTexts {
             .get("show_window")
             .cloned()
             .unwrap_or_else(|| "Show Main Window".to_string()),
+        mini_view: t
+            .get("mini_view")
+            .cloned()
+            .unwrap_or_else(|| "Mini View".to_string()),
         quit: t
             .get("quit")
             .cloned()

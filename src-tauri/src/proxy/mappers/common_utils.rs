@@ -1966,12 +1966,17 @@ pub fn ensure_gemini_payload_ends_with_user(body: &mut Value) -> bool {
     }
 
     // 防御 2: 修复历史/中间轮次中可能存在的 parts 为空
-    for turn in contents.iter_mut() {
+    let total_turns = contents.len();
+    for (idx, turn) in contents.iter_mut().enumerate() {
         let is_model = turn
             .get("role")
             .and_then(|r| r.as_str())
             .map(|r| r == "model" || r == "assistant")
             .unwrap_or(false);
+        // 如果是末尾的 model 轮且 parts 为空，留给防御 3 进行尾部清理/移除，不在此处填入伪正文
+        if is_model && idx == total_turns - 1 {
+            continue;
+        }
         if let Some(parts) = turn.get_mut("parts").and_then(|p| p.as_array_mut()) {
             if parts.is_empty() {
                 modified = true;
@@ -1985,48 +1990,122 @@ pub fn ensure_gemini_payload_ends_with_user(body: &mut Value) -> bool {
     }
 
     // 防御 3: 检查末尾轮次。
-    // [谷歌新规则报文变动，暂时废弃]：谷歌最新版报文已允许最后一轮是 model，
-    // 且向末尾强制注入合成 user 轮次 ("ok go on") 会破坏 AI 编码代理（如 Cline/OpenCode/Pi Agent）
-    // 的人机交互确认状态机并污染上下文 (Fixes #3629)。因此此处对末尾 model 轮次追加 user 垫片的逻辑暂时废弃。
-    if let Some(last_turn) = contents.last_mut() {
+    // Google Gemini 上游严格禁止请求以普通 model/assistant 轮次收尾（上游会直接抛出 400 "Requests ending with a model turn are not supported"）。
+    // 【工具回执特例】：唯一被 Google 上游接受的以 model 结尾的情形，是包含 functionResponse 的工具回执轮次。
+    // 为兼顾 AI 编码代理（如 Cline/OpenCode/Pi Agent/Claude Code）的人机交互状态机 (Fixes #3629)，
+    // 同时杜绝会话因缺失用户轮次被上游 400 截断 (Fixes #3716)：
+    // 1. 若末尾 model 轮次包含 functionResponse：为官方合法回执形态，绝对不追加 user 垫片，完整保留工具交互状态；
+    // 2. 若末尾 model 轮次为空（parts 为空或仅含空文本/空白字符/"..."）：说明客户端在流异常中断后发起了空的续步，
+    //    直接剥离该空 model 尾轮（pop），使会话自然恢复以前一轮（通常为 user 轮）结尾；
+    // 3. 若末尾 model 轮次包含实质内容（正文文本/前缀 prefill 等）：Google 上游无法直接作为提示词结尾，
+    //    必须追加中性合规的 user 兜底轮（TRANSIT_DEFENSE_FALLBACK_TEXT），防止触发 400 INVALID_ARGUMENT。
+    if let Some(last_turn) = contents.last() {
         let role = last_turn.get("role").and_then(|r| r.as_str()).unwrap_or("");
         if role == "model" || role == "assistant" {
-            // [谷歌新规则报文变动，暂时废弃] 允许最后一轮为 model/assistant，不再追加 user "ok go on" 垫片
-            /*
-            tracing::warn!(
-                "[Defense] Gemini payload ended with model turn, appending user turn with '{}'",
-                TRANSIT_DEFENSE_FALLBACK_TEXT
-            );
-            contents.push(json!({
-                "role": "user",
-                "parts": [{ "text": TRANSIT_DEFENSE_FALLBACK_TEXT }]
-            }));
-            modified = true;
-            */
-        } else if let Some(parts) = last_turn.get_mut("parts").and_then(|p| p.as_array_mut()) {
-            let has_substantive_part = parts.iter().any(|part| {
-                if part.get("functionCall").is_some()
-                    || part.get("functionResponse").is_some()
-                    || part.get("inlineData").is_some()
-                    || part.get("fileData").is_some()
-                {
-                    return true;
-                }
-                if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
-                    let t = text.trim();
-                    !t.is_empty() && t != "(no content)" && t != "·"
-                } else {
-                    false
-                }
-            });
+            let has_fr = last_turn
+                .get("parts")
+                .and_then(|p| p.as_array())
+                .map_or(false, |parts| {
+                    parts.iter().any(|p| p.get("functionResponse").is_some())
+                });
 
-            if !has_substantive_part {
-                tracing::warn!(
-                    "[Defense] Last user turn has no substantive content, normalizing to '{}'",
-                    TRANSIT_DEFENSE_FALLBACK_TEXT
-                );
-                *parts = vec![json!({ "text": TRANSIT_DEFENSE_FALLBACK_TEXT })];
-                modified = true;
+            if has_fr {
+                // 1. 工具回执合法结尾：允许保留，绝不追加 user 垫片 (Fixes #3629)
+            } else {
+                let is_empty_turn =
+                    last_turn
+                        .get("parts")
+                        .and_then(|p| p.as_array())
+                        .map_or(true, |parts| {
+                            parts.is_empty()
+                                || parts.iter().all(|part| {
+                                    if part.get("functionCall").is_some()
+                                        || part.get("inlineData").is_some()
+                                        || part.get("fileData").is_some()
+                                    {
+                                        return false;
+                                    }
+                                    if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
+                                        let t = text.trim();
+                                        t.is_empty()
+                                            || t == "(no content)"
+                                            || t == "·"
+                                            || t == "..."
+                                    } else {
+                                        true
+                                    }
+                                })
+                        });
+
+                if is_empty_turn {
+                    // 2. 客户端下发的空 model 尾轮（如 OpenCode 在流中断后的空续步）：直接剔除
+                    contents.pop();
+                    modified = true;
+                    if contents.is_empty() {
+                        contents.push(json!({
+                            "role": "user",
+                            "parts": [{ "text": TRANSIT_DEFENSE_FALLBACK_TEXT }]
+                        }));
+                    } else if let Some(new_last) = contents.last() {
+                        let new_role = new_last.get("role").and_then(|r| r.as_str()).unwrap_or("");
+                        let new_has_fr = new_last
+                            .get("parts")
+                            .and_then(|p| p.as_array())
+                            .map_or(false, |parts| {
+                                parts.iter().any(|p| p.get("functionResponse").is_some())
+                            });
+                        if (new_role == "model" || new_role == "assistant") && !new_has_fr {
+                            contents.push(json!({
+                                "role": "user",
+                                "parts": [{ "text": TRANSIT_DEFENSE_FALLBACK_TEXT }]
+                            }));
+                        }
+                    }
+                } else {
+                    // 3. 包含实质内容（如 assistant prefill）但未携带 functionResponse：
+                    // Google 上游严格禁止纯 model 收尾，追加合规 user 垫片 (Fixes #3716)
+                    tracing::warn!(
+                        "[Defense] Gemini payload ended with non-empty model turn, appending user turn with '{}'",
+                        TRANSIT_DEFENSE_FALLBACK_TEXT
+                    );
+                    contents.push(json!({
+                        "role": "user",
+                        "parts": [{ "text": TRANSIT_DEFENSE_FALLBACK_TEXT }]
+                    }));
+                    modified = true;
+                }
+            }
+        }
+    }
+
+    if let Some(last_turn) = contents.last_mut() {
+        let role = last_turn.get("role").and_then(|r| r.as_str()).unwrap_or("");
+        if role == "user" {
+            if let Some(parts) = last_turn.get_mut("parts").and_then(|p| p.as_array_mut()) {
+                let has_substantive_part = parts.iter().any(|part| {
+                    if part.get("functionCall").is_some()
+                        || part.get("functionResponse").is_some()
+                        || part.get("inlineData").is_some()
+                        || part.get("fileData").is_some()
+                    {
+                        return true;
+                    }
+                    if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
+                        let t = text.trim();
+                        !t.is_empty() && t != "(no content)" && t != "·"
+                    } else {
+                        false
+                    }
+                });
+
+                if !has_substantive_part {
+                    tracing::warn!(
+                        "[Defense] Last user turn has no substantive content, normalizing to '{}'",
+                        TRANSIT_DEFENSE_FALLBACK_TEXT
+                    );
+                    *parts = vec![json!({ "text": TRANSIT_DEFENSE_FALLBACK_TEXT })];
+                    modified = true;
+                }
             }
         }
     }
@@ -2077,7 +2156,7 @@ mod defense_tests {
 
     #[test]
     fn test_ensure_gemini_payload_ends_with_user_model_ending() {
-        // [谷歌新规则报文变动，暂时废弃] 允许末尾为 model 轮次，不再追加 user 垫片
+        // 非空 model 轮次收尾（如 assistant prefill）：自动追加 user 兜底轮，防止 Google 400 (Fixes #3716)
         let mut payload = json!({
             "request": {
                 "contents": [
@@ -2086,10 +2165,43 @@ mod defense_tests {
                 ]
             }
         });
-        assert!(!ensure_gemini_payload_ends_with_user(&mut payload));
+        assert!(ensure_gemini_payload_ends_with_user(&mut payload));
         let contents = payload["request"]["contents"].as_array().unwrap();
-        assert_eq!(contents.len(), 2);
+        assert_eq!(contents.len(), 3);
         assert_eq!(contents[1]["role"], "model");
+        assert_eq!(contents[2]["role"], "user");
+        assert_eq!(
+            contents[2]["parts"][0]["text"],
+            TRANSIT_DEFENSE_FALLBACK_TEXT
+        );
+    }
+
+    #[test]
+    fn test_ensure_gemini_payload_ends_with_user_empty_model_ending() {
+        // 空 model 轮次收尾（如客户端流中断后发起的空续步）：直接剔除该空尾轮，使会话恢复为合法 user 结尾 (Fixes #3716)
+        let mut payload = json!({
+            "contents": [
+                { "role": "user", "parts": [{ "text": "hello" }] },
+                { "role": "model", "parts": [] }
+            ]
+        });
+        assert!(ensure_gemini_payload_ends_with_user(&mut payload));
+        let contents = payload["contents"].as_array().unwrap();
+        assert_eq!(contents.len(), 1);
+        assert_eq!(contents[0]["role"], "user");
+        assert_eq!(contents[0]["parts"][0]["text"], "hello");
+
+        // 空文本 model 轮次同样剔除
+        let mut payload2 = json!({
+            "contents": [
+                { "role": "user", "parts": [{ "text": "hello" }] },
+                { "role": "model", "parts": [{ "text": "  " }] }
+            ]
+        });
+        assert!(ensure_gemini_payload_ends_with_user(&mut payload2));
+        let contents2 = payload2["contents"].as_array().unwrap();
+        assert_eq!(contents2.len(), 1);
+        assert_eq!(contents2[0]["role"], "user");
     }
 
     #[test]
@@ -2122,7 +2234,7 @@ mod defense_tests {
 
     #[test]
     fn test_ensure_gemini_payload_ends_with_user_tool_turn_injected() {
-        // [谷歌新规则报文变动，暂时废弃] 末尾 model 轮（含工具轮与纯正文）均允许保留，不再注入假用户轮
+        // 包含 functionResponse 的工具回执轮次：官方合法收尾，严格保持原样绝不追加 user 垫片 (Fixes #3629)
         let mut payload = json!({
             "contents": [
                 { "role": "user", "parts": [{ "text": "run the tool" }] },
@@ -2139,25 +2251,26 @@ mod defense_tests {
                             "thoughtSignature": "AABBCC"
                         }
                     ]
+                },
+                {
+                    "role": "model",
+                    "parts": [
+                        {
+                            "functionResponse": {
+                                "id": "call_1",
+                                "name": "run_command",
+                                "response": { "output": "hi\n" }
+                            }
+                        }
+                    ]
                 }
             ]
         });
         assert!(!ensure_gemini_payload_ends_with_user(&mut payload));
         let contents = payload["contents"].as_array().unwrap();
-        assert_eq!(contents.len(), 2);
-        assert_eq!(contents[1]["role"], "model");
-
-        // 末尾 model 轮为纯正文（非工具轮）→ 同样允许保留
-        let mut payload2 = json!({
-            "contents": [
-                { "role": "user", "parts": [{ "text": "hello" }] },
-                { "role": "model", "parts": [{ "text": "hi there" }] }
-            ]
-        });
-        assert!(!ensure_gemini_payload_ends_with_user(&mut payload2));
-        let contents2 = payload2["contents"].as_array().unwrap();
-        assert_eq!(contents2.len(), 2);
-        assert_eq!(contents2[1]["role"], "model");
+        assert_eq!(contents.len(), 3);
+        assert_eq!(contents[2]["role"], "model");
+        assert!(contents[2]["parts"][0].get("functionResponse").is_some());
     }
 
     #[test]

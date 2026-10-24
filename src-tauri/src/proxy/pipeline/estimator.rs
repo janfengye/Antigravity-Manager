@@ -226,6 +226,7 @@ impl PipelineTokenEstimator {
                         if let Some(sig) = part
                             .get("thoughtSignature")
                             .or_else(|| part.get("thought_signature"))
+                            .or_else(|| part.get("signature"))
                             .and_then(Value::as_str)
                         {
                             total += estimate_tokens_from_str(sig);
@@ -342,6 +343,14 @@ impl PipelineTokenEstimator {
                                     }
                                     if let Some(input) = block.get("input") {
                                         total += estimate_tokens_from_str(&input.to_string());
+                                    }
+                                    if let Some(sig) = block
+                                        .get("signature")
+                                        .or_else(|| block.get("thoughtSignature"))
+                                        .or_else(|| block.get("thought_signature"))
+                                        .and_then(Value::as_str)
+                                    {
+                                        total += estimate_tokens_from_str(sig);
                                     }
                                 }
                                 Some("tool_result") | Some("web_search_tool_result") => {
@@ -686,6 +695,39 @@ mod tests {
         assert!(
             tokens >= 280,
             "Expected tokens >= 280, but got {} (indicates gemini thoughtSignature or tools undercounted)",
+            tokens
+        );
+    }
+
+    #[test]
+    fn test_pipeline_estimator_claude_tool_use_signature() {
+        // 1000 characters base64 signature on tool_use block
+        let dummy_sig = "C".repeat(1000);
+        let body = json!({
+            "model": "claude-3-7-sonnet",
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_01ABC",
+                            "name": "read_file",
+                            "input": { "path": "src/main.rs" },
+                            "signature": dummy_sig
+                        }
+                    ]
+                }
+            ]
+        });
+
+        let tokens = PipelineTokenEstimator::estimate_tokens(&body);
+        // 1000 chars base64 signature is ~250 tokens (1000 / 4.0 = 250).
+        // Without signature, tool_use base is 20 + ~3 (read_file) + ~6 (input) = ~29 tokens.
+        // With signature accounted for, tokens must be >= 270.
+        assert!(
+            tokens >= 270,
+            "Expected tokens >= 270, but got {} (indicates tool_use signature undercounted)",
             tokens
         );
     }

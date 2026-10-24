@@ -58,26 +58,238 @@ fn extract_boundary(content_type: &str) -> Option<String> {
     })
 }
 
+/// 检测纯文本是否为典型探活/连通性探测词
+fn is_probe_text(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    let clean = lower.trim_end_matches(&['.', '?', '!', '~', '。', '？', '！', '～', '=', ' '][..]);
+    let clean_no_spaces = clean.replace(' ', "");
+
+    matches!(
+        clean,
+        "hi" | "hello"
+            | "hey"
+            | "ping"
+            | "pong"
+            | "test"
+            | "testing"
+            | "echo"
+            | "health"
+            | "healthcheck"
+            | "health_check"
+            | "health check"
+            | "check"
+            | "are you there"
+            | "are you alive"
+            | "warmup"
+            | "你好"
+            | "您好"
+            | "在吗"
+            | "测试"
+            | "测速"
+    ) || matches!(clean_no_spaces.as_str(), "1+1" | "1+1=2" | "1+2" | "2+2")
+}
+
+/// 检测 Gemini 格式负载（包括顶层或位于 "request" 内部）是否为纯粹的探针请求
+fn is_gemini_probe_payload(val: &Value) -> bool {
+    let req_obj = val.get("request").unwrap_or(val);
+
+    // 1. 系统指令：若存在非空 systemInstruction，绝非探针
+    if let Some(sys) = req_obj
+        .get("systemInstruction")
+        .or_else(|| req_obj.get("system_instruction"))
+    {
+        if let Some(parts) = sys.get("parts").and_then(|p| p.as_array()) {
+            let has_content = parts.iter().any(|p| {
+                p.get("text")
+                    .and_then(|t| t.as_str())
+                    .map_or(false, |s| !s.trim().is_empty())
+            });
+            if has_content {
+                return false;
+            }
+        }
+    }
+
+    // 2. 工具调用：若包含 tools 且非空，绝非探针
+    if let Some(tools) = req_obj.get("tools").and_then(|t| t.as_array()) {
+        if !tools.is_empty() {
+            return false;
+        }
+    }
+
+    // 3. contents 数组：必须严格只有 1 条消息且角色为 "user"
+    let Some(contents) = req_obj.get("contents").and_then(|c| c.as_array()) else {
+        return false;
+    };
+    if contents.len() != 1 {
+        return false;
+    }
+
+    let first_content = &contents[0];
+    let role = first_content
+        .get("role")
+        .and_then(|r| r.as_str())
+        .unwrap_or("");
+    if role != "user" {
+        return false;
+    }
+
+    // 4. parts 数组：必须严格只有 1 个 part，且为纯文本
+    let Some(parts) = first_content.get("parts").and_then(|p| p.as_array()) else {
+        return false;
+    };
+    if parts.len() != 1 {
+        return false;
+    }
+
+    let first_part = &parts[0];
+    if first_part.get("inlineData").is_some()
+        || first_part.get("functionCall").is_some()
+        || first_part.get("fileData").is_some()
+    {
+        return false;
+    }
+
+    let Some(text) = first_part.get("text").and_then(|t| t.as_str()) else {
+        return false;
+    };
+
+    is_probe_text(text)
+}
+
+/// 检测原始客户端请求报文（兼容 OpenAI / Claude 等不同协议格式）是否为纯粹的探针请求
+fn is_raw_request_probe_payload(val: &Value) -> bool {
+    // 1. 系统指令/提示词检查
+    if let Some(sys) = val.get("system") {
+        match sys {
+            Value::String(s) if !s.trim().is_empty() => return false,
+            Value::Array(arr) if !arr.is_empty() => return false,
+            _ => {}
+        }
+    }
+    if let Some(ins) = val.get("instructions").and_then(|v| v.as_str()) {
+        if !ins.trim().is_empty() {
+            return false;
+        }
+    }
+
+    // 2. 工具调用检查
+    if let Some(tools) = val.get("tools").and_then(|t| t.as_array()) {
+        if !tools.is_empty() {
+            return false;
+        }
+    }
+
+    // 3. OpenAI / Claude 风格 messages 检查
+    if let Some(messages) = val.get("messages").and_then(|m| m.as_array()) {
+        if messages.len() != 1 {
+            return false;
+        }
+        let msg = &messages[0];
+        let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
+        if role != "user" {
+            return false;
+        }
+
+        // content 可以是字符串，也可以是 ContentBlock 数组
+        if let Some(content_str) = msg.get("content").and_then(|c| c.as_str()) {
+            return is_probe_text(content_str);
+        } else if let Some(content_arr) = msg.get("content").and_then(|c| c.as_array()) {
+            if content_arr.len() == 1 {
+                let first_block = &content_arr[0];
+                if let Some(text) = first_block.get("text").and_then(|t| t.as_str()) {
+                    return is_probe_text(text);
+                }
+            }
+        }
+        return false;
+    }
+
+    // 4. OpenAI Responses API 风格 input 检查
+    if let Some(input) = val.get("input").and_then(|i| i.as_array()) {
+        if input.len() != 1 {
+            return false;
+        }
+        let item = &input[0];
+        let role = item.get("role").and_then(|r| r.as_str()).unwrap_or("");
+        if role != "user" {
+            return false;
+        }
+        if let Some(content_str) = item.get("content").and_then(|c| c.as_str()) {
+            return is_probe_text(content_str);
+        }
+        return false;
+    }
+
+    // 5. 原生 Gemini 格式 contents 检查
+    if val.get("contents").is_some() {
+        return is_gemini_probe_payload(val);
+    }
+
+    false
+}
+
+/// 综合判断是否为第三方网关探测请求
+fn is_third_party_probe_request(request_body: Option<&str>, upstream_body: Option<&str>) -> bool {
+    // 优先从转换后的上游 Gemini 报文进行协议无关判定
+    if let Some(up_str) = upstream_body {
+        if let Ok(json_val) = serde_json::from_str::<Value>(up_str) {
+            if is_gemini_probe_payload(&json_val) {
+                return true;
+            }
+        }
+    }
+
+    // 兜底从客户端原始请求报文判定
+    if let Some(raw_str) = request_body {
+        if let Ok(json_val) = serde_json::from_str::<Value>(raw_str) {
+            if is_raw_request_probe_payload(&json_val) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
 /// 噪音请求日志抑制判定。
 ///
 /// 面板「捕获健康请求」胶囊开关（`capture_health_logs`）**默认关闭**。关闭时：
-/// **所有 GET 成功请求一律不记录、不落库**（含 `/v1/models`、`/v1beta/models`、`/v1/models/claude`
+/// 1. **所有 GET 成功请求一律不记录、不落库**（含 `/v1/models`、`/v1beta/models`、`/v1/models/claude`
 /// 等模型列表轮询，以及 `/health` `/healthz` `/api/health` 探针）。
+/// 2. **第三方网关（如 NewAPI / OneAPI 等）发送的纯粹探活/测试请求（POST 且仅含单条极简测试消息如 "hi"）成功时不记录、不落库**。
 ///
-/// 之所以从"仅过滤 `/health` 探针"放宽到"全部 GET 成功"：真实客户端的健康/能力探测会高频轮询
-/// **模型列表**接口（issue #3498 的探针刷屏 + 面板中 `/v1/models` 200 连片淹没业务日志），
+/// 之所以抑制这类请求：真实客户端的健康/能力探测会高频轮询模型列表或定期发送 "hi" 探活探测，
 /// 这类请求没有对话语义、无业务价值，却会把真实业务日志挤出视图。
 ///
 /// 边界（刻意保守，绝不影响排障）：
-/// - 失败请求（非 2xx）**始终记录**，无论路径与方法；
-/// - 非 GET（POST 等真实业务请求）**始终记录**；
+/// - 失败请求（非 2xx）**始终记录**，无论路径与方法，报错始终展示；
+/// - 真实业务请求（多轮对话、带系统提示词、带工具、非探针文本等）**始终记录**；
 /// - 开关开启（或环境变量 `ABV_LOG_HEALTH_CHECKS` 为真）时全部记录并落库。
 fn should_skip_request_log(
     method: &str,
     status: axum::http::StatusCode,
     capture_enabled: bool,
+    request_body: Option<&str>,
+    upstream_body: Option<&str>,
 ) -> bool {
-    !capture_enabled && method.eq_ignore_ascii_case("GET") && status.is_success()
+    if capture_enabled || !status.is_success() {
+        return false;
+    }
+
+    if method.eq_ignore_ascii_case("GET") {
+        return true;
+    }
+
+    if method.eq_ignore_ascii_case("POST") {
+        return is_third_party_probe_request(request_body, upstream_body);
+    }
+
+    false
 }
 
 fn should_log_health_checks() -> bool {
@@ -887,12 +1099,18 @@ pub async fn monitor_middleware(
     let duration = start.elapsed().as_millis() as u64;
     let status = response.status().as_u16();
 
-    // 过滤噪音请求，避免客户端探针刷屏淹没真实业务日志 (Issue #3498 + `/v1/models` 轮询刷屏)
-    // 胶囊开关关闭时（默认）：所有 GET 成功请求不记录、不落库；失败请求与非 GET 业务请求始终记录。
+    // 过滤噪音请求，避免客户端探针刷屏淹没真实业务日志 (Issue #3498 + `/v1/models` 轮询刷屏 + 三方网关探活)
+    // 胶囊开关关闭时（默认）：所有 GET 成功请求与 POST 探针成功请求不记录、不落库；失败请求与非探针业务请求始终记录。
     // 详见 `should_skip_request_log` 的行为边界说明。
     let capture_health_enabled =
         state.monitor.is_capture_health_logs() || should_log_health_checks();
-    if should_skip_request_log(&method, response.status(), capture_health_enabled) {
+    if should_skip_request_log(
+        &method,
+        response.status(),
+        capture_health_enabled,
+        request_body_str.as_deref(),
+        upstream_request_body.as_deref(),
+    ) {
         return response;
     }
 
@@ -1897,7 +2115,9 @@ mod tests {
                     super::should_skip_request_log(
                         "GET",
                         StatusCode::from_u16(status).unwrap(),
-                        false
+                        false,
+                        None,
+                        None,
                     ),
                     "GET {status} {path} 应被抑制"
                 );
@@ -1905,7 +2125,13 @@ mod tests {
         }
 
         // 大写的 GET 同样识别
-        assert!(super::should_skip_request_log("get", StatusCode::OK, false));
+        assert!(super::should_skip_request_log(
+            "get",
+            StatusCode::OK,
+            false,
+            None,
+            None
+        ));
 
         // 失败请求始终记录（供排障）—— 无论路径与方法
         for status in [400, 401, 403, 404, 429, 500, 502, 503, 504] {
@@ -1913,16 +2139,18 @@ mod tests {
                 !super::should_skip_request_log(
                     "GET",
                     StatusCode::from_u16(status).unwrap(),
-                    false
+                    false,
+                    None,
+                    None,
                 ),
                 "GET {status} 必须记录"
             );
         }
 
-        // 非 GET 业务请求始终记录
+        // 非探针的普通 POST 业务请求始终记录
         for method in ["POST", "PUT", "PATCH", "DELETE", "post"] {
             assert!(
-                !super::should_skip_request_log(method, StatusCode::OK, false),
+                !super::should_skip_request_log(method, StatusCode::OK, false, None, None,),
                 "{method} 200 必须记录"
             );
         }
@@ -1933,10 +2161,213 @@ mod tests {
                 !super::should_skip_request_log(
                     method,
                     StatusCode::from_u16(status).unwrap(),
-                    true
+                    true,
+                    None,
+                    None,
                 ),
                 "开关开启时 {method} {status} 必须记录"
             );
         }
+    }
+
+    #[test]
+    fn test_should_skip_request_log_third_party_gateway_probes() {
+        use axum::http::StatusCode;
+
+        // 1. 用户真实 NewAPI / OneAPI 典型探针报文 (原始 OpenAI / Claude 格式)
+        let raw_probe_openai = r#"{
+            "model": "gemini-3.8-flash-high",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "hi"
+                }
+            ],
+            "tools": [],
+            "max_tokens": 16
+        }"#;
+
+        // 2. 转换后的上游 Gemini 统一中转报文
+        let upstream_probe_gemini = r#"{
+            "requestId": "agent/76533e612681bbc3/1792560854720/687cf1c1/1",
+            "sessionId": "4698154524659342629",
+            "model": "gemini-3.8-flash-high",
+            "generationConfig": {
+                "maxOutputTokens": 65536,
+                "thinkingConfig": {
+                    "includeThoughts": true,
+                    "thinkingBudget": -1
+                }
+            },
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [
+                        {
+                            "text": "hi"
+                        }
+                    ]
+                }
+            ],
+            "safetySettings": []
+        }"#;
+
+        // 默认关闭开关 (capture_enabled = false) 时，成功探针请求必须被跳过过滤
+        assert!(
+            super::should_skip_request_log(
+                "POST",
+                StatusCode::OK,
+                false,
+                Some(raw_probe_openai),
+                Some(upstream_probe_gemini),
+            ),
+            "成功的 POST 探针请求在开关关闭时必须被抑制"
+        );
+
+        // 即使仅有上游报文，也能协议无关精准识别并跳过
+        assert!(
+            super::should_skip_request_log(
+                "POST",
+                StatusCode::OK,
+                false,
+                None,
+                Some(upstream_probe_gemini),
+            ),
+            "仅基于上游 Gemini 探针报文在开关关闭时必须被抑制"
+        );
+
+        // 即使仅有客户端原始报文，也能兜底识别并跳过
+        assert!(
+            super::should_skip_request_log(
+                "POST",
+                StatusCode::OK,
+                false,
+                Some(raw_probe_openai),
+                None,
+            ),
+            "仅基于客户端原始报文在开关关闭时必须被抑制"
+        );
+
+        // 各种常见探针测试词汇变体均应被识别
+        for probe_word in [
+            "hello",
+            "ping",
+            "test",
+            "你好",
+            "您好",
+            "在吗",
+            "1+1=?",
+            "1+1",
+            "1 + 1 = 2",
+            "check",
+            "health",
+        ] {
+            let raw_var = format!(
+                r#"{{"model": "test", "messages": [{{"role": "user", "content": "{}"}}]}}"#,
+                probe_word
+            );
+            assert!(
+                super::should_skip_request_log("POST", StatusCode::OK, false, Some(&raw_var), None,),
+                "探针词 '{probe_word}' 应该被识别并抑制"
+            );
+        }
+
+        // 🌟 核心要求：“报错还是要显示”
+        // 即使是探针请求，只要状态码非 2xx（例如 400, 401, 403, 429, 500, 502, 503 等），绝不可跳过！
+        for err_status in [400, 401, 403, 404, 429, 500, 502, 503, 504] {
+            assert!(
+                !super::should_skip_request_log(
+                    "POST",
+                    StatusCode::from_u16(err_status).unwrap(),
+                    false,
+                    Some(raw_probe_openai),
+                    Some(upstream_probe_gemini),
+                ),
+                "状态码 {err_status} 失败的探针请求必须记录并展示报错"
+            );
+        }
+
+        // 🌟 核心要求：当开启“捕获健康检查”时，成功的探针请求也必须全部记录并落库
+        assert!(
+            !super::should_skip_request_log(
+                "POST",
+                StatusCode::OK,
+                true,
+                Some(raw_probe_openai),
+                Some(upstream_probe_gemini),
+            ),
+            "开启捕获健康检查时必须记录成功的探针"
+        );
+
+        // 🌟 防误杀：非探针的正常业务请求绝对不能被过滤
+        // 1. 多轮对话
+        let multi_turn_req = r#"{
+            "model": "gemini-3.8-flash",
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello"},
+                {"role": "user", "content": "how are you"}
+            ]
+        }"#;
+        assert!(
+            !super::should_skip_request_log(
+                "POST",
+                StatusCode::OK,
+                false,
+                Some(multi_turn_req),
+                None
+            ),
+            "多轮对话绝不可被误杀"
+        );
+
+        // 2. 带系统提示词 (system prompt)
+        let with_system_req = r#"{
+            "model": "gemini-3.8-flash",
+            "system": "You are a helpful coding assistant.",
+            "messages": [{"role": "user", "content": "hi"}]
+        }"#;
+        assert!(
+            !super::should_skip_request_log(
+                "POST",
+                StatusCode::OK,
+                false,
+                Some(with_system_req),
+                None
+            ),
+            "带系统提示词的请求绝不可被误杀"
+        );
+
+        // 3. 带工具 (tools)
+        let with_tools_req = r#"{
+            "model": "gemini-3.8-flash",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [{"type": "function", "function": {"name": "calculator"}}]
+        }"#;
+        assert!(
+            !super::should_skip_request_log(
+                "POST",
+                StatusCode::OK,
+                false,
+                Some(with_tools_req),
+                None
+            ),
+            "带工具调用的请求绝不可被误杀"
+        );
+
+        // 4. 真实用户问题（即使很简短但非探针词）
+        let real_question_req = r#"{
+            "model": "gemini-3.8-flash",
+            "messages": [{"role": "user", "content": "hi how are you today"}]
+        }"#;
+        assert!(
+            !super::should_skip_request_log(
+                "POST",
+                StatusCode::OK,
+                false,
+                Some(real_question_req),
+                None
+            ),
+            "真实用户问答绝不可被误杀"
+        );
     }
 }

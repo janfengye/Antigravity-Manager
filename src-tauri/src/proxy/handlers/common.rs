@@ -314,7 +314,12 @@ pub fn determine_retry_strategy_adaptive(
             // 包含明确的账号额度/周期枯竭字样（如 exceeded your current quota / insufficient_quota / weekly quota / credits 等）
             // 注意：Google 标准通用 429 的 "resource has been exhausted (e.g. check quota)" 属于无明确延迟的通用流控/TPM拒绝，
             // 严禁归入硬配额，否则将导致全池快速轮换遍历并引发全池 30 秒级联锁定 (#3506)。
-            let is_hard_quota_exhausted = parsed_delay.is_none()
+            // 但若明确包含 multi-day/跨小时超长重置延迟 (如 quotaResetDelay: 68h / retryDelay > 30min)，则明确属于周期硬配额耗尽。
+            let is_long_delay = parsed_delay
+                .as_ref()
+                .map(|d| d.actual_wait_ms() > 1800_000)
+                .unwrap_or(false);
+            let is_hard_quota_exhausted = (parsed_delay.is_none() || is_long_delay)
                 && (lower.contains("exceeded your current quota")
                     || lower.contains("insufficient_quota")
                     || lower.contains("credits")
@@ -322,8 +327,21 @@ pub fn determine_retry_strategy_adaptive(
                     || lower.contains("weekly quota")
                     || lower.contains("daily quota")
                     || lower.contains("per day")
+                    || lower.contains("individual quota")
+                    || lower.contains("quotaresetdelay")
                     || (lower.contains("quota_exhausted")
-                        && !lower.contains("resource has been exhausted")));
+                        && (!lower.contains("resource has been exhausted")
+                            || lower.contains("quotaresetdelay"))));
+
+            // 多账号环境下，账号级硬配额枯竭立即切换下一个账号（50ms 闪电切号，避免 CPU 空转并快速恢复响应）
+            if is_hard_quota_exhausted {
+                tracing::info!(
+                    "[Retry] Account hard quota exhausted detected on attempt {}/{}; fast rotating to next account in pool (50ms)",
+                    attempt + 1,
+                    pool_size
+                );
+                return RetryStrategy::FixedDelay(Duration::from_millis(50));
+            }
 
             // 请求级 429 防早退与极速失败保护 (无明确重置时间且非账号硬配额耗尽)：
             // 在多账号池中，第一轮 (attempt < pool_size) 允许全池每一个可用健康账号均获得 1 次 150ms 执行机会，
@@ -438,6 +456,28 @@ pub fn determine_retry_strategy_adaptive(
         // 其他错误：不重试
         _ => RetryStrategy::NoRetry,
     }
+}
+
+/// 上报并评估首包 TTFT 耗时到 QoS 守卫
+pub fn report_qos_ttft(
+    token_manager: &crate::proxy::token_manager::TokenManager,
+    account_id: &str,
+    session_id: Option<&str>,
+    ttft_ms: f64,
+    is_deep_thinking: bool,
+    input_tokens: Option<u32>,
+) {
+    let tier = token_manager
+        .get_account_tier(account_id)
+        .unwrap_or_else(|| "PRO".to_string());
+    token_manager.record_qos_ttft(
+        account_id,
+        session_id,
+        &tier,
+        ttft_ms,
+        is_deep_thinking,
+        input_tokens,
+    );
 }
 
 #[cfg(test)]
@@ -1332,5 +1372,65 @@ mod retry_after_tests {
             "invalid_grant: refresh token revoked"
         ));
         assert!(!is_transient_token_error("No available account with quota"));
+    }
+
+    #[test]
+    fn test_failure_status_tracker_prevents_429_leak_on_timeout() {
+        use reqwest::StatusCode;
+
+        // 场景 1：首轮遭遇 429，后续轮换遭遇 504 超时或网络异常
+        let mut tracker = FailureStatusTracker::default();
+        tracker.record(StatusCode::TOO_MANY_REQUESTS);
+        tracker.record(StatusCode::GATEWAY_TIMEOUT);
+        // 必须返回 504，绝不能残留 429 导致客户端指数退避 1 分钟冷冻
+        assert_eq!(tracker.final_status(), StatusCode::GATEWAY_TIMEOUT);
+
+        // 场景 2：所有账号全量 429
+        let mut all_429_tracker = FailureStatusTracker::default();
+        all_429_tracker.record(StatusCode::TOO_MANY_REQUESTS);
+        all_429_tracker.record(StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            all_429_tracker.final_status(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+    }
+
+    #[test]
+    fn test_determine_retry_strategy_adaptive_google_multi_day_quota_exhaustion() {
+        use reqwest::StatusCode;
+        use std::time::Duration;
+
+        let google_exhausted_body = r#"{
+            "error": {
+                "code": 429,
+                "message": "Resource has been exhausted (e.g. check quota).",
+                "status": "RESOURCE_EXHAUSTED",
+                "details": [
+                    {
+                        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                        "reason": "QUOTA_EXHAUSTED",
+                        "domain": "googleapis.com",
+                        "metadata": {
+                            "quotaResetDelay": "68h25m14.683204506s",
+                            "service": "cloudcode-pa.googleapis.com"
+                        }
+                    },
+                    {
+                        "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                        "retryDelay": "246314.683204506s"
+                    }
+                ]
+            }
+        }"#;
+
+        // 多账号环境下，明确标记为硬配额枯竭，立即切换下一账号 (50ms)
+        let strategy =
+            determine_retry_strategy_adaptive(429, google_exhausted_body, None, false, true, 0, 5);
+        match strategy {
+            RetryStrategy::FixedDelay(d) => {
+                assert_eq!(d, Duration::from_millis(50));
+            }
+            other => panic!("Expected FixedDelay(50ms), got {:?}", other),
+        }
     }
 }

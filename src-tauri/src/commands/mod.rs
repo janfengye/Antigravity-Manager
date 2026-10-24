@@ -29,14 +29,49 @@ pub async fn list_accounts(
         .await
         .unwrap_or_else(|_| Err("Task panicked".to_string()))?;
 
-    // [FIX] Blend in-memory TokenManager rate limit status into the UI quota display
-    let instance_lock = proxy_state.instance.read().await;
-    if let Some(instance) = instance_lock.as_ref() {
+    // [FIX #3726] 冷启动零等待：优先以 try_read 非阻塞获取 TokenManager 运行时状态
+    // 若服务启动初期持有写锁，绝不阻塞 list_accounts 磁盘列表向前端的毫秒级直出
+    let token_manager = {
+        if let Ok(instance_lock) = proxy_state.instance.try_read() {
+            if let Some(instance) = instance_lock.as_ref() {
+                Some(instance.token_manager.clone())
+            } else if let Ok(admin_lock) = proxy_state.admin_server.try_read() {
+                admin_lock
+                    .as_ref()
+                    .map(|a| a.axum_server.token_manager.clone())
+            } else {
+                None
+            }
+        } else if let Ok(admin_lock) = proxy_state.admin_server.try_read() {
+            admin_lock
+                .as_ref()
+                .map(|a| a.axum_server.token_manager.clone())
+        } else {
+            None
+        }
+    };
+
+    if let Some(tm) = token_manager {
         for account in &mut accounts {
-            if let Some(reset_secs) = instance
-                .token_manager
-                .get_rate_limit_reset_seconds(&account.id)
-            {
+            let qos_state = tm.qos_guardian.get_state(&account.id);
+            account.qos_status = match qos_state {
+                crate::proxy::qos_guardian::AccountQoSState::Suspicious { .. } => {
+                    Some("suspicious".to_string())
+                }
+                crate::proxy::qos_guardian::AccountQoSState::Jailed { .. } => {
+                    Some("jailed".to_string())
+                }
+                crate::proxy::qos_guardian::AccountQoSState::Probing { .. } => {
+                    Some("probing".to_string())
+                }
+                crate::proxy::qos_guardian::AccountQoSState::HalfOpen { .. } => {
+                    Some("half_open".to_string())
+                }
+                crate::proxy::qos_guardian::AccountQoSState::Healthy => None,
+            };
+            account.qos_reset_seconds = tm.qos_guardian.get_jailed_remaining_seconds(&account.id);
+
+            if let Some(reset_secs) = tm.get_rate_limit_reset_seconds(&account.id) {
                 if reset_secs > 0 {
                     let reset_iso = chrono::DateTime::<chrono::Utc>::from_timestamp(
                         chrono::Utc::now().timestamp() + reset_secs as i64,
@@ -57,6 +92,39 @@ pub async fn list_accounts(
     }
 
     Ok(accounts)
+}
+
+/// 手动解除账号的小黑屋限制 (QoS 隔离与冷却)
+#[tauri::command]
+pub async fn release_account_qos_jail(
+    account_id: String,
+    proxy_state: tauri::State<'_, crate::commands::proxy::ProxyServiceState>,
+) -> Result<(), String> {
+    let token_manager = {
+        if let Ok(instance_lock) = proxy_state.instance.try_read() {
+            if let Some(instance) = instance_lock.as_ref() {
+                Some(instance.token_manager.clone())
+            } else if let Ok(admin_lock) = proxy_state.admin_server.try_read() {
+                admin_lock
+                    .as_ref()
+                    .map(|a| a.axum_server.token_manager.clone())
+            } else {
+                None
+            }
+        } else if let Ok(admin_lock) = proxy_state.admin_server.try_read() {
+            admin_lock
+                .as_ref()
+                .map(|a| a.axum_server.token_manager.clone())
+        } else {
+            None
+        }
+    };
+
+    if let Some(tm) = token_manager {
+        tm.release_account_qos_jail(&account_id);
+    }
+
+    Ok(())
 }
 
 /// 添加账号
@@ -82,6 +150,23 @@ pub async fn add_account(
     .await;
 
     Ok(account)
+}
+
+/// [NEW #3726] 批量异步高性能导入账号
+#[tauri::command]
+pub async fn batch_import_accounts(
+    app: tauri::AppHandle,
+    entries: Vec<crate::models::ImportAccountEntry>,
+) -> Result<crate::models::BatchImportResult, String> {
+    let result = crate::modules::account::batch_import_accounts_logic(Some(&app), entries).await?;
+
+    // 批量导入完成后，单次重载代理池
+    let _ = crate::commands::proxy::reload_proxy_accounts(
+        app.state::<crate::commands::proxy::ProxyServiceState>(),
+    )
+    .await;
+
+    Ok(result)
 }
 
 /// 删除账号
@@ -449,8 +534,16 @@ pub async fn save_config(
         tracing::warn!("Failed to apply internal error log retention: {}", e);
     }
 
-    // 通知托盘配置已更新
+    // 通知所有窗口配置已更新，并跨窗口广播主题与语言变更
     let _ = app.emit("config://updated", ());
+    let _ = app.emit(
+        "app://theme-changed",
+        serde_json::json!({ "theme": config.theme.clone() }),
+    );
+    let _ = app.emit(
+        "app://language-changed",
+        serde_json::json!({ "language": config.language.clone() }),
+    );
 
     // 同步全局内存配置（无论反代服务当前是否处于运行状态）
     crate::modules::hub_version::update_hub_fingerprint(
@@ -1075,12 +1168,47 @@ pub async fn migrate_data_dir(new_path: String, clean_source: bool) -> Result<()
 
 /// 显示主窗口。登录项的免打扰启动只跳过这一次自动显示。
 #[tauri::command]
-pub async fn show_main_window(window: tauri::Window) -> Result<(), String> {
+pub async fn show_main_window(app: tauri::AppHandle) -> Result<(), String> {
     if crate::modules::startup_quiet::take() {
         tracing::info!("Skipped the automatic first window show for a quiet login launch");
         return Ok(());
     }
-    window.show().map_err(|e| e.to_string())
+    let app_handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let _ = crate::modules::lightweight::exit_lightweight_mode(&app_handle);
+        let _ = app_handle.emit("tray://show-window", ());
+    });
+    Ok(())
+}
+
+/// 从迷你悬浮窗或其他入口原子化安全切换回主控制台窗口
+#[tauri::command]
+pub async fn switch_to_main_window(app: tauri::AppHandle) -> Result<(), String> {
+    // 1. 若迷你窗未钉在桌面，则呼出主控制台时先在后端安全收起，避免前端 await 挂起与失焦事件竞态
+    if !crate::modules::tray::is_mini_view_pinned() {
+        if let Some(mini) = app.get_webview_window("mini") {
+            let _ = mini.hide();
+        }
+        crate::modules::tray::set_mini_view_active(false);
+    }
+
+    // 2. 调度到主线程执行 exit_lightweight_mode，彻底消除跨线程窗口操作与消息泵死锁
+    let app_handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let _ = crate::modules::lightweight::exit_lightweight_mode(&app_handle);
+        let _ = app_handle.emit("tray://show-window", ());
+    });
+    Ok(())
+}
+
+/// 呼出/切换迷你悬浮窗（从主控制台导航栏或其他入口调用）
+#[tauri::command]
+pub async fn show_mini_view(app: tauri::AppHandle) -> Result<(), String> {
+    let app_handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        crate::modules::tray::handle_tray_click(&app_handle, None);
+    });
+    Ok(())
 }
 
 /// 设置窗口主题（用于同步 Windows 标题栏按钮颜色）
@@ -1577,6 +1705,87 @@ pub async fn query_transit_info(url: String, key: String) -> Result<String, Stri
     } else {
         Err(format!("HTTP {}: {}", status, text))
     }
+}
+
+/// 优雅关闭网关服务并退出应用
+#[tauri::command]
+pub async fn exit_app(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    tauri::async_runtime::spawn(async move {
+        tracing::info!("[Command] 退出应用触发，开始全面清理服务与端口...");
+
+        let state = app.state::<crate::commands::proxy::ProxyServiceState>();
+        let cf_state = app.state::<crate::commands::cloudflared::CloudflaredState>();
+
+        // 1. 终止 cloudflared 隧道子进程
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(500), cf_state.stop()).await;
+
+        // 2. 停止 Admin Server（关闭 TCP 监听器和所有活动连接）
+        if let Ok(mut lock) = tokio::time::timeout(
+            std::time::Duration::from_millis(1000),
+            state.admin_server.write(),
+        )
+        .await
+        {
+            if let Some(admin) = lock.take() {
+                admin.stop().await;
+            }
+        }
+
+        // 3. 停止业务代理实例及后台任务
+        if let Ok(mut lock) = tokio::time::timeout(
+            std::time::Duration::from_millis(1000),
+            state.instance.write(),
+        )
+        .await
+        {
+            if let Some(inst) = lock.take() {
+                let _ = tokio::time::timeout(
+                    std::time::Duration::from_millis(500),
+                    inst.token_manager
+                        .graceful_shutdown(std::time::Duration::from_millis(400)),
+                )
+                .await;
+                inst.axum_server.set_running(false).await;
+                inst.axum_server.stop();
+            }
+        }
+
+        // 4. 给予底层套接字彻底注销的微小缓冲，然后干净退出进程
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        std::process::exit(0);
+    });
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_mini_view_pinned(pinned: bool) {
+    crate::modules::tray::set_mini_view_pinned(pinned);
+}
+
+#[tauri::command]
+pub fn is_mini_view_pinned() -> bool {
+    crate::modules::tray::is_mini_view_pinned()
+}
+
+#[tauri::command]
+pub fn set_mini_view_active(active: bool) {
+    crate::modules::tray::set_mini_view_active(active);
+}
+
+/// 安全收起/关闭迷你悬浮窗
+#[tauri::command]
+pub fn hide_mini_view(app: tauri::AppHandle) {
+    if let Some(mini) = app.get_webview_window("mini") {
+        let _ = mini.hide();
+    }
+    crate::modules::tray::set_mini_view_active(false);
+}
+
+#[tauri::command]
+pub fn update_tray_for_account(app: tauri::AppHandle, account_id: Option<String>) {
+    crate::modules::tray::set_tray_selected_account_id(account_id);
+    crate::modules::tray::update_tray_menus(&app);
 }
 
 #[cfg(test)]

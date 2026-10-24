@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> 专业级 AI 账号管理与协议代理系统 (v4.9.8)
+> 专业级 AI 账号管理与协议代理系统 (v5.0.0)
 
 <div align="center">
   <img src="public/icon.png" width="100" height="100" alt="Antigravity Tools Logo">
@@ -11,7 +11,7 @@
       <img src="https://img.shields.io/github/v/release/lbjlaq/Antigravity-Manager?color=blue&style=flat-square" alt="GitHub release">
     </a>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.9.8-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-5.0.0-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -321,6 +321,27 @@ export ANTHROPIC_BASE_URL="http://127.0.0.1:8045"
 claude
 ```
 
+### 终端原生切号工具 (`at` / `antigravity-tools`) 使用说明
+Antigravity 内置原生轻量级 CLI 切号套件，专为终端开发者打造，支持秒级轮换系统 Keychain 账号，并可在切换后自动接续 `agy` 交互式会话：
+
+```bash
+# 1. 查看所有账号列表、当前激活指示符 (👉) 与状态
+at list
+
+# 2. 查看当前在 agy CLI (Keychain)、IDE 分别生效的账号邮箱
+at current
+
+# 3. 切换账号 (支持序号、邮箱完整或前缀、账号别名)
+at switch 2                      # 切到序号 #2 的账号
+at switch work@gmail.com         # 按邮箱切号
+at switch work                   # 按邮箱前缀模糊切号
+at switch "工作号"               # 按账号别名切号
+at switch                        # 无参自动环形轮换 (Round-Robin) 至下一可用账号
+
+# 4. 切号并自动接续 agy 会话 (恢复上一次问答上下文)
+at switch 2 -c                   # -c 等价于 --continue
+```
+
 ### 如何接入 OpenCode?
 1.  进入 **API 反代**页面 → **外部 Providers** → 点击 **OpenCode Sync** 卡片。
 2.  点击 **Sync** 按钮，将自动生成 `~/.config/opencode/opencode.json` 配置文件：
@@ -494,7 +515,7 @@ response = client.chat.completions.create(
 
 ## 📝 更新日志
 
-> 最新版本 **v4.9.8**（2026-10-17）：Antigravity 经典款配额耗尽/低于阈值全自动无感热切换与双核算力池监控（Ref #3509）；原生全面演进支持 Antigravity CLI (`agy`)，自动 Shell Wrapper 注入与模型思考档位智能拆解，三端（经典款 / IDE / CLI）活动账号独立探查与情境化多端徽章（Ref #3686, Ref #3630）；403 错误详情全量捕获与动作链接提取（人机验证/申诉），临时验证与永久禁用严格解耦，配额恢复全自动闭环自愈（Ref #3630, Ref #3684）；对齐 Claude Code 2.1.301 协议规范与 Agent SDK 开场白防 WAF 身份清洗，全链路下行注入 `request-id`，录入 Claude 5 全系 8 个核心模型（PR #3689, Ref #3684, Ref #3686）；JSON Schema 活跃引用追踪阻断循环展开指数爆炸杜绝 Linux VPS OOM (SIGKILL 137) 崩溃，规范化数组非法 properties 与终态 ARRAY 守卫规避 Gemini 400 报错，推理/思考模型流式首包 Peek 超时自适应放宽至 60s/90s/120s 杜绝 30s 误杀，账号池两阶段原子同步加载彻底消除并发 503 闪断，限流防倒退校验与 RPC details 全量遍历（PR #3694, Fixes #3690, Ref #3682, Ref #3693）；彻底剔除 100% 报 429 的 Prod 生产公共端点，流式接口首包超时保底放宽至 120s，Responses 格式数组 input 完整还原多轮角色边界，根除 0ms 乐观重置风暴（PR #3691, PR #3672, PR #3687, PR #3685, Fixes #3506, Ref #3525）；流量监控报文详情重构为 Postman 风格单 Tab 视窗、正文「结构化拆分」与「原始代码」双视图、两列键值对表格与 Bearer 掩码脱敏、标准双链路 HAR 1.2 导出，全量覆盖 12 种系统语言（感谢 @cubelikeplayDaniel, @EricZhou05, @blackdm666, @jeikl）。
+> 最新版本 **v5.0.0**（2026-10-24）：基于纯净同侪校准与阶梯探针的自适应 QoS 调度系统（TTFT 毫秒感知、纯净基线比对、瞬态 Suspicious 打标、粘性会话即刻解绑与后台自愈阶梯探针，解决上游静默降级排队卡死）(Fixes #3720, PR #3725)；官方权威模型全景升级、分级思考传输协议（thinkingLevel vs thinkingBudget）与 Argon 独立配额防穿透隔离，彻底解耦 quotaInfo 过滤门禁消除 503 缺陷，清退废弃代号并标准化各协议上下文与最大输出规格 (Fixes #3735, Fixes #3737)；OpenAI Responses API 结构化输出（responseSchema / text.format）规范化支持、思考预算收敛至 1024 杜绝 30s 硬超时、流水线工具冲突统一治理与出站受控整包解壳 (Fixes #3710, Ref #3723)；Mini 桌面悬浮视窗 macOS 原生真透明与拖拽置顶权限、深浅模式与 12 语种跨窗口毫秒级无感同步、原生 UI 主线程调度彻底根除 Win32 消息循环死锁，首帧同步判定与 React Router 404 兜底 (Fixes #3733, Ref #3718, #3721, Ref #3738, Ref #3741)；官方 Base64 哨兵规范对齐、Claude 全链路 0 哨兵与并发工具严格留空、异构工具切回 Gemini 赋予免检通行证且哨兵零落库；流式巨型工具调用缓冲自动跃迁至 Transition 宽限期赋予 180s 保护，上游响应头看门狗收敛至 30s，接入 FailureStatusTracker 根除 Claude 429 状态码泄漏 (Fixes #3739, Fixes #3713, Ref #3506, Ref #3525, PR #3740, PR #3714)；异步高性能批量流式导入与索引持久化重构（494 账号导入耗时由 28 分钟压缩至 15~20 秒，提速超 60 倍），冷启动读锁解耦秒级直出与本地快照首帧 0ms 水合消除空态闪烁 (Fixes #3726)；系统托盘富文本悬停配额卡片与 macOS 原生状态栏配额标题，Linux 窗口抢占置顶与自动拉起根治，解除经典款切号对 CLI 凭据的覆盖冲突 (Fixes #3719, Fixes #3728, Fixes #3686)；代理池专属绑定防 Direct 源站泄漏加固，集成 Hermes Agent / 本地探针端点（/props, /version），Gemini 协议支持标准 URL Query 传参鉴权，Web/Headless 模式保存配置全量内存热重载（感谢 @cubelikeplayDaniel, @jeikl）。
 
 👉 **[查看完整更新日志 CHANGELOG.md →](CHANGELOG.md)**
 

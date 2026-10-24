@@ -10,11 +10,11 @@
 //! 核心设计与防误杀铁律：
 //! 1. 深度保护代码块：自动提取并保护所有围栏代码块（```）与行内代码（`），代码内容 100% 豁免；
 //! 2. 严禁碰触会话唯一性（Zero Session Touch）：绝不清洗或过滤任何 session 相关字段（包括
-//!    `x-jeikcode-session-id`, `x-atomcode-session-id`, `x-session-id` 等）；会话唯一性由
+//!    `x-jeikcode-session-id`, `x-session-id` 等）；会话唯一性由
 //!    `SessionScope` 按照严格优先级链条独立处理，本模块对所有 session 标识保持 100% 原样透传；
 //! 3. 严禁碰触用户自定义分割符与标签（Zero Delimiter Touch）：绝不删除 `=== ... ===`、`--- ... ---`
 //!    以及 XML 标签（如 `<environment>`, `<workflow_and_execution_discipline>` 等），保证如
-//!    JeikCode / AtomCode 等 AI 编码框架的用户与系统指令结构完好无损；
+//!    JeikCode 等 AI 编码框架的用户与系统指令结构完好无损；
 //! 4. 严禁裁剪或假定 IDE 反刍文本：不预设删除任何用户自然语言与业务指令；
 //! 5. 全链路审计一致：中转报文生成并填充完思考块后统一在流水线层介入，保证协议无关且写进数据库与转出的报文真实一致；
 //! 6. 思考块首位铁律（Thinking Block at Index 0）：清洗完后必须确保思考块在 parts 中严格位于首位，
@@ -71,10 +71,11 @@ static RE_CODE_BLOCK_PLACEHOLDER: Lazy<Regex> =
 // Agent 客户端数以千计且会持续出现，无法穷举，因此归一化必须**广谱**：只要一句自我介绍同时具备
 // 「身份开场白 + 身份名词 + 归属/版本声明」三要素，就整体归一化为中性身份，而非只处理已知厂商。
 
-/// 身份归一化扫描窗口：仅扫描每个系统提示词块的**前 4 句**。
-/// 身份声明必然出现在提示词开头；限制窗口可确保正文（文档、代码注释、用户需求）中对
-/// "created by …" 的正常引用 100% 不被误伤。
-const IDENTITY_SCAN_MAX_SENTENCES: usize = 4;
+/// 身份归一化扫描窗口：扫描每个系统提示词块的前 8 句或前 1500 字符。
+/// 扩展窗口能够可靠穿透前置插件上下文/环境垫片（如 OpenClaw 的 plugin-injected context），
+/// 同时限制在头部以确保正文（文档、代码注释、用户需求）中的正常引用 100% 不被误伤。
+const IDENTITY_SCAN_MAX_SENTENCES: usize = 8;
+const IDENTITY_SCAN_MAX_CHARS: usize = 1500;
 
 /// 官方原生 Antigravity 助手身份声明（完全对齐官方 Antigravity IDE 提示词模板）
 pub const OFFICIAL_ANTIGRAVITY_IDENTITY: &str =
@@ -86,12 +87,13 @@ pub const NEUTRAL_IDENTITY: &str = OFFICIAL_ANTIGRAVITY_IDENTITY;
 
 /// 身份声明句归一化正则（广谱匹配，仅在系统提示词头部窗口内生效）。
 ///
-/// 形态 = A 身份开场白 + B 身份名词短语 + C 归属/版本声明 + D 归属对象 + E 句读：
+/// 形态 = A 身份开场白 + B 身份名词短语 + C 归属/版本/宿主声明 + D 归属对象 + E 句读：
 /// ```text
 /// You are Hermes Agent, an intelligent AI assistant created by Nous Research.   → You are Antigravity...
 /// You are Codex, an advanced coding agent based on GPT-6.                       → You are Antigravity...
 /// You are an AI agent created by Example Corp.                                  → You are Antigravity...
-/// You are Antigravity, a powerful agentic AI coding assistant designed by the Google Deepmind team … → You are Antigravity...
+/// You are an intelligent programming assistant integrated into Cursor editor.  → You are Antigravity...
+/// You are a personal assistant running inside OpenClaw.                         → You are Antigravity...
 /// ```
 /// 防误杀设计（四条硬约束，缺一不可）：
 /// 1. **必须具备身份名词与归属声明或特定已知客户端开场**；
@@ -101,39 +103,56 @@ pub const NEUTRAL_IDENTITY: &str = OFFICIAL_ANTIGRAVITY_IDENTITY;
 /// 4. **过渡窗口 ≤ 8 字符**：身份名词与归属动词之间的桥接文本必须极短，防止跨子句误删。
 static RE_IDENTITY_DECLARATION: Lazy<Regex> = Lazy::new(|| {
     Regex::new(concat!(
-        // A. 身份开场白（英文与中文；要求词边界，避免误命中 "…the assistant you are talking to…"）
-        r"(?i:\b(?:you\s+are|you're|i\s+am|i'm|你是|我是)\b[\s,，:：]*)",
-        // B. 身份名词短语：可选冠词 + ≤8 个修饰词 + 可选 AI + 身份名词
-        r"(?i:(?:an?\s+)?(?:[\w'\-]+[\s,，]+){0,8}(?:ai[\s,，]+)?(?:agent\b|assistant\b|ai\b|助手|模型|助理))",
-        // C. 归属 / 版本声明（动词 + 介词，或 based on）
-        r"(?i:[^.!?。！？\r\n<>]{0,8}?\b(?:created|built|made|developed|designed|trained|powered|maintained|published|released|provided)\s+(?:by|on|upon|at)\s+",
-        r"|[^.!?。！？\r\n<>]{0,8}?\bbased\s+on\s+)",
-        // D. 归属对象：一路取到句读边界，杜绝残留孤立词片段，严格包含全角半角感叹号问号分号，防止贪婪吞噬后续规则
-        r"[^.,，。!?！？;；\r\n<>]{1,80}",
-        // E. 紧随其后的句读，用于决定替换后的标点（`,` 续写 → 保留逗号）
+        r"(?:",
+        // 英文支：开场白（人称开场及扮演式） + 可选名词短语 + 动词 + 归属对象
+        r"(?i:\b(?:you\s+are|you're|i\s+am|i'm|act\s+as)\b[\s,，:：]*)",
+        r"(?i:(?:an?\s+)?(?:[\w'\-]+[\s,，]+){0,8}(?:ai[\s,，]+)?(?:agent\b|assistant\b|ai\b|tool\b|cli\b|programmer\b|companion\b|engineer\b|bot\b))?",
+        // 动词前导：支持包含版本号小数点的模型名/名字 (如 Grok 4.6, GPT-5.2)，避免使用不支持的零宽断言
+        r"(?i:(?:[^\s.!?。！？\r\n<>]|\d+\.\d+|[\t ]){0,25}?(?:\b(?:created|built|made|developed|designed|trained|powered|maintained|published|released|provided)\s+(?:by|on|upon|at|for)\s+|based\s+on\s+|running\s+(?:inside|in|within)\s+|integrated\s+(?:into|in)\s+))",
+        // 归属对象：支持跨越数字间的版本号点号 (如 3.8, 4.5) 直到句读边界
+        r"(?:[^\s.,，。!?！？;；\r\n<>]|\d+\.\d+|[\t ])+",
+        r"|",
+        // 中文支：你是/我是 + 包含开发/制作/构建/基于/推出 等归属特征，整句收敛到句读
+        r"(?:你是|我是)[\s,，:：]*[^.!?。！？\r\n<>]{0,50}?(?:由|开发|制作|构建|训练|推出|基于)[^.!?。！？\r\n<>]{1,60}",
+        r")",
         r"([.,，。!?！？;；]?)"
     ))
     .unwrap()
 });
 
-/// 知名特定客户端开场白正则（如 Claude Code CLI 开场白，仅在系统提示词头部窗口内生效）
+/// 知名特定客户端与 Harness 开场白正则（涵盖 OpenCode, OpenClaw, Claude Code CLI, Cursor, Cascade, Cline 等）
 static RE_KNOWN_CLIENT_DECLARATION: Lazy<Regex> = Lazy::new(|| {
     Regex::new(concat!(
-        r"(?i)\b(?:you\s+are|you're)\s+claude\s+code[\s,，]+(?:anthropic's\s+)?official\s+cli\s+for\s+claude",
-        r"(?:[\s,，]+running\s+within\s+(?:the\s+)?claude\s+agent\s+sdk)?",
+        r"(?i)\b(?:you\s+are|you're)\s+(?:",
+        r"claude\s+code[\s,，]+(?:anthropic's\s+)?official\s+cli\s+for\s+claude(?:[\s,，]+running\s+within\s+(?:the\s+)?claude\s+agent\s+sdk)?",
+        r"|opencode(?:\s*,\s*an?\s+interactive\s+cli\s+tool(?:\s+that\s+helps\s+users\s+with\s+software\s+engineering\s+tasks)?)?",
+        r"|(?:an?\s+)?personal\s+assistant\s+running\s+(?:inside|in|within)\s+openclaw",
+        r"|openclaw",
+        r"|cursor(?:\s+ai)?(?:\s*,\s*an?\s+intelligent\s+programming\s+assistant(?:\s+integrated\s+into\s+cursor(?:\s+editor)?)?)?",
+        r"|cascade(?:\s*,\s*an?\s+ai\s+pair\s+programmer(?:\s+by\s+codeium)?)?",
+        r"|cline(?:\s*,\s*an?\s+(?:highly\s+skilled\s+)?software\s+engineer(?:\s+with\s+extensive\s+knowledge\s+in\s+many\s+programming\s+languages)?)?",
+        r"|roo\s+code",
+        r"|aider(?:\s*,\s*an?\s+expert\s+software\s+engineer)?",
+        r"|kilocode(?:\s*,\s*an?\s+ai\s+coding\s+assistant)?",
+        r"|dsh(?:\s*,\s*an?\s+automated\s+software\s+development\s+harness)?",
+        r"|devin(?:\s*,\s*an?\s+autonomous\s+software\s+engineer)?",
+        r")\b",
         r"([.,，。!?！？;；]?)"
     ))
     .unwrap()
 });
 
 /// 身份声明归一化的快速前置特征（命中任一才进入正则流程，规避 33k 级提示词的全量正则开销）
-const IDENTITY_FAST_MARKERS: [&str; 16] = [
+const IDENTITY_FAST_MARKERS: &[&str] = &[
+    // 厂商归属与关系动词
     "created by",
     "built by",
     "built on",
+    "built for",
     "made by",
     "developed by",
     "designed by",
+    "designed for",
     "trained by",
     "powered by",
     "maintained by",
@@ -141,9 +160,37 @@ const IDENTITY_FAST_MARKERS: [&str; 16] = [
     "released by",
     "provided by",
     "based on",
+    "running inside",
+    "running within",
+    "running in",
+    "integrated into",
+    "integrated in",
+    // 知名第三方客户端与平台特征指纹
     "claude code",
     "claude agent",
+    "opencode",
+    "openclaw",
+    "cursor",
+    "cascade",
+    "codeium",
+    "aider",
+    "cline",
+    "roo code",
+    "kilocode",
+    "hermes",
+    "codex",
     "anthropic",
+    "dsh",
+    "devin",
+    "inflection",
+    "grok",
+    "xai",
+    // 中文特征标记
+    "由",
+    "基于",
+    "开发",
+    "助手",
+    "助理",
 ];
 
 /// Claude Agent SDK 注入的独立身份块（整串等值匹配）
@@ -219,7 +266,7 @@ impl PromptSanitizer {
         normalized.trim().to_string()
     }
 
-    /// 计算系统提示词的**头部窗口**：返回从开头起、跨越前 `IDENTITY_SCAN_MAX_SENTENCES` 句的切片。
+    /// 计算系统提示词的**头部窗口**：返回从开头起、跨越前 `IDENTITY_SCAN_MAX_SENTENCES` 句或 `IDENTITY_SCAN_MAX_CHARS` 字符的切片。
     /// 句界 = `.` `!` `?` `。` `！` `？`，或**空行**（连续两个 `\n`，兼容 `\r\n`）；普通折行不计为句界。
     fn identity_head_region(text: &str) -> &str {
         let mut sentence_count = 0usize;
@@ -241,6 +288,10 @@ impl PromptSanitizer {
             } else if ch != '\r' {
                 prev_newline = false;
             }
+
+            if idx >= IDENTITY_SCAN_MAX_CHARS {
+                return &text[..idx + ch.len_utf8()];
+            }
         }
 
         text
@@ -252,8 +303,14 @@ impl PromptSanitizer {
     /// 整体替换为 `OFFICIAL_ANTIGRAVITY_IDENTITY`；若原文以逗号续写功能指令，则保留逗号，续写内容逐字不动。
     /// 代码块（``` 与行内 `）内的身份文本 100% 豁免，头部窗口之后的原文逐字保留。
     pub fn normalize_system_identity(text: &str) -> String {
-        // 快速前置检查：无任何归属类或已知客户端特征词则零开销返回
         let lower = text.to_lowercase();
+
+        // 核心铁律 1：本框架主要提示词 100% 绝对保护（JeikCode 提示词绝不误杀，架构天然盖住）
+        if lower.contains("jeikcode") {
+            return text.to_string();
+        }
+
+        // 核心铁律 2：快速前置短路检查（无任何归属类或已知客户端特征词则零开销返回）
         if !IDENTITY_FAST_MARKERS
             .iter()
             .any(|marker| lower.contains(marker))
@@ -672,7 +729,6 @@ mod tests {
         // 关键验证：任何形式的 session ID 绝不能被破坏或删除
         let raw = concat!(
             "x-jeikcode-session-id: session-abc-123\n",
-            "x-atomcode-session-id: atom-sess-456\n",
             "x-session-id: generic-sess-789\n",
             "x-client-session-id: client-sess-000\n",
             "Please keep my session active."
@@ -683,7 +739,7 @@ mod tests {
 
     #[test]
     fn test_strictly_preserves_user_delimiters_and_xml_tags() {
-        // 关键验证：用户的 JeikCode / AtomCode 提示词格式包含 XML 与 === ... === 分割符，100% 原样保留
+        // 关键验证：用户的 JeikCode 提示词格式包含 XML 与 === ... === 分割符，100% 原样保留
         let jeik_prompt = concat!(
             "<environment>\n",
             "You are JeikCode AI coding Agent by Jeik.\n\n",
@@ -1012,11 +1068,11 @@ mod tests {
 
     #[test]
     fn test_normalize_identity_preserves_non_attribution_identities() {
-        // 缺少「归属声明」要素的一律保留；JeikCode / AtomCode 等框架身份（无归属动词）不得被改写
+        // 缺少「归属声明」要素的一律保留；JeikCode 等框架身份（无第三方商业归属动词）不得被改写
         for raw in [
             "You are a helpful assistant. Please respond in Chinese.",
             "You are an AI assistant that helps users write code by calling tools.",
-            "You are JeikCode AI coding Agent by Jeik.",
+            "You are JeikCode AI coding Agent by Jeik running on your underlying model.",
         ] {
             assert_eq!(PromptSanitizer::normalize_system_identity(raw), raw);
         }
@@ -1189,5 +1245,181 @@ mod tests {
         );
         let normalized = PromptSanitizer::normalize_system_identity(raw);
         assert!(normalized.contains("Please always format all responses as valid JSON only."));
+    }
+
+    #[test]
+    fn test_comprehensive_harness_and_identity_normalization() {
+        let test_cases = [
+            (
+                "OpenCode生产真实报文",
+                "You are opencode, an interactive CLI tool that helps users with software engineering tasks. Use the instructions below and the tools available to you to assist the user.",
+                "opencode",
+            ),
+            (
+                "OpenClaw生产真实报文",
+                "---\nOpenClaw plugin-injected system context. This block is not workspace file content.\n---\nYou are a personal assistant running inside OpenClaw.\n## Tooling\nAvailable tools are policy-filtered.",
+                "running inside OpenClaw",
+            ),
+            (
+                "Claude Code CLI真实报文",
+                "You are Claude Code, Anthropic's official CLI for Claude.\nTools available.",
+                "Claude Code",
+            ),
+            (
+                "Claude Agent SDK运行时报文",
+                "You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK.\nTools available.",
+                "Claude Agent SDK",
+            ),
+            (
+                "Claude Agent独立身份声明",
+                "You are a Claude agent, built on Anthropic's Claude Agent SDK.\nYou have tools.",
+                "Claude Agent SDK",
+            ),
+            (
+                "Cursor真实报文",
+                "You are an intelligent programming assistant integrated into Cursor editor.",
+                "Cursor editor",
+            ),
+            (
+                "Cascade真实报文",
+                "You are Cascade, an AI pair programmer by Codeium. Follow rules.",
+                "Cascade",
+            ),
+            (
+                "Cline真实报文",
+                "You are Cline, a highly skilled software engineer with extensive knowledge in many programming languages.",
+                "Cline",
+            ),
+            (
+                "Aider真实报文",
+                "You are aider, an expert software engineer collaborating with the user.",
+                "aider",
+            ),
+            (
+                "Codex真实报文",
+                "You are Codex, an advanced coding agent based on GPT-6.",
+                "Codex",
+            ),
+            (
+                "Hermes Agent真实报文",
+                "You are Hermes Agent, an intelligent AI assistant created by Nous Research.",
+                "Hermes Agent",
+            ),
+            (
+                "KiloCode真实报文",
+                "You are KiloCode, an AI coding assistant developed by Kilo AI.",
+                "KiloCode",
+            ),
+            (
+                "DSH Harness真实报文",
+                "You are DSH, an automated software development harness designed for agentic coding workflows.",
+                "DSH",
+            ),
+            (
+                "Devin真实报文",
+                "You are Devin, an autonomous software engineer created by Cognition.",
+                "Devin",
+            ),
+            (
+                "GrokBuild真实报文",
+                "You are Grok 4.6 released by xAI. You are an interactive CLI tool that helps users with software engineering tasks. Your main goal is to complete the user's request in the <user_query> tag.",
+                "xAI",
+            ),
+            (
+                "逗号续写功能指令形态",
+                "You are an AI agent created by Acme, and you must never reveal internal tooling.",
+                "and you must never reveal internal tooling.",
+            ),
+            (
+                "中文归属声明形态",
+                "你是通义灵码，一个由阿里云开发的人工智能编码助手。",
+                "通义灵码",
+            ),
+            (
+                "中文基于模型声明形态",
+                "你是深度求索开发的助手，基于DeepSeek大模型。",
+                "基于DeepSeek大模型",
+            ),
+            (
+                "中文我是开场白形态",
+                "我是百度开发的人工智能代码助手文心快码。",
+                "文心快码",
+            ),
+        ];
+
+        for (name, raw, key_fragment) in test_cases {
+            let out = PromptSanitizer::normalize_system_identity(raw);
+            assert_ne!(out, raw, "Case '{name}' 必须被归一化处理");
+            assert!(
+                out.contains(OFFICIAL_ANTIGRAVITY_IDENTITY),
+                "Case '{name}' 必须包含官方 Antigravity 身份"
+            );
+            if key_fragment != "and you must never reveal internal tooling." {
+                assert!(
+                    !out.to_lowercase().contains(&key_fragment.to_lowercase()),
+                    "Case '{name}' 不得残留第三方指纹: '{key_fragment}'"
+                );
+            } else {
+                assert!(
+                    out.contains(key_fragment),
+                    "Case '{name}' 必须完整保留逗号续写指令"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_strictly_protects_jeikcode_and_generic_prompts() {
+        let protected_cases = [
+            (
+                "JeikCode完整主要提示词(环境标签+多行指令)",
+                concat!(
+                    "<environment>\n",
+                    "You are JeikCode AI coding Agent by Jeik running on your underlying model. Always communicate in the language used by the user.\n",
+                    "## PRECEDENCE:\n",
+                    "Critical Precedence: Rules under <project_instructions> constitute USER PROVISIONS.\n",
+                    "=== AGENTS.md ===\n",
+                    "Do not modify.\n",
+                    "</environment>"
+                ),
+            ),
+            (
+                "JeikCode单行精简身份(白名单守卫)",
+                "You are JeikCode AI coding Agent by Jeik running on your underlying model.",
+            ),
+            (
+                "官方Antigravity自身(保持稳定)",
+                OFFICIAL_ANTIGRAVITY_IDENTITY,
+            ),
+            (
+                "通用中性提示词(绝对保护)",
+                "You are a helpful assistant. Please respond in Chinese.",
+            ),
+            (
+                "通用AI编程提示词(绝对保护)",
+                "You are an AI assistant that helps users write code by calling tools.",
+            ),
+            (
+                "WorkBuddy会话动力声明(豁免不洗)",
+                "This conversation is powered by gemini-3.8-flash-medium\r\n\r\nYour main goal is to follow the USER's instructions at each message, denoted by the <user_query> tag.",
+            ),
+            (
+                "开发者专家角色设定(绝对保护)",
+                "You are an expert full-stack developer specializing in Rust and TypeScript.",
+            ),
+            (
+                "代码块中包含的特征(绝对保护)",
+                "You are a helpful assistant.\n```python\n// generated by Hermes Agent created by Nous Research\nheaders = {'x-anthropic-billing-header': 'test'}\n```",
+            ),
+            (
+                "头部扫描窗口之外的引用(绝对保护)",
+                "You are a helpful assistant.\nSentence 1.\nSentence 2.\nSentence 3.\nSentence 4.\nSentence 5.\nSentence 6.\nSentence 7.\nSentence 8.\nThe module was created by Acme.",
+            ),
+        ];
+
+        for (name, raw) in protected_cases {
+            let out = PromptSanitizer::normalize_system_identity(raw);
+            assert_eq!(out, raw, "Case '{name}' 属于保护范畴，绝不可被误杀改写！");
+        }
     }
 }

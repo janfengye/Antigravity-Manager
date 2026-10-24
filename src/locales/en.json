@@ -64,7 +64,8 @@
         "selected": "Selected",
         "claude_series": "Claude Series",
         "maximize": "Maximize",
-        "app_name": "Antigravity Tools"
+        "app_name": "Antigravity Tools",
+        "copy_to_clipboard": "Copy to clipboard"
     },
     "nav": {
         "dashboard": "Dashboard",
@@ -223,9 +224,23 @@
         "no_client_account": "No active or bound account for this application",
         "go_switch_account": "Go to Switch Account",
         "switch_best_to_target": "Switch Best Account to {{target}}",
-        "switch_this_to_target": "Switch this account to {{target}}"
+        "switch_this_to_target": "Switch this account to {{target}}",
+        "account_pool": "Account Pool"
     },
     "accounts": {
+        "qos": {
+            "suspicious": "Suspected Throttled",
+            "suspicious_hint": "Abnormal upstream initial latency detected. Drain mode active, new session allocation paused.",
+            "jailed": "In QoS Cooldown",
+            "jailed_hint": "Silent throttling triggered. Session unbound and account isolated in ladder cooldown. Background probe will test recovery automatically.",
+            "probing": "Probing Recovery",
+            "probing_hint": "Sending synthetic heartbeat probe to verify whether upstream quality has fully recovered.",
+            "half_open": "On Probation",
+            "half_open_hint": "Probe succeeded. Single-flight canary traffic in progress. Full health will be restored after stable passes.",
+            "release_btn": "Release",
+            "release_tooltip": "Click to manually release account from QoS jail and resume normal scheduling",
+            "release_success": "Successfully released account from QoS jail"
+        },
         "account": "Account",
         "search_placeholder": "Search email...",
         "all": "All",
@@ -369,6 +384,9 @@
         "weekly_tokens": "Cycle tokens",
         "weekly_tokens_tooltip": "Tokens recorded by this instance in this quota cycle (input + output)",
         "quota_protected": "Protected",
+        "remaining_quota": "Remaining: {{percentage}}%",
+        "reset_in": "Reset: {{time}}",
+        "supported_official_models": "Supported Official Models ({{count}}):",
         "details": {
             "title": "Quota Details",
             "model_quota": "Individual Model Quotas",
@@ -466,7 +484,8 @@
             "batch_warmup_title": "Batch Manual Warmup",
             "batch_warmup_msg": "Are you sure you want to trigger warmup for the selected {{count}} accounts immediately?"
         },
-        "switch_to_agy": "Switch to Antigravity CLI (agy)"
+        "switch_to_agy": "Switch to Antigravity CLI (agy)",
+        "switch_next_short": "Next"
     },
     "settings": {
         "save": "Save Settings",
@@ -798,7 +817,8 @@
         "branding": {
             "title": "Antigravity Tools",
             "subtitle": "Professional Account Management"
-        }
+        },
+        "lightweight_mode_desc": "Fully releases WebView memory when exiting or minimizing to tray"
     },
     "tray": {
         "current": "Current",
@@ -806,11 +826,15 @@
         "switch_next": "Switch to Next Account",
         "refresh_current": "Refresh Current Quota",
         "show_window": "Show Main Window",
+        "mini_view": "Mini View",
         "quit": "Quit Application",
         "no_account": "No Account",
         "unknown_quota": "Unknown (Click to Refresh)",
         "forbidden": "Account Forbidden",
-        "lightweight_mode": "Lightweight Mode (Release RAM)"
+        "open_console": "Open Console",
+        "lightweight_mode": "Lightweight Mode (Release RAM)",
+        "pin_desc": "Pin to desktop (stay visible, do not hide on blur)",
+        "unpin_desc": "Pinned (click to unpin, auto-hide on blur)"
     },
     "proxy": {
         "title": "API Proxy Service",
@@ -1428,7 +1452,7 @@
             "wildcard_only_gemini_3x": "Only wildcard gemini-3.x-flash (x > 8) is supported, please specify exact model ID for others"
         },
         "multi_protocol": {
-            "title": "Multi-Protocol Support",
+            "title": "Model Catalog & Protocols",
             "subtitle": "Seamlessly integrate with your favorite AI tools and CLIs",
             "description": "The local proxy supports OpenAI, Anthropic, and Gemini protocols, ensuring compatibility with a wide range of applications.",
             "openai_label": "OpenAI Protocol",
@@ -1700,7 +1724,7 @@
             "claude": "Claude",
             "images": "Images",
             "capture_health": "Capture Health",
-            "capture_health_tip": "Disabled by default: skips all successful GET requests (incl. /v1/models polling and /health probes) and does not persist them; failed requests are always recorded; enable to record & save everything",
+            "capture_health_tip": "Disabled by default: skips all successful GET requests (incl. /v1/models polling and /health probes) as well as third-party gateway health probes and does not persist them; failed requests are always recorded; enable to record & save everything",
             "internal_error_log": "Internal errors at {{path}}, sliding window",
             "reset": "Reset",
             "by_account": "Filter by account",

@@ -35,11 +35,43 @@ fn extract_semver(raw: &str) -> Option<String> {
     None
 }
 
-/// 检测 Antigravity 版本（跨平台，支持预快照路径优先）
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant};
+
+static VERSION_CACHE: LazyLock<Mutex<HashMap<String, (AntigravityVersion, Instant)>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+const CACHE_TTL: Duration = Duration::from_secs(60);
+
+#[allow(dead_code)]
+pub fn clear_version_cache() {
+    if let Ok(mut guard) = VERSION_CACHE.lock() {
+        guard.clear();
+    }
+}
+
+/// 检测 Antigravity 版本（跨平台，支持预快照路径优先与内存缓存）
 pub fn get_antigravity_version_with_path(
     target_ide: Option<&str>,
     preferred_path: Option<&std::path::Path>,
 ) -> Result<AntigravityVersion, String> {
+    let cache_key = format!(
+        "{}:{}",
+        target_ide.unwrap_or("default"),
+        preferred_path
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default()
+    );
+
+    if let Ok(guard) = VERSION_CACHE.lock() {
+        if let Some((ver, timestamp)) = guard.get(&cache_key) {
+            if timestamp.elapsed() < CACHE_TTL {
+                return Ok(ver.clone());
+            }
+        }
+    }
+
     // 1. 优先使用预捕获路径，若无则探查 Antigravity 可执行文件路径
     let exe_path = preferred_path
         .map(|p| p.to_path_buf())
@@ -47,20 +79,35 @@ pub fn get_antigravity_version_with_path(
         .ok_or("Unable to locate Antigravity executable")?;
 
     // 2. 根据平台读取版本信息
-    #[cfg(target_os = "macos")]
-    {
-        get_version_macos(&exe_path)
+    let res = {
+        #[cfg(target_os = "macos")]
+        {
+            get_version_macos(&exe_path)
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            get_version_windows(&exe_path)
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            get_version_linux(&exe_path)
+        }
+
+        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+        {
+            Err("Unsupported operating system".to_string())
+        }
+    };
+
+    if let Ok(ref ver) = res {
+        if let Ok(mut guard) = VERSION_CACHE.lock() {
+            guard.insert(cache_key, (ver.clone(), Instant::now()));
+        }
     }
 
-    #[cfg(target_os = "windows")]
-    {
-        get_version_windows(&exe_path)
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        get_version_linux(&exe_path)
-    }
+    res
 }
 
 /// 检测 Antigravity 版本（跨平台）
@@ -203,21 +250,104 @@ fn get_version_windows(exe_path: &PathBuf) -> Result<AntigravityVersion, String>
     Err("Version information not found in executable".to_string())
 }
 
-/// Linux: 从 package.json 或 --version 参数读取
+/// 从 asar / json 头部字节缓冲区中提取 version 语义化版本号（跨平台安全函数）
+fn extract_version_from_asar_bytes(bytes: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(bytes);
+    if let Some(pos) = text.find("\"version\"") {
+        let remainder = &text[pos..];
+        if let Some(colon) = remainder.find(':') {
+            let val_part = &remainder[colon + 1..];
+            if let Some(start) = val_part.find('"') {
+                let rest = &val_part[start + 1..];
+                if let Some(end) = rest.find('"') {
+                    let ver = &rest[..end];
+                    if let Some(semver) = extract_semver(ver) {
+                        return Some(semver);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Linux: 从 package.json、product.json 或 asar 静态元数据中读取版本，严禁直接执行 GUI 二进制文件
 #[cfg(target_os = "linux")]
 fn get_version_linux(exe_path: &PathBuf) -> Result<AntigravityVersion, String> {
-    use std::process::Command;
+    // 1. 尝试解析符号链接获取真实可执行文件路径
+    let real_exe = fs::canonicalize(exe_path).unwrap_or_else(|_| exe_path.clone());
 
-    // 方法1 (优先): 尝试从安装目录的 package.json 读取，避免执行可执行文件意外拉起 GUI
+    // 2. 构造所有可能的安装根目录及候选 package.json / product.json 路径
+    let mut candidate_json_paths = Vec::new();
+
+    let mut add_parent_candidates = |p: &std::path::Path| {
+        candidate_json_paths.push(p.join("resources/app/package.json"));
+        candidate_json_paths.push(p.join("resources/app/product.json"));
+        candidate_json_paths.push(p.join("package.json"));
+        candidate_json_paths.push(p.join("product.json"));
+    };
+
+    if let Some(parent) = real_exe.parent() {
+        add_parent_candidates(parent);
+    }
     if let Some(parent) = exe_path.parent() {
-        let package_json = parent.join("resources/app/package.json");
-        if package_json.exists() {
-            if let Ok(content) = fs::read_to_string(&package_json) {
+        add_parent_candidates(parent);
+    }
+
+    // 常见 Linux 预设安装路径（deb / rpm / AppImage 解包 / 自定义目录）
+    let standard_roots = [
+        "/opt/Antigravity",
+        "/opt/antigravity",
+        "/opt/Antigravity IDE",
+        "/opt/antigravity-ide",
+        "/usr/share/antigravity",
+        "/usr/lib/antigravity",
+    ];
+    for root in standard_roots {
+        let root_path = PathBuf::from(root);
+        add_parent_candidates(&root_path);
+    }
+
+    // 遍历匹配 package.json / product.json
+    for json_path in &candidate_json_paths {
+        if json_path.exists() {
+            if let Ok(content) = fs::read_to_string(json_path) {
                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
                     if let Some(version) = json.get("version").and_then(|v| v.as_str()) {
+                        if let Some(semver) = extract_semver(version) {
+                            return Ok(AntigravityVersion {
+                                short_version: semver,
+                                bundle_version: version.to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. 检查 resources/app.asar（针对 package.json 打包在 asar 内部的 Electron 应用）
+    let mut candidate_asars = Vec::new();
+    if let Some(parent) = real_exe.parent() {
+        candidate_asars.push(parent.join("resources/app.asar"));
+    }
+    if let Some(parent) = exe_path.parent() {
+        candidate_asars.push(parent.join("resources/app.asar"));
+    }
+    for root in standard_roots {
+        candidate_asars.push(PathBuf::from(root).join("resources/app.asar"));
+    }
+
+    for asar in candidate_asars {
+        if asar.exists() {
+            if let Ok(mut file) = fs::File::open(&asar) {
+                use std::io::Read;
+                let mut buffer = [0u8; 65536];
+                if let Ok(bytes_read) = file.read(&mut buffer) {
+                    if let Some(version) = extract_version_from_asar_bytes(&buffer[..bytes_read]) {
                         return Ok(AntigravityVersion {
-                            short_version: version.to_string(),
-                            bundle_version: version.to_string(),
+                            short_version: version.clone(),
+                            bundle_version: version,
                         });
                     }
                 }
@@ -225,30 +355,10 @@ fn get_version_linux(exe_path: &PathBuf) -> Result<AntigravityVersion, String> {
         }
     }
 
-    // 方法2 (兜底): 尝试执行 --version (仅在无法从 package.json 获取时执行)
-    let output = Command::new(exe_path).arg("--version").output();
-
-    if let Ok(result) = output {
-        if result.status.success() {
-            let raw_version = String::from_utf8_lossy(&result.stdout).trim().to_string();
-            if !raw_version.is_empty() {
-                let version = extract_semver(&raw_version).unwrap_or_else(|| {
-                    raw_version
-                        .lines()
-                        .next()
-                        .unwrap_or_default()
-                        .trim()
-                        .to_string()
-                });
-                return Ok(AntigravityVersion {
-                    short_version: version.clone(),
-                    bundle_version: raw_version,
-                });
-            }
-        }
-    }
-
-    Err("Unable to determine Antigravity version on Linux".to_string())
+    // [FIX #3728] 严禁在此处调用 Command::new(exe_path).arg("--version")！
+    // Electron/桌面 GUI 应用在 Linux 下不支持 --version 退出参数，再次执行会触发 single-instance IPC
+    // 导致运行中的窗口每隔数秒就被强制置于最前台夺取焦点；未运行时则会被意外静默拉起。
+    Err("Unable to statically determine Antigravity version on Linux".to_string())
 }
 
 /// 判断是否为新版本 (>= 1.16.5)
@@ -325,5 +435,51 @@ mod tests {
     fn test_extract_semver_from_messy_output() {
         let raw = "1.107.0\n1504c8cc4b34dbfbb4a97ebe954b3da2b5634516\nx64";
         assert_eq!(extract_semver(raw), Some("1.107.0".to_string()));
+    }
+
+    #[test]
+    fn test_extract_version_from_asar_bytes() {
+        let asar_header = br#"{"files":{"package.json":{"size":214,"offset":"0"},"index.js":{}},"version":"2.3.4"}"#;
+        assert_eq!(
+            extract_version_from_asar_bytes(asar_header),
+            Some("2.3.4".to_string())
+        );
+
+        let asar_nested = br#"{"files":{"app":{"files":{"package.json":{"version":"3.0.1"}}}},"name":"antigravity"}"#;
+        assert_eq!(
+            extract_version_from_asar_bytes(asar_nested),
+            Some("3.0.1".to_string())
+        );
+
+        let invalid = b"random header with no version string";
+        assert_eq!(extract_version_from_asar_bytes(invalid), None);
+    }
+
+    #[test]
+    fn test_version_caching() {
+        clear_version_cache();
+        let cache_key = "test_target:test_path";
+        let ver = AntigravityVersion {
+            short_version: "2.5.0".to_string(),
+            bundle_version: "2.5.0".to_string(),
+        };
+
+        {
+            let mut guard = VERSION_CACHE.lock().unwrap();
+            guard.insert(cache_key.to_string(), (ver.clone(), Instant::now()));
+        }
+
+        {
+            let guard = VERSION_CACHE.lock().unwrap();
+            let cached = guard.get(cache_key);
+            assert!(cached.is_some());
+            assert_eq!(cached.unwrap().0.short_version, "2.5.0");
+        }
+
+        clear_version_cache();
+        {
+            let guard = VERSION_CACHE.lock().unwrap();
+            assert!(guard.get(cache_key).is_none());
+        }
     }
 }

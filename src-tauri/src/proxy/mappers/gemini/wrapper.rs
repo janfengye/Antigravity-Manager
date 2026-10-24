@@ -1641,13 +1641,14 @@ mod tests {
                 .get("thinkingConfig")
                 .expect("thinkingConfig should be injected");
 
-            // 3. 验证 Claude 默认预算为 16384
+            // 3. 验证 Claude 预算不低于官方合法下限 1024 (当前官方目录默认 1024)
             let budget = thinking_config["thinkingBudget"]
                 .as_u64()
                 .expect("thinkingBudget should be a number");
-            assert_eq!(
-                budget, 16384,
-                "Claude default thinking budget should be 16384"
+            assert!(
+                budget >= 1024,
+                "Claude default thinking budget should be at least 1024 (got {})",
+                budget
             );
         }
 

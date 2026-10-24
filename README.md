@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> Professional Account Management & Protocol Proxy System for AI Services (v4.9.8)
+> Professional Account Management & Protocol Proxy System for AI Services (v5.0.0)
 
 <div align="center">
   <img src="public/icon.png" width="100" height="100" alt="Antigravity Tools Logo">
@@ -11,7 +11,7 @@
       <img src="https://img.shields.io/github/v/release/lbjlaq/Antigravity-Manager?color=blue&style=flat-square" alt="GitHub release">
     </a>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.9.8-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-5.0.0-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -320,6 +320,27 @@ export ANTHROPIC_BASE_URL="http://127.0.0.1:8045"
 claude
 ```
 
+### Native CLI Account Switcher (`at` / `antigravity-tools`)
+Antigravity includes a lightweight native CLI suite designed for terminal developers. It enables instant system Keychain credential rotation and seamless session continuation with `agy`:
+
+```bash
+# 1. List all accounts with status and active indicators (👉)
+at list
+
+# 2. Inspect currently active accounts across agy CLI (Keychain) and IDE
+at current
+
+# 3. Switch account (supports 1-based index, email, prefix, or alias)
+at switch 2                      # Switch to account #2
+at switch work@gmail.com         # Switch by email
+at switch work                   # Switch by email prefix
+at switch "WorkAccount"          # Switch by account name
+at switch                        # Auto round-robin to next normal account
+
+# 4. Switch and automatically resume agy session
+at switch 2 -c                   # -c is short for --continue
+```
+
 ### How to use with OpenCode?
 1. Go to **API Proxy** → **External Providers** → click the **OpenCode Sync** card.
 2. Click **Sync** to generate `~/.config/opencode/opencode.json`:
@@ -493,7 +514,7 @@ In clients that support OpenAI protocol (e.g., Cherry Studio), you can configure
 
 ## 📝 Changelog
 
-> Latest version **v4.9.8** (2026-10-17): Automatic seamless hot-switch for Antigravity Classic upon quota depletion or threshold breach with streamlined dual-pool cards (Ref #3509); native evolution supporting Antigravity CLI (`agy`) with automatic shell wrapper injection, thinking effort disassembly, and independent 3-client active account detection with contextual badges (Ref #3686, Ref #3630); comprehensive 403 error body capture and action URL extraction (captcha verification/appeal) with closed-loop self-healing recovery (Ref #3630, Ref #3684); Claude Code 2.1.301 protocol alignment with anti-WAF identity sanitization, full-link `request-id` injection, and Claude 5 model family integration (PR #3689, Ref #3684, Ref #3686); active reference tracking in JSON Schema recursive flattening to eliminate exponential replication and Linux VPS OOM (SIGKILL 137) crashes, array schema normalization with terminal ARRAY items guards to prevent Gemini 400 errors, adaptive first-chunk Peek timeout extension to 60s/90s/120s for reasoning models, zero-downtime atomic pool reload eliminating 503 errors, and anti-regression rate limit protection (PR #3694, Fixes #3690, Ref #3682, Ref #3693); complete removal of 100% 429-yielding Prod endpoints, relaxed streaming first-chunk watchdog to 120s baseline, multi-turn role preservation for Responses array inputs, and elimination of 0ms optimistic reset storms (PR #3691, PR #3672, PR #3687, PR #3685, Fixes #3506, Ref #3525); traffic monitor inspector overhaul with Postman-style single-tab view, structured vs raw code views, key-value headers tables with Bearer masking, standard dual-link HAR 1.2 export, and 12-language localization coverage (thanks to @cubelikeplayDaniel, @EricZhou05, @blackdm666, @jeikl).
+> Latest version **v5.0.0** (2026-10-24): Adaptive QoS scheduling system via pure peer calibration and ladder probing (sub-second TTFT awareness, peer baselines, transient Suspicious tagging, immediate sticky session handover, and background self-healing ladder probes resolving silent upstream throttling) (Fixes #3720, PR #3725); official model catalog upgrade, tiered thinking protocol (thinkingLevel vs thinkingBudget), and Argon standalone quota isolation, decoupling quotaInfo ingestion gates to eliminate 503 errors and standardizing context windows and output limits across all protocols (Fixes #3735, Fixes #3737); OpenAI Responses API structured outputs (responseSchema / text.format), background thinking budget convergence to 1024 preventing 30s timeouts, pipeline tool conflict mitigation, and guarded code fence unwrapping (Fixes #3710, Ref #3723); Mini floating HUD native macOS transparency, dark/light and 12-language cross-window millisecond sync, native OS main-thread window scheduling eliminating Win32 message loop deadlocks, synchronous frame resolution, and React Router 404 fallbacks (Fixes #3733, Ref #3718, #3721, Ref #3738, Ref #3741); official Base64 sentinel alignment, Claude zero-sentinel and concurrent tool cleanliness, foreign tool transition passports, and zero database persistence; streaming giant tool call buffer promotion to Transition grace period with 180s protection, upstream TTFT watchdog budget convergence to 30s, and FailureStatusTracker integration eliminating Claude 429 leaks (Fixes #3739, Fixes #3713, Ref #3506, Ref #3525, PR #3740, PR #3714); asynchronous streaming batch import pipeline (slashing 494 account imports from 28 minutes to 15~20 seconds, >60x speedup), cold start non-blocking lock decoupling, and local snapshot 0ms hydration eliminating empty flashes (Fixes #3726); cross-platform tray rich-text hover tooltips, macOS status bar quota titles, Linux window focus stealing root-cause fix, and CLI credential overwrite protection (Fixes #3719, Fixes #3728, Fixes #3686); proxy pool dedicated bound account anti-Direct leak protection, Hermes Agent / local probe compatibility (/props, /version), Gemini URL Query auth, and Web/Headless full memory hot-reloading (thanks to @cubelikeplayDaniel, @jeikl).
 
 👉 **[View Full Changelog → CHANGELOG_EN.md](CHANGELOG_EN.md)**
 

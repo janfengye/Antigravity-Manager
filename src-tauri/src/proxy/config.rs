@@ -914,7 +914,7 @@ pub struct ProxyConfig {
     #[serde(default)]
     pub enable_logging: bool,
 
-    /// 是否捕获健康检查日志 (默认 false: 对 GET /health /healthz 请求全部过滤且不入库)
+    /// 是否捕获健康检查日志 (默认 false: 对 GET 成功请求与第三方网关探活探测全部过滤且不入库)
     #[serde(default)]
     pub capture_health_logs: bool,
 
@@ -1124,7 +1124,7 @@ impl Default for ProxyConfig {
             custom_mapping: default_custom_mapping(),
             request_timeout: default_request_timeout(),
             enable_logging: true,       // 默认开启，支持 token 统计功能
-            capture_health_logs: false, // 默认关闭，过滤 GET /health 探活且不入库
+            capture_health_logs: false, // 默认关闭，过滤 GET 探活与第三方网关探测请求且不入库
             log_retention: LogRetentionConfig::default(),
             internal_error_log_retention: InternalErrorLogRetentionConfig::default(),
             debug_logging: DebugLoggingConfig::default(),

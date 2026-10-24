@@ -1,12 +1,15 @@
 import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window';
 import { isTauri } from './env';
 
+export const MINI_MODE_WIDTH = 360;
+export const MINI_MODE_HEIGHT = 360;
+
 /**
  * Enter mini view mode
- * @param contentHeight The height of the content to fit
+ * @param contentHeight The height of the content to fit (optional, defaults to MINI_MODE_HEIGHT)
  * @param shouldCenter Whether to center the window (default: false)
  */
-export const enterMiniMode = async (contentHeight: number, shouldCenter: boolean = false) => {
+export const enterMiniMode = async (contentHeight?: number, shouldCenter: boolean = false, isPinned: boolean = false) => {
     if (!isTauri()) return;
     try {
         const win = getCurrentWindow();
@@ -14,10 +17,11 @@ export const enterMiniMode = async (contentHeight: number, shouldCenter: boolean
         // Hide window decorations (title bar) first to ensure accurate sizing
         await win.setDecorations(false);
 
-        // Set window size: width 328, height = content height 
-        await win.setSize(new LogicalSize(328, contentHeight+2));
+        // Enforce fixed, stable window size to prevent jumping/stretching during tab or account switches
+        const targetHeight = contentHeight && contentHeight > 0 ? contentHeight : MINI_MODE_HEIGHT;
+        await win.setSize(new LogicalSize(MINI_MODE_WIDTH, targetHeight));
 
-        await win.setAlwaysOnTop(true);
+        await win.setAlwaysOnTop(isPinned);
         // Enable window shadow
         await win.setShadow(true);
         // Disable resizing in mini mode

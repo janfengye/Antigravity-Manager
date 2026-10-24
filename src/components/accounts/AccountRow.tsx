@@ -5,6 +5,7 @@ import { cn } from '../../utils/cn';
 import { useTranslation } from 'react-i18next';
 import { formatCompactDuration, getLiveLimitForModel, getLiveLimitState } from '../../utils/liveLimit';
 import { getModelProtectionKey, findQuotaModel, findImageQuotaModel } from '../../config/modelConfig';
+import { QoSStatusBadge } from './QoSStatusBadge';
 
 interface AccountRowProps {
     account: Account;
@@ -129,6 +130,8 @@ function AccountRow({ account, selected, onSelect, isCurrent, isRefreshing, isSw
                                 <span>{t('accounts.forbidden')}</span>
                             </span>
                         )}
+
+                        <QoSStatusBadge status={account.qos_status} size="md" />
 
                         {/* 订阅类型徽章 */}
                         {(() => {

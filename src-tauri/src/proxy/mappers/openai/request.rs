@@ -1067,7 +1067,38 @@ pub fn transform_openai_request_with_session(
         }
     }
 
-    if let Some(fmt) = &request.response_format {
+    let effective_response_format = request.response_format.clone().or_else(|| {
+        request.text.as_ref().and_then(|text| {
+            let format = text.get("format")?;
+            let fmt_type = format.get("type")?.as_str()?;
+            if fmt_type == "json_schema" {
+                Some(ResponseFormat {
+                    r#type: "json_schema".to_string(),
+                    json_schema: Some(ResponseFormatJSONSchema {
+                        name: format
+                            .get("name")
+                            .and_then(|n| n.as_str())
+                            .map(|s| s.to_string()),
+                        description: format
+                            .get("description")
+                            .and_then(|d| d.as_str())
+                            .map(|s| s.to_string()),
+                        schema: format.get("schema").cloned(),
+                        strict: format.get("strict").and_then(|s| s.as_bool()),
+                    }),
+                })
+            } else if fmt_type == "json_object" {
+                Some(ResponseFormat {
+                    r#type: "json_object".to_string(),
+                    json_schema: None,
+                })
+            } else {
+                None
+            }
+        })
+    });
+
+    if let Some(fmt) = &effective_response_format {
         if fmt.r#type == "json_object" {
             gen_config["responseMimeType"] = json!("application/json");
         } else if fmt.r#type == "json_schema" {
@@ -1078,6 +1109,19 @@ pub fn transform_openai_request_with_session(
                     gen_config["responseSchema"] = schema;
                 }
             }
+        }
+
+        // [Fix #3710] 结构化后台短任务（如 thread_title）显式指定 effort: "low" 时约束思考预算，消除 30s 客户端硬超时
+        let client_effort = request
+            .reasoning_effort
+            .as_deref()
+            .or_else(|| request.reasoning.as_ref().and_then(|r| r.effort.as_deref()))
+            .or_else(|| request.thinking.as_ref().and_then(|t| t.effort.as_deref()));
+        if client_effort.is_some_and(|e| e.eq_ignore_ascii_case("low")) {
+            gen_config["thinkingConfig"] = json!({
+                "includeThoughts": true,
+                "thinkingBudget": 1024
+            });
         }
     }
 

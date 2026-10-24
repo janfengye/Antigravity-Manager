@@ -165,10 +165,96 @@ export interface GroupQuotaSummary {
     key: 'gemini' | 'claude' | 'argon';
     labelKey: string;
     defaultLabel: string;
+    dynamicLabel?: string;
+    supportedModels?: string[];
     fiveHour?: GroupQuotaItem;
     weekly?: GroupQuotaItem;
     isWeeklyConstrained: boolean;
     isWeeklyExhausted: boolean;
+}
+
+function isSupportedDisplayModel(name: string): boolean {
+    const m = name.trim().toLowerCase();
+    if (
+        m.includes('-disabled') ||
+        m.endsWith('_disabled') ||
+        m.startsWith('chat_') ||
+        m.startsWith('tab_') ||
+        m.includes('internal') ||
+        m.includes('-exp') ||
+        m.endsWith('-agent') ||
+        m === 'gemini-3-flash' ||
+        m.includes('2.5') ||
+        m.includes('2-5') ||
+        m.includes('3.5-flash-low') ||
+        m.includes('3.5-flash-extra-low') ||
+        m.includes('3.6-flash') ||
+        m.includes('3.7-flash')
+    ) {
+        return false;
+    }
+    return true;
+}
+
+function summarizeSupportedModels(models: ModelQuota[], key: 'gemini' | 'claude' | 'argon'): { dynamicLabel?: string; supportedModels: string[] } {
+    const active = models
+        .map(m => m.name.trim().toLowerCase())
+        .filter(isSupportedDisplayModel);
+
+    if (active.length === 0) {
+        return { supportedModels: [] };
+    }
+
+    if (key === 'argon') {
+        return {
+            dynamicLabel: 'Gemini 4 Argon',
+            supportedModels: active,
+        };
+    }
+
+    if (key === 'claude') {
+        // 通用动态探测任意代数的 Claude 版本（如 4.6, 5.5, 6.0 等）
+        const versions = new Set<string>();
+        for (const n of active) {
+            if (n.includes('claude')) {
+                const match = n.match(/claude-[a-z]+-(\d+)[.-](\d+)/i) || n.match(/claude-(\d+)[.-](\d+)/i);
+                if (match) {
+                    versions.add(`${match[1]}.${match[2]}`);
+                }
+            }
+        }
+        const sortedVersions = Array.from(versions).sort((a, b) => parseFloat(b) - parseFloat(a));
+        const hasGpt = active.some(n => n.startsWith('gpt'));
+        let dynamicLabel: string | undefined;
+        if (sortedVersions.length > 0) {
+            const verStr = sortedVersions.join('&');
+            dynamicLabel = hasGpt ? `Claude ${verStr} / GPT` : `Claude ${verStr}`;
+        }
+        return {
+            dynamicLabel,
+            supportedModels: active,
+        };
+    }
+
+    // 通用动态探测 Gemini 主版本与小版本分布（如 3.8, 3.1, 4.0 等）
+    const versions = new Set<string>();
+    for (const n of active) {
+        if (n.startsWith('gemini-')) {
+            const match = n.match(/gemini-(\d+(?:\.\d+)?)/i);
+            if (match) {
+                versions.add(match[1]);
+            }
+        }
+    }
+    const sortedVersions = Array.from(versions).sort((a, b) => parseFloat(b) - parseFloat(a));
+    let dynamicLabel: string | undefined;
+    if (sortedVersions.length > 0) {
+        dynamicLabel = `Gemini ${sortedVersions.slice(0, 2).join(' / ')}`;
+    }
+    return {
+        dynamicLabel,
+        supportedModels: active,
+    };
 }
 
 /**
@@ -215,7 +301,8 @@ export function getGroupQuotaSummaries(
 
         if (fallbackModels.length > 0) {
             const matched = fallbackModels.filter(m => {
-                const n = m.name.toLowerCase();
+                const n = (m?.name || '').toLowerCase();
+                if (n.includes('-disabled') || n.endsWith('_disabled') || (m as any)?.disabled) return false;
                 const isArgon = n.includes('argon');
                 if (key === 'argon') return isArgon;
                 if (isArgon) return false;
@@ -293,10 +380,22 @@ export function getGroupQuotaSummaries(
             ? 'Gemini 4 Argon'
             : (key === 'claude' ? 'Claude & GPT Models' : 'Gemini Models');
 
+        const matchedForSummary = fallbackModels.filter(m => {
+            const n = (m?.name || '').toLowerCase();
+            if (n.includes('-disabled') || n.endsWith('_disabled') || (m as any)?.disabled) return false;
+            const isArgon = n.includes('argon');
+            if (key === 'argon') return isArgon;
+            if (isArgon) return false;
+            return key === 'claude' ? (n.startsWith('claude') || n.startsWith('gpt')) : n.startsWith('gemini');
+        });
+        const { dynamicLabel, supportedModels } = summarizeSupportedModels(matchedForSummary, key);
+
         return {
             key,
             labelKey,
             defaultLabel,
+            dynamicLabel,
+            supportedModels,
             fiveHour: raw5h !== undefined ? {
                 percentage: isWeeklyExhausted ? 0 : raw5h,
                 resetTime: isWeeklyExhausted ? effectiveWeeklyResetTime : fiveHourResetTime,
@@ -315,7 +414,10 @@ export function getGroupQuotaSummaries(
         const groupName = (group?.display_name || '').toLowerCase();
         return /argon/i.test(groupName)
             || (group?.buckets || []).some(b => /argon/i.test(`${b?.bucket_id || ''} ${b?.display_name || ''}`));
-    }) || fallbackModels.some(m => /argon/i.test(m?.name || ''));
+    }) || fallbackModels.some(m => {
+        const n = (m?.name || '').toLowerCase();
+        return /argon/i.test(n) && !n.includes('-disabled') && !n.endsWith('_disabled') && !(m as any)?.disabled;
+    });
 
     const summaries: GroupQuotaSummary[] = [
         buildGroup('gemini'),

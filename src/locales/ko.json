@@ -64,7 +64,8 @@
         "selected": "선택됨",
         "claude_series": "Claude 시리즈",
         "maximize": "최대화",
-        "app_name": "Antigravity Tools"
+        "app_name": "Antigravity Tools",
+        "copy_to_clipboard": "클립보드에 복사"
     },
     "nav": {
         "dashboard": "대시보드",
@@ -208,9 +209,23 @@
         "no_client_account": "이 애플리케이션에 활성화되거나 바인딩된 계정이 없습니다",
         "go_switch_account": "계정 전환으로 이동",
         "switch_best_to_target": "{{target}} 최적 계정으로 원클릭 전환",
-        "switch_this_to_target": "이 계정을 {{target}}(으)로 전환"
+        "switch_this_to_target": "이 계정을 {{target}}(으)로 전환",
+        "account_pool": "계정 풀",
+        "view_mode_title_5h": "5시간 롤링 윈도우 뷰",
+        "view_mode_title_weekly": "7일 주간 할당량 뷰",
+        "view_mode_title_weighted": "종합 가중치 뷰"
     },
     "accounts": {
+        "qos": {
+            "suspicious": "속도 제한 의심",
+            "suspicious_hint": "업스트림 초기 응답 지연이 감지되었습니다. 신규 세션 할당이 일시 중단되었습니다.",
+            "jailed": "제한 대기실",
+            "jailed_hint": "무음 속도 제한이 감지되어 세션이 해제되었습니다. 단계별 냉각 중이며 백그라운드 프로브가 자동 복구를 확인합니다.",
+            "probing": "복구 프로브 중",
+            "probing_hint": "업스트림 서비스 품질이 완전히 복구되었는지 확인하기 위해 경량 프로브를 전송 중입니다.",
+            "half_open": "관찰 유예 중",
+            "half_open_hint": "프로브를 통과했습니다. 실제 트래픽으로 단일 시험 중이며 안정 확인 후 완전히 복구됩니다."
+        },
         "account": "계정",
         "search_placeholder": "이메일 검색...",
         "all": "전체",
@@ -335,6 +350,9 @@
         "quota_window_weekly": "7일 주간 할당량",
         "quota_window_weekly_short": "주간",
         "quota_protected": "보호됨",
+        "remaining_quota": "남은 할당량: {{percentage}}%",
+        "reset_in": "재설정: {{time}}",
+        "supported_official_models": "지원 공식 모델 ({{count}}개):",
         "details": {
             "title": "할당량 상세",
             "model_quota": "개별 모델 할당량",
@@ -443,7 +461,15 @@
         "quota_group_claude": "Claude & GPT 모델",
         "weekly_constrained_tooltip": "주간 할당량 한도에 의해 제한됨",
         "weekly_tokens": "주기 토큰",
-        "weekly_tokens_tooltip": "이 인스턴스가 현재 할당량 주기에서 기록한 토큰 사용량 (입력 + 출력)"
+        "weekly_tokens_tooltip": "이 인스턴스가 현재 할당량 주기에서 기록한 토큰 사용량 (입력 + 출력)",
+        "client_classic": "클래식",
+        "client_classic_tooltip": "현재 Antigravity 클래식에 로그인된 계정",
+        "client_ide": "IDE",
+        "client_ide_tooltip": "현재 Antigravity IDE에 로그인된 계정",
+        "client_cli": "CLI",
+        "client_cli_tooltip": "현재 Antigravity CLI (agy)에 로그인된 계정",
+        "switch_next_short": "다음",
+        "weekly_exhausted_tooltip": "주간 할당량이 소진되어 자동 보호가 실행되었습니다"
     },
     "settings": {
         "save": "설정 저장",
@@ -771,7 +797,8 @@
         "branding": {
             "title": "Antigravity Tools",
             "subtitle": "전문적인 계정 관리"
-        }
+        },
+        "lightweight_mode_desc": "활성화 시 종료하거나 트레이로 최소화할 때 WebView 메모리를 완전히 해제합니다"
     },
     "tray": {
         "current": "현재",
@@ -779,11 +806,15 @@
         "switch_next": "다음 계정으로 전환",
         "refresh_current": "현재 할당량 새로고침",
         "show_window": "메인 창 보이기",
+        "mini_view": "미니 뷰",
         "quit": "애플리케이션 종료",
         "no_account": "계정 없음",
         "unknown_quota": "알 수 없음 (클릭하여 새로고침)",
         "forbidden": "계정 금지됨",
-        "lightweight_mode": "경량 모드 (트레이 시 메모리 해제)"
+        "lightweight_mode": "경량 모드 (트레이 시 메모리 해제)",
+        "open_console": "콘솔 열기",
+        "pin_desc": "바탕화면에 고정 (포커스를 잃어도 닫히지 않고 유지)",
+        "unpin_desc": "고정됨 (클릭하여 고정 해제, 포커스를 잃으면 자동으로 닫힘)"
     },
     "proxy": {
         "title": "API 프록시 서비스",
@@ -1385,7 +1416,7 @@
             "original_placeholder": "원본 (예: gpt-4 또는 gpt-4*)"
         },
         "multi_protocol": {
-            "title": "다중 프로토콜 지원",
+            "title": "모델 카탈로그 및 프로토콜",
             "subtitle": "즐겨 사용하는 AI 도구 및 CLI와 원활하게 통합",
             "description": "로컬 프록시는 OpenAI, Anthropic 및 Gemini 프로토콜을 지원하여 광범위한 애플리케이션과의 호환성을 보장합니다.",
             "openai_label": "OpenAI 프로토콜",

@@ -105,6 +105,25 @@ impl UpstreamClassification {
     pub fn is_internal_gateway_message(&self) -> bool {
         matches!(self, UpstreamClassification::InternalGatewayMessage)
     }
+
+    /// 判断是否为上游服务过载（HTTP 503 / 529，或 500/504 等返回 "model is overloaded"）
+    pub fn is_server_overloaded(status: u16, body: &str) -> bool {
+        status == 503
+            || status == 529
+            || ((status >= 500 || status == 408) && body.to_lowercase().contains("overloaded"))
+    }
+
+    /// 是否为强制工具调用与思考冲突错误 (400 "Thinking may not be enabled when tool_choice forces tool use", Fixes #3721)
+    pub fn is_thinking_tool_choice_conflict(status: u16, body: &str) -> bool {
+        if status != 400 {
+            return false;
+        }
+        let lower = body.to_lowercase();
+        lower.contains("thinking may not be enabled when tool_choice forces tool use")
+            || (lower.contains("thinking")
+                && lower.contains("tool_choice")
+                && lower.contains("forces tool use"))
+    }
 }
 
 #[cfg(test)]
@@ -130,5 +149,43 @@ mod tests {
         assert!(unauth.abandons_sticky_account());
         let forbidden = UpstreamClassification::classify(403, "forbidden", None);
         assert!(forbidden.abandons_sticky_account());
+    }
+
+    #[test]
+    fn test_is_server_overloaded() {
+        assert!(UpstreamClassification::is_server_overloaded(503, ""));
+        assert!(UpstreamClassification::is_server_overloaded(529, ""));
+        assert!(UpstreamClassification::is_server_overloaded(
+            500,
+            r#"{"error":{"message":"The model is overloaded."}}"#
+        ));
+        assert!(UpstreamClassification::is_server_overloaded(
+            504,
+            "Gateway Timeout: upstream overloaded"
+        ));
+        assert!(!UpstreamClassification::is_server_overloaded(
+            429,
+            "quota exhausted"
+        ));
+        assert!(!UpstreamClassification::is_server_overloaded(200, "OK"));
+        assert!(!UpstreamClassification::is_server_overloaded(
+            404,
+            "Not Found"
+        ));
+    }
+
+    #[test]
+    fn test_is_thinking_tool_choice_conflict() {
+        let err_body = r#"{"type":"error","error":{"type":"invalid_request_error","message":"Thinking may not be enabled when tool_choice forces tool use."}}"#;
+        assert!(UpstreamClassification::is_thinking_tool_choice_conflict(
+            400, err_body
+        ));
+        assert!(!UpstreamClassification::is_thinking_tool_choice_conflict(
+            200, err_body
+        ));
+        assert!(!UpstreamClassification::is_thinking_tool_choice_conflict(
+            400,
+            "Normal 400 bad request"
+        ));
     }
 }

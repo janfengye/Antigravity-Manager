@@ -21,7 +21,7 @@ function Layout() {
         }
     }, [isMiniView]);
 
-    if (isMiniView) {
+    if (!isTauri() && isMiniView) {
         return (
             <>
                 <BackgroundTaskRunner />

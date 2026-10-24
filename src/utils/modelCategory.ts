@@ -21,23 +21,30 @@ export interface ModelDisplayNameInput {
 }
 
 const DEFAULT_MODEL_LABELS: Record<string, string> = {
-    'gemini-pro-agent': 'gemini-3.1-pro-high',
+    'gemini-4-argon': 'gemini-4-argon',
+    'gemini-4-argon-high': 'gemini-4-argon-high',
+    'gemini-4-argon-medium': 'gemini-4-argon-medium',
+    'gemini-4-argon-low': 'gemini-4-argon-low',
     'gemini-3.1-pro-high': 'gemini-3.1-pro-high',
     'gemini-3.1-pro': 'gemini-3.1-pro',
     'gemini-3.1-pro-low': 'gemini-3.1-pro-low',
-    'gemini-2.5-pro': 'gemini-2.5-pro',
     'gemini-3.8-flash': 'gemini-3.8-flash',
-    'gemini-3.7-flash': 'gemini-3.7-flash',
-    'gemini-3.5-flash': 'gemini-3.5-flash',
-    'gemini-3-flash': 'gemini-3-flash',
-    'gemini-2.5-flash': 'gemini-2.5-flash',
+    'gemini-3.8-flash-high': 'gemini-3.8-flash-high',
+    'gemini-3.8-flash-medium': 'gemini-3.8-flash-medium',
+    'gemini-3.8-flash-low': 'gemini-3.8-flash-low',
+    'gemini-3.8-flash-tiered': 'gemini-3.8-flash-tiered',
+    'gemini-3.5-flash-lite': 'gemini-3.5-flash-lite',
     'gemini-3.1-flash-lite': 'gemini-3.1-flash-lite',
     'gemini-3.1-flash-image': 'gemini-3.1-flash-image',
     'gemini-3-pro-image': 'gemini-3-pro-image',
+    'claude-opus-5-5-high': 'claude-opus-5-5-high',
+    'claude-opus-5-5-medium': 'claude-opus-5-5-medium',
+    'claude-opus-5-5-low': 'claude-opus-5-5-low',
+    'claude-sonnet-5-5-high': 'claude-sonnet-5-5-high',
+    'claude-sonnet-5-5-medium': 'claude-sonnet-5-5-medium',
+    'claude-sonnet-5-5-low': 'claude-sonnet-5-5-low',
     'claude-sonnet-4-6': 'claude-sonnet-4-6',
     'claude-opus-4-6-thinking': 'claude-opus-4-6-thinking',
-    'claude-sonnet-4-5': 'claude-sonnet-4-5',
-    'claude-haiku-4-5': 'claude-haiku-4-5',
 };
 
 export function getModelDisplayName(
@@ -62,9 +69,9 @@ export function findQuotaModel<T extends { name: string }>(
 ): T | undefined {
     if (!models || models.length === 0) return undefined;
     const preferred: Partial<Record<ModelCategory, string[]>> = {
-        'gemini-pro': ['gemini-pro-agent', 'gemini-3.1-pro-high', 'gemini-3.1-pro', 'gemini-3.1-pro-low'],
-        'gemini-flash': ['gemini-3.8-flash-high', 'gemini-3.8-flash', 'gemini-3-flash-agent', 'gemini-3-flash', 'gemini-3.5-flash', 'gemini-3.1-flash-lite'],
-        'claude': ['claude-sonnet-4-6', 'claude-opus-4-6-thinking'],
+        'gemini-pro': ['gemini-3.1-pro-high', 'gemini-3.1-pro', 'gemini-3.1-pro-low'],
+        'gemini-flash': ['gemini-3.8-flash-high', 'gemini-3.8-flash', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low', 'gemini-3.8-flash-tiered', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite'],
+        'claude': ['claude-opus-5-5-high', 'claude-sonnet-5-5-high', 'claude-sonnet-4-6', 'claude-opus-4-6-thinking'],
     };
     const names = preferred[category];
     if (names) {

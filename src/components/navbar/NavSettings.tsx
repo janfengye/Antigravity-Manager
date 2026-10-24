@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { LanguageDropdown, MoreDropdown } from './NavDropdowns';
 import { LANGUAGES } from './constants';
 import { isTauri } from '../../utils/env';
+import { invoke } from '@tauri-apps/api/core';
 import { useViewStore } from '../../stores/useViewStore';
 
 interface NavSettingsProps {
@@ -40,7 +41,13 @@ export function NavSettings({
             <div className="hidden min-[480px]:flex items-center gap-2">
                 {/* 迷你视图切换按钮 */}
                 <button
-                    onClick={() => setMiniView(true)}
+                    onClick={() => {
+                        if (isTauri()) {
+                            invoke('show_mini_view').catch(() => {});
+                        } else {
+                            setMiniView(true);
+                        }
+                    }}
                     className="w-10 h-10 rounded-full bg-gray-100 dark:bg-base-200 hover:bg-gray-200 dark:hover:bg-base-100 flex items-center justify-center transition-colors"
                     title={t('nav.mini_view', 'Mini View')}
                 >

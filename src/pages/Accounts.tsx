@@ -25,7 +25,7 @@ import { showToast } from "../components/common/ToastContainer";
 import { exportAccounts } from "../services/accountService";
 import { useAccountStore } from "../stores/useAccountStore";
 import { useConfigStore } from "../stores/useConfigStore";
-import { Account, getAccountTier } from "../types/account";
+import { Account, getAccountTier, ImportAccountEntry } from "../types/account";
 import { cn } from "../utils/cn";
 import { isTauri } from "../utils/env";
 import { request as invoke } from "../utils/request";
@@ -46,6 +46,7 @@ function Accounts() {
     fetchCurrentAccount,
     fetchActiveClients,
     addAccount,
+    batchImportAccounts,
     deleteAccount,
     deleteAccounts,
     switchAccount,
@@ -62,6 +63,33 @@ function Accounts() {
 
   const [searchQuery, setSearchQuery] = useState('');
   const [filter, setFilter] = useState<FilterType>('all');
+  const [importProgress, setImportProgress] = useState<{
+    current: number;
+    total: number;
+    success: number;
+    failed: number;
+    current_email?: string;
+  } | null>(null);
+
+  // [NEW #3726] 监听后端批量导入流式进度事件
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    if (isTauri()) {
+      import('@tauri-apps/api/event').then(({ listen }) => {
+        listen<{ current: number; total: number; success: number; failed: number; current_email?: string }>(
+          'accounts://import-progress',
+          (event) => {
+            setImportProgress(event.payload);
+          }
+        ).then((unsub) => {
+          unlisten = unsub;
+        });
+      });
+    }
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
   const [isSearchExpanded, setIsSearchExpanded] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [viewMode, setViewMode] = useState<ViewMode>(() => {
@@ -234,7 +262,7 @@ function Accounts() {
     fetchCurrentAccount();
   }, [fetchAccounts, fetchCurrentAccount]);
 
-  // 保持多客户端（经典款、IDE、CLI）当前活动账号实时感知：挂载轮询与窗口焦点刷新
+  // 保持多客户端（经典款、IDE、CLI）当前活动账号实时感知：挂载、窗口焦点与低频保底对齐
   useEffect(() => {
     fetchActiveClients();
 
@@ -243,10 +271,10 @@ function Accounts() {
     };
     window.addEventListener('focus', handleFocus);
 
-    // 每 5 秒轻量检测一次各端本地已登录账号，外部环境切换无需手动重载页面
+    // [FIX #3726] 移除 5 秒高频暴力轮询，改为 60 秒低频保底，主要依赖 window focus 事件即时感知外部切号
     const timer = setInterval(() => {
       fetchActiveClients();
-    }, 5000);
+    }, 60000);
 
     return () => {
       window.removeEventListener('focus', handleFocus);
@@ -617,64 +645,93 @@ function Accounts() {
     }
   };
 
-  const processImportData = async (content: string) => {
-    let importData: Array<{ email?: string; refresh_token?: string }>;
+  const parseImportEntries = (content: string): ImportAccountEntry[] => {
+    let raw: any;
     try {
-      importData = JSON.parse(content);
+      raw = JSON.parse(content);
     } catch {
-      showToast(t("accounts.import_invalid_format"), "error");
-      return;
+      return [];
     }
 
-    if (!Array.isArray(importData) || importData.length === 0) {
-      showToast(t("accounts.import_invalid_format"), "error");
-      return;
+    const list: any[] = [];
+    if (Array.isArray(raw)) {
+      list.push(...raw);
+    } else if (raw && typeof raw === 'object') {
+      if (Array.isArray(raw.accounts)) {
+        list.push(...raw.accounts);
+      } else if (raw.accounts && typeof raw.accounts === 'object') {
+        list.push(...Object.values(raw.accounts));
+      } else {
+        list.push(...Object.values(raw));
+      }
     }
 
-    const validEntries = importData.filter(
-      (item) =>
-        item.refresh_token &&
-        typeof item.refresh_token === "string" &&
-        item.refresh_token.startsWith("1//"),
-    );
+    const results: ImportAccountEntry[] = [];
+    for (const item of list) {
+      if (!item || typeof item !== 'object') continue;
+      const email = item.email || item.name || '';
+      const refreshToken =
+        item.refresh_token ||
+        (item.token && typeof item.token === 'object' ? item.token.refresh_token : '') ||
+        '';
+      if (refreshToken && typeof refreshToken === 'string' && refreshToken.startsWith('1//')) {
+        results.push({ email, refresh_token: refreshToken });
+      }
+    }
+    return results;
+  };
 
+  const processImportData = async (content: string, sourcePath?: string) => {
+    const validEntries = parseImportEntries(content);
     if (validEntries.length === 0) {
       showToast(t("accounts.import_invalid_format"), "error");
       return;
     }
 
-    let successCount = 0;
-    let failCount = 0;
-
-    for (const entry of validEntries) {
+    // [FIX #3726] 如果是通过本地文件路径导入，自动创建 <filepath>-backup 备份，确保失败随时可重新导入
+    if (sourcePath && isTauri()) {
       try {
-        await addAccount(entry.email || "", entry.refresh_token!);
-        successCount++;
-      } catch (error) {
-        console.error("Import account failed:", error);
-        failCount++;
+        const backupPath = `${sourcePath}-backup`;
+        await invoke("save_text_file", { path: backupPath, content });
+        console.log(`[Import] Created backup at ${backupPath}`);
+      } catch (err) {
+        console.warn("[Import] Failed to create source file backup:", err);
       }
-      await new Promise((r) => setTimeout(r, 100));
     }
 
-    if (failCount === 0) {
-      showToast(
-        t("accounts.import_success", { count: successCount }),
-        "success",
-      );
-    } else if (successCount > 0) {
-      showToast(
-        t("accounts.import_partial", {
-          success: successCount,
-          fail: failCount,
-        }),
-        "warning",
-      );
-    } else {
-      showToast(
-        t("accounts.import_fail", { error: "All accounts failed to import" }),
-        "error",
-      );
+    setImportProgress({
+      current: 0,
+      total: validEntries.length,
+      success: 0,
+      failed: 0,
+    });
+
+    try {
+      const result = await batchImportAccounts(validEntries);
+      if (result.failed === 0) {
+        showToast(
+          t("accounts.import_success", { count: result.success }),
+          "success",
+        );
+      } else if (result.success > 0) {
+        showToast(
+          t("accounts.import_partial", {
+            success: result.success,
+            fail: result.failed,
+          }),
+          "warning",
+        );
+      } else {
+        showToast(
+          t("accounts.import_fail", { error: result.errors[0] || "All accounts failed to import" }),
+          "error",
+        );
+      }
+    } catch (error) {
+      console.error("Batch import failed:", error);
+      showToast(t("accounts.import_fail", { error: String(error) }), "error");
+    } finally {
+      setImportProgress(null);
     }
   };
 
@@ -696,7 +753,7 @@ function Accounts() {
         const content: string = await invoke("read_text_file", {
           path: selected,
         });
-        await processImportData(content);
+        await processImportData(content, selected);
       } catch (error) {
         console.error("Import failed:", error);
         showToast(t("accounts.import_fail", { error: String(error) }), "error");
@@ -1228,6 +1285,44 @@ function Accounts() {
         account={accounts.find(a => a.id === errorAccountId) || null}
         onClose={() => setErrorAccountId(null)}
       />
+
+      {/* [NEW #3726] 批量导入流式进度模态展示 */}
+      {importProgress && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="w-full max-w-md rounded-2xl bg-base-100 p-6 shadow-2xl border border-base-200 dark:border-base-700 animate-in fade-in zoom-in-95 duration-200">
+            <h3 className="text-lg font-bold text-base-content flex items-center gap-2">
+              <Sparkles className="w-5 h-5 text-primary animate-spin" />
+              {t("accounts.add.batch_progress", "正在高速导入账号...")}
+            </h3>
+            <div className="mt-4 space-y-2">
+              <div className="flex justify-between text-xs text-base-content/70">
+                <span>{importProgress.current_email || t("common.processing", "处理中...")}</span>
+                <span className="font-mono font-semibold">
+                  {importProgress.current} / {importProgress.total}
+                </span>
+              </div>
+              <div className="w-full bg-base-200 rounded-full h-2.5 overflow-hidden">
+                <div
+                  className="bg-primary h-2.5 rounded-full transition-all duration-300"
+                  style={{
+                    width: `${Math.round((importProgress.current / Math.max(importProgress.total, 1)) * 100)}%`,
+                  }}
+                />
+              </div>
+              <div className="flex justify-between text-xs text-base-content/60 pt-1 font-mono">
+                <span className="text-success">
+                  {t("common.success", "成功")}: {importProgress.success}
+                </span>
+                {importProgress.failed > 0 && (
+                  <span className="text-error">
+                    {t("common.failed", "失败")}: {importProgress.failed}
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </motion.div>
   );
 }

@@ -230,6 +230,7 @@ impl SystemIntegration for DesktopIntegration {
 
         if target_ide == Some("agy") {
             write_to_system_keyring(account)?;
+            let _ = write_to_file_credentials(account, true);
             // A successful write (or a file fallback) is not proof that the CLI
             // will read this account from the system credential store.
             let stored = read_from_system_keyring_only()?;
@@ -440,7 +441,7 @@ impl SystemIntegration for DesktopIntegration {
 }
 
 /// 辅助方法：向宿主操作系统的 Keychain/Credentials Manager 写入 Token
-fn write_to_system_keyring(account: &crate::models::Account) -> Result<(), String> {
+pub(crate) fn write_to_system_keyring(account: &crate::models::Account) -> Result<(), String> {
     // 1. 构建 Token 的 JSON Payload，并将过期时间戳格式化为符合 RFC3339 的带微秒格式
     let expiry_secs = if account.token.expiry_timestamp > 10_000_000_000 {
         account.token.expiry_timestamp / 1000
@@ -693,7 +694,7 @@ fn write_to_system_keyring(account: &crate::models::Account) -> Result<(), Strin
         let default_res = store_to_collection(None, payload_json.as_bytes());
 
         // 尝试优先同步写入本地文件凭据 (~/.gemini/oauth_creds.json)
-        let _ = write_to_file_credentials(account);
+        let _ = write_to_file_credentials(account, false);
 
         // 若两者均失败，则返回错误；若至少一个成功，则记录并继续
         if login_res.is_err() && default_res.is_err() {
@@ -715,7 +716,7 @@ fn write_to_system_keyring(account: &crate::models::Account) -> Result<(), Strin
     );
 
     // 同步写入 ~/.gemini/ 目录下的文件凭据，兼容 SSH 会话、容器环境和无 Keyring/D-Bus 场景
-    if let Err(e) = write_to_file_credentials(account) {
+    if let Err(e) = write_to_file_credentials(account, false) {
         crate::modules::logger::log_warn(&format!("[Desktop] File credential sync warning: {}", e));
     }
 
@@ -724,7 +725,10 @@ fn write_to_system_keyring(account: &crate::models::Account) -> Result<(), Strin
 
 /// 辅助方法：同步写入本地文件凭据 (~/.gemini/antigravity-cli/antigravity-oauth-token 以及 ~/.gemini/oauth_creds.json)
 /// 用于在 SSH 会话、容器环境或无系统 Keyring / D-Bus 的场景下保障 CLI/工具的凭据兼容性
-fn write_to_file_credentials(account: &crate::models::Account) -> Result<(), String> {
+fn write_to_file_credentials(
+    account: &crate::models::Account,
+    sync_agy_cli: bool,
+) -> Result<(), String> {
     let home = match dirs::home_dir() {
         Some(h) => h,
         None => return Err("Failed to resolve user home directory".to_string()),
@@ -743,72 +747,75 @@ fn write_to_file_credentials(account: &crate::models::Account) -> Result<(), Str
 
     // 1. 同步写入 Antigravity CLI (agy) 原生文件凭据: ~/.gemini/antigravity-cli/antigravity-oauth-token
     // 兼容 SSH 会话、tmux、Docker 容器以及无 D-Bus 桌面环境
-    let agy_cli_dir = gemini_dir.join("antigravity-cli");
-    if !agy_cli_dir.exists() {
-        if let Err(e) = std::fs::create_dir_all(&agy_cli_dir) {
-            crate::modules::logger::log_warn(&format!(
-                "[Desktop] Failed to create antigravity-cli directory: {}",
-                e
-            ));
-        }
-    }
-
-    let expiry_secs = if account.token.expiry_timestamp > 10_000_000_000 {
-        account.token.expiry_timestamp / 1000
-    } else {
-        account.token.expiry_timestamp
-    };
-    let expiry_datetime =
-        chrono::DateTime::from_timestamp(expiry_secs, 0).unwrap_or_else(|| chrono::Utc::now());
-    let expiry_str = expiry_datetime.to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
-
-    #[derive(serde::Serialize)]
-    struct AgyTokenDetails {
-        access_token: String,
-        token_type: String,
-        refresh_token: String,
-        expiry: String,
-    }
-
-    #[derive(serde::Serialize)]
-    struct AgyOAuthTokenFile {
-        token: AgyTokenDetails,
-        auth_method: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        id_token: Option<String>,
-    }
-
-    let agy_token = AgyOAuthTokenFile {
-        token: AgyTokenDetails {
-            access_token: account.token.access_token.clone(),
-            token_type: "Bearer".to_string(),
-            refresh_token: account.token.refresh_token.clone(),
-            expiry: expiry_str,
-        },
-        auth_method: "consumer".to_string(),
-        id_token: account.token.id_token.clone(),
-    };
-
-    let agy_token_path = agy_cli_dir.join("antigravity-oauth-token");
-    if let Ok(agy_json_str) = serde_json::to_string_pretty(&agy_token) {
-        if let Err(e) = std::fs::write(&agy_token_path, agy_json_str) {
-            crate::modules::logger::log_warn(&format!(
-                "[Desktop] Failed to write antigravity-oauth-token: {}",
-                e
-            ));
-        } else {
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(
-                    &agy_token_path,
-                    std::fs::Permissions::from_mode(0o600),
-                );
+    // [FIX #3728] 仅在切换 agy CLI 时同步写入该专属凭证，严禁经典款切号盲目覆盖破坏多端账号隔离
+    if sync_agy_cli {
+        let agy_cli_dir = gemini_dir.join("antigravity-cli");
+        if !agy_cli_dir.exists() {
+            if let Err(e) = std::fs::create_dir_all(&agy_cli_dir) {
+                crate::modules::logger::log_warn(&format!(
+                    "[Desktop] Failed to create antigravity-cli directory: {}",
+                    e
+                ));
             }
-            crate::modules::logger::log_info(&format!(
-                "[Desktop] Successfully synced file-based credentials to ~/.gemini/antigravity-cli/antigravity-oauth-token for: {}",
-                account.email
-            ));
+        }
+
+        let expiry_secs = if account.token.expiry_timestamp > 10_000_000_000 {
+            account.token.expiry_timestamp / 1000
+        } else {
+            account.token.expiry_timestamp
+        };
+        let expiry_datetime =
+            chrono::DateTime::from_timestamp(expiry_secs, 0).unwrap_or_else(|| chrono::Utc::now());
+        let expiry_str = expiry_datetime.to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
+
+        #[derive(serde::Serialize)]
+        struct AgyTokenDetails {
+            access_token: String,
+            token_type: String,
+            refresh_token: String,
+            expiry: String,
+        }
+
+        #[derive(serde::Serialize)]
+        struct AgyOAuthTokenFile {
+            token: AgyTokenDetails,
+            auth_method: String,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            id_token: Option<String>,
+        }
+
+        let agy_token = AgyOAuthTokenFile {
+            token: AgyTokenDetails {
+                access_token: account.token.access_token.clone(),
+                token_type: "Bearer".to_string(),
+                refresh_token: account.token.refresh_token.clone(),
+                expiry: expiry_str,
+            },
+            auth_method: "consumer".to_string(),
+            id_token: account.token.id_token.clone(),
+        };
+
+        let agy_token_path = agy_cli_dir.join("antigravity-oauth-token");
+        if let Ok(agy_json_str) = serde_json::to_string_pretty(&agy_token) {
+            if let Err(e) = std::fs::write(&agy_token_path, agy_json_str) {
+                crate::modules::logger::log_warn(&format!(
+                    "[Desktop] Failed to write antigravity-oauth-token: {}",
+                    e
+                ));
+            } else {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(
+                        &agy_token_path,
+                        std::fs::Permissions::from_mode(0o600),
+                    );
+                }
+                crate::modules::logger::log_info(&format!(
+                    "[Desktop] Successfully synced file-based credentials to ~/.gemini/antigravity-cli/antigravity-oauth-token for: {}",
+                    account.email
+                ));
+            }
         }
     }
 
@@ -1196,11 +1203,75 @@ impl SystemIntegration for HeadlessIntegration {
     }
 }
 
+/// CLI 模式实现：支持向宿主操作系统的 Keychain/Keyring 写入凭据（用于终端命令行切号）
+pub struct CliIntegration;
+
+impl SystemIntegration for CliIntegration {
+    async fn on_account_switch(
+        &self,
+        account: &crate::models::Account,
+        target_ide: Option<&str>,
+    ) -> Result<(), String> {
+        if target_ide == Some("agy") {
+            write_to_system_keyring(account)?;
+            let _ = write_to_file_credentials(account, true);
+            let stored = read_from_system_keyring_only()?;
+            verify_agy_credentials(&account.token.refresh_token, &stored.refresh_token)?;
+
+            if let Ok(storage_path) = device::get_storage_path(target_ide) {
+                if let Some(ref profile) = account.device_profile {
+                    let _ = device::write_profile(&storage_path, profile);
+                }
+            }
+            return Ok(());
+        }
+
+        let classic_running = process::is_antigravity_running(None);
+        let ide_running = process::is_antigravity_running(Some("ide"));
+        let classic_exe = process::get_antigravity_executable_path(Some("classic"));
+        let ide_exe = process::get_antigravity_executable_path(Some("ide"));
+        let ide_exe_str = ide_exe.as_ref().map(|p| p.to_string_lossy().to_string());
+
+        let (_is_ide, effective_target) = resolve_effective_target(
+            target_ide,
+            classic_running,
+            ide_running,
+            classic_exe.is_some(),
+            ide_exe_str.as_deref(),
+        );
+
+        let _ = write_to_system_keyring(account);
+        if let Ok(db_path) = db::get_db_path(effective_target) {
+            if db_path.exists() {
+                let _ = db::inject_token(
+                    &db_path,
+                    &account.token.access_token,
+                    &account.token.refresh_token,
+                    account.token.expiry_timestamp,
+                    &account.email,
+                    account.token.is_gcp_tos,
+                    account.token.project_id.as_deref(),
+                    account.token.id_token.as_deref(),
+                    account.token.oauth_client_key.as_deref(),
+                    effective_target,
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn update_tray(&self) {}
+    fn show_notification(&self, title: &str, body: &str) {
+        crate::modules::logger::log_info(&format!("[CLI Notification] {}: {}", title, body));
+    }
+}
+
 /// 系统集成管理器：替代 Arc<dyn SystemIntegration> 以解决 async trait 的 dyn 兼容性问题
 #[derive(Clone)]
 pub enum SystemManager {
     Desktop(tauri::AppHandle),
     Headless,
+    Cli,
 }
 
 impl SystemManager {
@@ -1218,6 +1289,10 @@ impl SystemManager {
             }
             SystemManager::Headless => {
                 let integration = HeadlessIntegration;
+                integration.on_account_switch(account, target_ide).await
+            }
+            SystemManager::Cli => {
+                let integration = CliIntegration;
                 integration.on_account_switch(account, target_ide).await
             }
         }
@@ -1244,6 +1319,10 @@ impl SystemManager {
                 let integration = HeadlessIntegration;
                 integration.show_notification(title, body);
             }
+            SystemManager::Cli => {
+                let integration = CliIntegration;
+                integration.show_notification(title, body);
+            }
         }
     }
 }
@@ -1254,18 +1333,7 @@ impl SystemIntegration for SystemManager {
         account: &crate::models::Account,
         target_ide: Option<&str>,
     ) -> Result<(), String> {
-        match self {
-            SystemManager::Desktop(handle) => {
-                let integration = DesktopIntegration {
-                    app_handle: handle.clone(),
-                };
-                integration.on_account_switch(account, target_ide).await
-            }
-            SystemManager::Headless => {
-                let integration = HeadlessIntegration;
-                integration.on_account_switch(account, target_ide).await
-            }
-        }
+        self.on_account_switch(account, target_ide).await
     }
 
     fn update_tray(&self) {

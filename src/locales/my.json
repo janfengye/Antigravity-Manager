@@ -62,7 +62,8 @@
         "selected": "Selected",
         "claude_series": "Claude Series",
         "maximize": "Maximize",
-        "app_name": "Antigravity Tools"
+        "app_name": "Antigravity Tools",
+        "copy_to_clipboard": "Salin ke papan keratan"
     },
     "nav": {
         "dashboard": "Papan Pemuka",
@@ -206,9 +207,23 @@
         "no_client_account": "ဤအက်ပ်အတွက် အသုံးပြုနေသော အကောင့်မရှိပါ",
         "go_switch_account": "အကောင့်ပြောင်းရန် သွားပါ",
         "switch_best_to_target": "အကောင်းဆုံးအကောင့်ကို {{target}} သို့ ပြောင်းပါ",
-        "switch_this_to_target": "ဤအကောင့်ကို {{target}} သို့ ပြောင်းပါ"
+        "switch_this_to_target": "ဤအကောင့်ကို {{target}} သို့ ပြောင်းပါ",
+        "account_pool": "Kumpulan akaun",
+        "view_mode_title_5h": "Pandangan tetingkap bergolek 5 jam",
+        "view_mode_title_weekly": "Pandangan kuota mingguan 7 hari",
+        "view_mode_title_weighted": "Pandangan wajaran komprehensif"
     },
     "accounts": {
+        "qos": {
+            "suspicious": "အမြန်နှုန်း ကန့်သတ်ခံရဖွယ်ရှိ",
+            "suspicious_hint": "မူလတုံ့ပြန်မှု နှောင့်နှေးမှု ပုံမှန်မဟုတ်ခြင်း တွေ့ရှိရသည်။ ဆက်ရှင်အသစ် ခွဲဝေမှု ခေတ္တရပ်ဆိုင်းထားသည်။",
+            "jailed": "အအေးခံခန်းထဲတွင်",
+            "jailed_hint": "တိတ်တဆိတ် အမြန်နှုန်း လျှော့ချခံရခြင်း တွေ့ရှိသဖြင့် ဆက်ရှင်ဖြုတ်လိုက်သည်။ အဆင့်ဆင့် အအေးခံနေပြီး နောက်ခံစစ်ဆေးမှု ပြုလုပ်မည်။",
+            "probing": "ပြန်လည်စစ်ဆေးနေသည်",
+            "probing_hint": "ဝန်ဆောင်မှု အရည်အသွေး အပြည့်အဝ ပြန်ကောင်းမကောင်း အပေါ့စား စစ်ဆေးမှု ပြုလုပ်နေသည်။",
+            "half_open": "စောင့်ကြည့်ကာလ",
+            "half_open_hint": "စစ်ဆေးမှု အောင်မြင်သည်။ အစစ်အမှန် လမ်းကြောင်းဖြင့် စမ်းသပ်နေပြီး တည်ငြိမ်ပါက အပြည့်အဝ ပြန်လည်အသုံးပြုနိုင်မည်။"
+        },
         "account": "အကောင့်",
         "search_placeholder": "အီးမေးလ် ရှာရန်...",
         "all": "Semua",
@@ -312,6 +327,9 @@
         "warmup_now": "Pemanasan Sekarang",
         "warmup_batch_triggered": "Tugas pemanasan dicetuskan untuk {{count}} akaun",
         "quota_protected": "Dilindungi",
+        "remaining_quota": "Baki Kuota: {{percentage}}%",
+        "reset_in": "Set Semula: {{time}}",
+        "supported_official_models": "Model Rasmi Disokong ({{count}}):",
         "details": {
             "title": "Butiran Kuota",
             "model_quota": "Kuota model individu",
@@ -441,7 +459,15 @@
         "quota_group_claude": "Model Claude & GPT",
         "weekly_constrained_tooltip": "Dikekang oleh had mingguan",
         "weekly_tokens": "Token kitaran",
-        "weekly_tokens_tooltip": "Token yang direkodkan oleh kejadian ini dalam kitaran kuota semasa (input + output)"
+        "weekly_tokens_tooltip": "Token yang direkodkan oleh kejadian ini dalam kitaran kuota semasa (input + output)",
+        "client_classic": "Klasik",
+        "client_classic_tooltip": "Akaun log masuk Antigravity Klasik semasa",
+        "client_ide": "IDE",
+        "client_ide_tooltip": "Akaun log masuk Antigravity IDE semasa",
+        "client_cli": "CLI",
+        "client_cli_tooltip": "Akaun log masuk Antigravity CLI (agy) semasa",
+        "switch_next_short": "Seterusnya",
+        "weekly_exhausted_tooltip": "Kuota mingguan habis, perlindungan automatik diaktifkan"
     },
     "settings": {
         "save": "Simpan Tetapan",
@@ -765,7 +791,8 @@
             "open_btn": "Open Console",
             "debug_logging": "Debug Logging",
             "debug_logging_desc": "When enabled, records the complete request and response chain. Recommended to enable only when troubleshooting issues."
-        }
+        },
+        "lightweight_mode_desc": "Melepaskan memori WebView sepenuhnya apabila keluar atau meminimumkan ke dulang"
     },
     "tray": {
         "current": "Semasa",
@@ -773,11 +800,15 @@
         "switch_next": "Tukar ke Akaun Seterusnya",
         "refresh_current": "Muat Semula Kuota Semasa",
         "show_window": "Tunjukkan Tetingkap Utama",
+        "mini_view": "Paparan Mini",
         "quit": "Keluar Aplikasi",
         "no_account": "Tiada Akaun",
         "unknown_quota": "Tidak diketahui (Klik untuk Muat Semula)",
         "forbidden": "Akaun Dilarang",
-        "lightweight_mode": "Mod Ringan (Lepaskan memori semasa di dulang)"
+        "lightweight_mode": "Mod Ringan (Lepaskan memori semasa di dulang)",
+        "open_console": "Buka konsol",
+        "pin_desc": "Semat ke desktop (jangan sembunyikan semasa kehilangan fokus)",
+        "unpin_desc": "Disematkan (klik untuk nyahsemat, sembunyi automatik)"
     },
     "proxy": {
         "title": "Perkhidmatan Proksi API",
@@ -1367,7 +1398,7 @@
             "gemini3_option_flash": "gemini-3-flash (Fast)"
         },
         "multi_protocol": {
-            "title": "Sokongan Pelbagai Protokol",
+            "title": "Katalog Model & Protokol",
             "subtitle": "Integrasi lancar dengan alat dan CLI AI kegemaran anda",
             "description": "Proksi tempatan menyokong protokol OpenAI, Anthropic, dan Gemini, memastikan keserasian dengan pelbagai aplikasi.",
             "openai_label": "Protokol OpenAI",

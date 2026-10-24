@@ -300,6 +300,10 @@ struct AccountResponse {
     quota: Option<QuotaResponse>,
     device_bound: bool,
     last_used: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    qos_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    qos_reset_seconds: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -410,6 +414,8 @@ fn to_account_response(
         validation_blocked_until: account.validation_blocked_until,
         validation_blocked_reason: account.validation_blocked_reason.clone(),
         validation_url: account.validation_url.clone(),
+        qos_status: account.qos_status.clone(),
+        qos_reset_seconds: account.qos_reset_seconds,
     }
 }
 
@@ -607,6 +613,12 @@ impl AxumServer {
         let proxy_routes = Router::new()
             .route("/health", get(health_check_handler))
             .route("/healthz", get(health_check_handler))
+            // Version endpoints (vLLM / Hermes / Agent compatibility)
+            .route("/version", get(handlers::openai::handle_version))
+            .route("/v1/version", get(handlers::openai::handle_version))
+            // Props endpoints (llama.cpp / Hermes / Local probe compatibility)
+            .route("/props", get(handlers::openai::handle_props))
+            .route("/v1/props", get(handlers::openai::handle_props))
             // OpenAI Protocol (Chat & Universal Models)
             .route("/v1/models", get(handlers::openai::handle_list_models))
             .route(
@@ -734,6 +746,10 @@ impl AxumServer {
             .route("/accounts/switch", post(admin_switch_account))
             .route("/accounts/refresh", post(admin_refresh_all_quotas))
             .route("/accounts/:accountId", delete(admin_delete_account))
+            .route(
+                "/accounts/:accountId/release-qos",
+                post(admin_release_account_qos_jail),
+            )
             .route("/accounts/:accountId/bind-device", post(admin_bind_device))
             .route(
                 "/accounts/:accountId/device-profiles",
@@ -937,6 +953,7 @@ impl AxumServer {
                 get(admin_get_token_stats_account_trend_daily),
             )
             .route("/accounts/bulk-delete", post(admin_delete_accounts))
+            .route("/accounts/batch-import", post(admin_batch_import_accounts))
             .route("/accounts/export", post(admin_export_accounts))
             .route("/accounts/reorder", post(admin_reorder_accounts))
             .route("/accounts/:accountId/quota", get(admin_fetch_account_quota))
@@ -1364,6 +1381,27 @@ async fn admin_list_accounts(
                     .map(|groups| groups.iter().map(quota_group_to_dto).collect()),
             });
 
+            let qos_state = state.token_manager.qos_guardian.get_state(&acc.id);
+            let qos_status = match qos_state {
+                crate::proxy::qos_guardian::AccountQoSState::Suspicious { .. } => {
+                    Some("suspicious".to_string())
+                }
+                crate::proxy::qos_guardian::AccountQoSState::Jailed { .. } => {
+                    Some("jailed".to_string())
+                }
+                crate::proxy::qos_guardian::AccountQoSState::Probing { .. } => {
+                    Some("probing".to_string())
+                }
+                crate::proxy::qos_guardian::AccountQoSState::HalfOpen { .. } => {
+                    Some("half_open".to_string())
+                }
+                crate::proxy::qos_guardian::AccountQoSState::Healthy => None,
+            };
+            let qos_reset_seconds = state
+                .token_manager
+                .qos_guardian
+                .get_jailed_remaining_seconds(&acc.id);
+
             AccountResponse {
                 id: acc.id,
                 email: acc.email,
@@ -1385,6 +1423,8 @@ async fn admin_list_accounts(
                 quota,
                 device_bound: acc.device_profile.is_some(),
                 last_used: acc.last_used,
+                qos_status,
+                qos_reset_seconds,
             }
         })
         .collect();
@@ -1447,6 +1487,27 @@ async fn admin_get_current_account(
                     .map(|groups| groups.iter().map(quota_group_to_dto).collect()),
             });
 
+            let qos_state = state.token_manager.qos_guardian.get_state(&acc.id);
+            let qos_status = match qos_state {
+                crate::proxy::qos_guardian::AccountQoSState::Suspicious { .. } => {
+                    Some("suspicious".to_string())
+                }
+                crate::proxy::qos_guardian::AccountQoSState::Jailed { .. } => {
+                    Some("jailed".to_string())
+                }
+                crate::proxy::qos_guardian::AccountQoSState::Probing { .. } => {
+                    Some("probing".to_string())
+                }
+                crate::proxy::qos_guardian::AccountQoSState::HalfOpen { .. } => {
+                    Some("half_open".to_string())
+                }
+                crate::proxy::qos_guardian::AccountQoSState::Healthy => None,
+            };
+            let qos_reset_seconds = state
+                .token_manager
+                .qos_guardian
+                .get_jailed_remaining_seconds(&acc.id);
+
             AccountResponse {
                 id: acc.id,
                 email: acc.email,
@@ -1468,6 +1529,8 @@ async fn admin_get_current_account(
                 quota,
                 device_bound: acc.device_profile.is_some(),
                 last_used: acc.last_used,
+                qos_status,
+                qos_reset_seconds,
             }
         })
     } else {
@@ -1513,6 +1576,14 @@ async fn admin_add_account(
         )
     })?;
     Ok(Json(to_account_response(&account, &current_id)))
+}
+
+async fn admin_release_account_qos_jail(
+    State(state): State<AppState>,
+    axum::extract::Path(account_id): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    state.token_manager.release_account_qos_jail(&account_id);
+    StatusCode::OK
 }
 
 async fn admin_delete_account(
@@ -1569,15 +1640,22 @@ async fn admin_switch_account(
         *switching = true;
     }
 
-    let account_id = payload.account_id.clone();
+    let resolved_account_id = match account::resolve_account_summary(
+        Some(&payload.account_id),
+        payload.target_ide.as_deref(),
+    ) {
+        Ok(summary) => summary.id,
+        Err(_) => payload.account_id.clone(),
+    };
+
     logger::log_info(&format!(
-        "[API] Starting account switch: {} (target_ide: {:?})",
-        account_id, payload.target_ide
+        "[API] Starting account switch: {} (resolved: {}) (target_ide: {:?})",
+        payload.account_id, resolved_account_id, payload.target_ide
     ));
 
     let result = state
         .account_service
-        .switch_account(&account_id, payload.target_ide.as_deref())
+        .switch_account(&resolved_account_id, payload.target_ide.as_deref())
         .await;
 
     {
@@ -1587,7 +1665,10 @@ async fn admin_switch_account(
 
     match result {
         Ok(()) => {
-            logger::log_info(&format!("[API] Account switch successful: {}", account_id));
+            logger::log_info(&format!(
+                "[API] Account switch successful: {}",
+                resolved_account_id
+            ));
 
             // [FIX #1166] 账号切换后立即同步内存状态
             state.token_manager.clear_all_sessions();
@@ -1863,11 +1944,24 @@ async fn admin_save_config(
         *mapping = new_config.clone().proxy.custom_mapping;
     }
 
+    // 更新“仅暴露真实配额模型”状态 (Fixes #3730)
+    {
+        let mut only_raw = state.only_raw_quota_models.write().await;
+        *only_raw = new_config.proxy.only_raw_quota_models;
+    }
+
     // 更新上游代理
     {
         let mut proxy = state.upstream_proxy.write().await;
         *proxy = new_config.clone().proxy.upstream_proxy;
     }
+    // [HOT-RELOAD] Rebuild default HTTP client with new upstream proxy
+    state
+        .upstream
+        .rebuild_default_client(Some(new_config.proxy.upstream_proxy.clone()))
+        .await;
+    state.upstream.clear_client_cache();
+    crate::utils::http::invalidate_shared_clients();
 
     // 更新安全策略
     {
@@ -1881,11 +1975,35 @@ async fn admin_save_config(
         *exp = new_config.clone().proxy.experimental;
     }
 
+    // 更新调试日志配置
+    {
+        let mut dbg = state.debug_logging.write().await;
+        *dbg = new_config.clone().proxy.debug_logging;
+    }
+
     // 更新代理池配置（Web/Docker 保存配置时热更新）
     {
         let mut pool = state.proxy_pool_state.write().await;
         *pool = new_config.clone().proxy.proxy_pool;
     }
+    state.proxy_pool_manager.sync_bindings_from_config().await;
+
+    // 更新 User-Agent 配置
+    state
+        .upstream
+        .set_user_agent_override(new_config.proxy.user_agent_override.clone())
+        .await;
+
+    // 同步健康检查日志捕获开关
+    state
+        .monitor
+        .set_capture_health_logs(new_config.proxy.capture_health_logs);
+
+    // 同步 Hub 指纹
+    crate::modules::hub_version::update_hub_fingerprint(
+        new_config.proxy.hub_version.as_deref(),
+        new_config.proxy.hub_cl.as_deref(),
+    );
 
     // 同步全局内存配置（热更新思考预算、系统提示词、图像思考模式与审计策略）
     crate::proxy::update_thinking_budget_config(new_config.proxy.thinking_budget.clone());
@@ -2923,6 +3041,26 @@ async fn admin_delete_accounts(
         )
     })?;
     Ok(StatusCode::OK)
+}
+
+async fn admin_batch_import_accounts(
+    State(state): State<AppState>,
+    Json(payload): Json<Vec<crate::models::ImportAccountEntry>>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    let result = crate::modules::account::batch_import_accounts_logic(None, payload)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse { error: e }),
+            )
+        })?;
+
+    if let Err(e) = state.token_manager.load_accounts().await {
+        tracing::warn!("[API] Failed to reload accounts after batch import: {}", e);
+    }
+
+    Ok((StatusCode::OK, Json(result)))
 }
 
 #[derive(Deserialize)]

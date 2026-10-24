@@ -56,6 +56,9 @@ import { useConfigStore } from '../../stores/useConfigStore';
 import { GroupQuotaCard } from './GroupQuotaCard';
 import { getGroupQuotaSummaries } from '../../utils/quotaDisplay';
 import { getValidationBlockedStatusLabel } from './accountValidationStatus';
+import { showToast } from '../common/ToastContainer';
+import { releaseAccountQoSJail } from '../../services/accountService';
+import { QoSStatusBadge } from './QoSStatusBadge';
 import { getLiveLimitForModel } from '../../utils/liveLimit';
 
 // ============================================================================
@@ -327,6 +330,16 @@ function AccountRowContent({
         setIsEditingLabel(false);
     };
 
+    const handleReleaseJail = async () => {
+        try {
+            await releaseAccountQoSJail(account.id);
+            showToast(t('accounts.qos.release_success', '已解除该账号的小黑屋限制'), 'success');
+            onRefresh();
+        } catch (err: any) {
+            showToast(err?.message || '解除失败', 'error');
+        }
+    };
+
     const handleCancelLabel = () => {
         setLabelInput(account.custom_label || '');
         setIsEditingLabel(false);
@@ -345,11 +358,21 @@ function AccountRowContent({
         return getGroupQuotaSummaries(account.quota?.quota_groups, account.quota?.models, tier);
     }, [account.quota?.quota_groups, account.quota?.models, tier]);
 
+    const modelCapabilities = useMemo(() => {
+        const supported = Array.from(new Set(groupSummaries.flatMap(s => s.supportedModels || [])));
+        const hasArgon = supported.some(m => m.includes('argon')) || groupSummaries.some(s => s.key === 'argon');
+        const hasClaude55 = supported.some(m => m.includes('5-5') || m.includes('5.5'));
+        const hasClaude46 = supported.some(m => m.includes('4-6') || m.includes('4.6'));
+        const hasGpt = supported.some(m => m.startsWith('gpt'));
+        const hasGemini38 = supported.some(m => m.includes('3.8') || m.includes('3-8'));
+        return { hasArgon, hasClaude55, hasClaude46, hasGpt, hasGemini38, supportedCount: supported.length };
+    }, [groupSummaries]);
+
     return (
         <>
             {/* 邮箱列 */}
-            <td className="px-2 py-1 align-middle">
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <td className="px-2 py-1.5 align-middle max-w-[320px]">
+                <div className="flex flex-col gap-1 min-w-0">
                     <span className={cn(
                         "font-medium text-sm break-all transition-colors",
                         isRowActive ? "text-blue-700 dark:text-blue-400" : "text-gray-900 dark:text-base-content"
@@ -357,7 +380,7 @@ function AccountRowContent({
                         {account.email}
                     </span>
 
-                    <div className="flex items-center gap-1.5 shrink-0">
+                    <div className="flex flex-wrap items-center gap-1.5 min-w-0">
                         {isClassic && (
                             <span
                                 className="px-2 py-0.5 rounded-md bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 text-[10px] font-bold shadow-sm border border-blue-200/50 dark:border-blue-800/50"
@@ -417,6 +440,12 @@ function AccountRowContent({
                                 <span>{validationBlockedLabel}</span>
                             </span>
                         )}
+                        <QoSStatusBadge
+                            status={account.qos_status}
+                            resetSeconds={account.qos_reset_seconds}
+                            size="md"
+                            onRelease={handleReleaseJail}
+                        />
 
 
                         {/* 订阅类型徽章 */}
@@ -455,6 +484,37 @@ function AccountRowContent({
                                 {account.custom_label}
                             </span>
                         )}
+
+                        {/* 核心支持模型徽章栏 (直观展现该账号具体可用的旗舰模型代际) */}
+                        {modelCapabilities.hasArgon && (
+                            <span
+                                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-gradient-to-r from-purple-500/15 to-indigo-500/15 text-purple-700 dark:text-purple-300 text-[10px] font-bold shadow-2xs border border-purple-200/60 dark:border-purple-800/50 cursor-default"
+                            >
+                                <Sparkles className="w-2.5 h-2.5 text-purple-500" />
+                                Argon
+                            </span>
+                        )}
+                        {modelCapabilities.hasClaude55 && (
+                            <span
+                                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-500/15 text-amber-700 dark:text-amber-300 text-[10px] font-bold shadow-2xs border border-amber-200/60 dark:border-amber-800/50 cursor-default"
+                            >
+                                Claude 5.5
+                            </span>
+                        )}
+                        {modelCapabilities.hasClaude46 && !modelCapabilities.hasClaude55 && (
+                            <span
+                                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-500/10 text-amber-600/90 dark:text-amber-400/90 text-[10px] font-bold shadow-2xs border border-amber-200/40 dark:border-amber-800/30 cursor-default"
+                            >
+                                Claude 4.6
+                            </span>
+                        )}
+                        {modelCapabilities.hasGpt && (
+                            <span
+                                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 text-[10px] font-bold shadow-2xs border border-emerald-200/60 dark:border-emerald-800/50 cursor-default"
+                            >
+                                GPT-120B
+                            </span>
+                        )}
                         {/* 标签编辑输入框 */}
                         {isEditingLabel && (
                             <div className="flex items-center gap-1">
@@ -489,7 +549,7 @@ function AccountRowContent({
             </td>
 
             {/* 模型配额列 */}
-            <td className="px-2 py-1 align-middle">
+            <td className="px-3 py-2 align-middle">
                 {isDisabled || account.quota?.is_forbidden || account.validation_blocked ? (
                     <div className={cn(
                         "flex items-center justify-center gap-3 py-1.5 px-4 rounded-xl border group/error",
@@ -519,7 +579,7 @@ function AccountRowContent({
                         </button>
                     </div>
                 ) : (
-                    <div className="flex flex-col gap-1.5 py-0">
+                    <div className="flex flex-col gap-1.5 py-0.5">
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
                             {groupSummaries.filter(s => s.key !== 'argon').map((summary) => (
                                 <GroupQuotaCard
@@ -535,7 +595,7 @@ function AccountRowContent({
                             const argon = groupSummaries.find(s => s.key === 'argon');
                             if (!argon) return null;
                             return (
-                                <div className="w-full">
+                                <div className="w-full pt-0.5">
                                     <GroupQuotaCard
                                         summary={argon}
                                         isProtected={Boolean(config?.quota_protection?.enabled && isGroupProtected(account.protected_models, 'argon'))}

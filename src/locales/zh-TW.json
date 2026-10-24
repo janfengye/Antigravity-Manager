@@ -63,7 +63,8 @@
         "selected": "已選擇",
         "claude_series": "Claude 系列",
         "maximize": "最大化",
-        "app_name": "Antigravity Tools"
+        "app_name": "Antigravity Tools",
+        "copy_to_clipboard": "複製到剪貼板"
     },
     "nav": {
         "dashboard": "儀表板",
@@ -207,9 +208,26 @@
         "no_client_account": "該應用當前暫無登錄或綁定的帳號",
         "go_switch_account": "前往切換帳號",
         "switch_best_to_target": "一鍵切換最佳帳號到 {{target}}",
-        "switch_this_to_target": "一鍵將此帳號切換到 {{target}}"
+        "switch_this_to_target": "一鍵將此帳號切換到 {{target}}",
+        "account_pool": "帳號池",
+        "view_mode_title_5h": "5小時滾動視窗檢視",
+        "view_mode_title_weekly": "7天週配額檢視",
+        "view_mode_title_weighted": "綜合加權檢視"
     },
     "accounts": {
+        "qos": {
+            "suspicious": "疑似被限速",
+            "suspicious_hint": "上游首包延遲出現異常卡頓，已開啟只出不進保護並暫緩新會話分流",
+            "jailed": "限速小黑屋中",
+            "jailed_hint": "已觸發上游靜默降速熔斷並強制解綁會話，正在階梯冷卻中，後台探針將自動測速自愈",
+            "probing": "解限探測中",
+            "probing_hint": "正在向該帳號發起純淨測速探針，檢測上游服務質量是否已滿血恢復",
+            "half_open": "觀察緩刑中",
+            "half_open_hint": "探針通過，正在進行生產流量單路試探，連續穩定通過後將徹底恢復健康",
+            "release_btn": "解除",
+            "release_tooltip": "點擊立即手動移除小黑屋限制，恢復帳號正常調度",
+            "release_success": "已成功解除該帳號的小黑屋限制，恢復正常調度"
+        },
         "account": "帳號",
         "search_placeholder": "搜尋信箱...",
         "all": "全部",
@@ -318,6 +336,9 @@
         "quota_window_weekly": "7天周配額",
         "quota_window_weekly_short": "周配額",
         "quota_protected": "受保護",
+        "remaining_quota": "剩餘配額: {{percentage}}%",
+        "reset_in": "重設: {{time}}",
+        "supported_official_models": "支援官方模型 ({{count}}個):",
         "details": {
             "title": "配額詳情",
             "model_quota": "具體模型配額",
@@ -445,7 +466,9 @@
         "quota_group_claude": "Claude & GPT 模型",
         "weekly_constrained_tooltip": "受到週配額短板壓制",
         "weekly_tokens": "本週期 Token",
-        "weekly_tokens_tooltip": "本實例在此配額週期記錄的 Token 用量（輸入 + 輸出）"
+        "weekly_tokens_tooltip": "本實例在此配額週期記錄的 Token 用量（輸入 + 輸出）",
+        "switch_next_short": "切下一個",
+        "weekly_exhausted_tooltip": "週配額已耗盡，已觸發自動保護"
     },
     "settings": {
         "save": "儲存設定",
@@ -769,7 +792,8 @@
             "placeholder": "輸入全局系統提示詞...\n例如：你是一位資深的全棧開發工程師，擅長 React 和 Rust。請使用繁體中文回复。",
             "char_count": "{{count}} 字符",
             "long_prompt_warning": "提示詞較長（超過 2000 字符），可能會佔用較多的上下文窗口空間。"
-        }
+        },
+        "lightweight_mode_desc": "開啟後退出或最小化到托盤將徹底釋放 WebView 記憶體"
     },
     "tray": {
         "current": "當前",
@@ -777,11 +801,15 @@
         "switch_next": "切換下一個帳號",
         "refresh_current": "重新整理當前帳號額度",
         "show_window": "顯示主視窗",
+        "mini_view": "迷你懸浮窗",
         "quit": "退出應用 (Exit)",
         "no_account": "無帳號",
         "unknown_quota": "未知 (點選重新整理)",
         "forbidden": "帳號被封禁",
-        "lightweight_mode": "輕量模式 (退出時釋放記憶體)"
+        "lightweight_mode": "輕量模式 (退出時釋放記憶體)",
+        "open_console": "開啟主控制台",
+        "pin_desc": "固定在桌面（點擊常駐桌面，不隨失焦收起）",
+        "unpin_desc": "已固定常駐（點擊取消固定，失焦自動收起）"
     },
     "proxy": {
         "title": "API 反向代理服務",
@@ -1380,7 +1408,7 @@
             "title": "使用示例"
         },
         "multi_protocol": {
-            "title": "多協定支援 (Multi-Protocol Support)",
+            "title": "模型大全與協定",
             "subtitle": "快速同步 API 地址與金鑰到本地 AI 工具",
             "description": "反代服務支援 OpenAI、Anthropic 和 Gemini 協定，滿足不同工具的整合需求",
             "openai_label": "OpenAI 協定",
@@ -1389,7 +1417,7 @@
             "anthropic_tools": "Claude Code CLI",
             "gemini_label": "Gemini 協定",
             "gemini_tools": "Google AI SDK, LangChain",
-            "quick_integration": "快速整合 (Quick Integration)",
+            "quick_integration": "快速整合",
             "click_tip": "👆 點擊模型以更新程式碼範例",
             "copy_base": "複製 Base"
         },

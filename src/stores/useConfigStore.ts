@@ -119,9 +119,16 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
         const current = get().config;
         if (!current || current.theme === theme) return;
 
+        localStorage.setItem('app-theme-preference', theme);
         const latest = get().config || current;
         const newConfig = { ...latest, theme };
         await get().saveConfig(newConfig, true);
+
+        const { isTauri } = await import('../utils/env');
+        if (isTauri()) {
+            const { emit } = await import('@tauri-apps/api/event');
+            await emit('app://theme-changed', { theme }).catch(() => {});
+        }
     },
 
     updateLanguage: async (language: string) => {
@@ -142,6 +149,12 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
         // 3. 切换 i18n 并等待落盘完成
         await i18n.changeLanguage(normalized);
         await savePromise;
+
+        const { isTauri } = await import('../utils/env');
+        if (isTauri()) {
+            const { emit } = await import('@tauri-apps/api/event');
+            await emit('app://language-changed', { language: normalized }).catch(() => {});
+        }
     },
 
     toggleShowAllQuotas: () => {

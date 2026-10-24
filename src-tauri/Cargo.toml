@@ -1,6 +1,6 @@
 [package]
 name = "antigravity-tools"
-version = "4.9.8"
+version = "5.0.0"
 description = "Antigravity Tools"
 authors = ["you"]
 license = "CC-BY-NC-SA-4.0"
@@ -19,7 +19,7 @@ crate-type = ["rlib"]
 tauri-build = { version = "^2.2.5", features = [] }
 
 [dependencies]
-tauri = { version = "^2.2.5", features = ["tray-icon", "image-png"] }
+tauri = { version = "^2.2.5", features = ["tray-icon", "image-png", "macos-private-api"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

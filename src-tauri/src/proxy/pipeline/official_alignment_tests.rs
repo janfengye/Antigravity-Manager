@@ -423,18 +423,18 @@ mod tests {
             "gemini-3.8-flash-medium"
         );
 
-        // 2. 裸 3.7 Flash 与 3.6 Flash 模型同理
+        // 2. 裸 Gemini 4 Argon 与 Claude 5.5 模型依据思考档位路由
         assert_eq!(
-            resolve_model_route_with_effort("gemini-3.7-flash", &empty_mapping, Some("low")),
-            "gemini-3.7-flash-low"
+            resolve_model_route_with_effort("gemini-4-argon", &empty_mapping, Some("low")),
+            "gemini-4-argon-low"
         );
         assert_eq!(
-            resolve_model_route_with_effort("gemini-3.7-flash", &empty_mapping, None),
-            "gemini-3.7-flash-tiered"
+            resolve_model_route_with_effort("gemini-4-argon", &empty_mapping, None),
+            "gemini-4-argon-medium"
         );
         assert_eq!(
-            resolve_model_route_with_effort("gemini-3.6-flash", &empty_mapping, Some("medium")),
-            "gemini-3.6-flash-medium"
+            resolve_model_route_with_effort("claude-opus-5-5", &empty_mapping, Some("high")),
+            "claude-opus-5-5-high"
         );
 
         // 3. Tiered 模型原样保留模型名，绝对不改名！
@@ -610,6 +610,21 @@ mod tests {
         );
         assert_eq!(gc["thinkingConfig"]["thinkingBudget"], -1);
         assert_eq!(gc["thinkingConfig"]["includeThoughts"], true);
+        assert!(gc["thinkingConfig"].get("thinkingLevel").is_none());
+
+        // 7. Argon 系列必须输出 thinkingLevel，严禁输出 thinkingBudget！
+        let mut gc_argon = json!({});
+        InboundThinkingPipeline::configure_inbound_thinking(
+            "gemini-4-argon-medium",
+            &mut gc_argon,
+            ClientThinkingSwitch::Default,
+            None,
+            None,
+            None,
+        );
+        assert_eq!(gc_argon["thinkingConfig"]["thinkingLevel"], "MEDIUM");
+        assert_eq!(gc_argon["thinkingConfig"]["includeThoughts"], true);
+        assert!(gc_argon["thinkingConfig"].get("thinkingBudget").is_none());
     }
 
     #[test]

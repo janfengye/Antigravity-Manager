@@ -1820,7 +1820,7 @@ print(response.choices[0].message.content)`;
                 {!configLoading && !configError && appConfig && (
                     <div className="bg-white dark:bg-base-100 rounded-xl shadow-xs border border-gray-200/80 dark:border-base-200">
                         <div className="px-4 sm:px-5 py-2.5 border-b border-gray-100 dark:border-base-200 bg-gray-50/60 dark:bg-base-200/80 flex flex-wrap items-center justify-between gap-3">
-                            {/* 三个可选菜单栏：服务配置、CLI 一键配置、多协议支持 */}
+                            {/* 菜单栏：服务配置、模型配置、模型大全与协议、CLI 一键配置 */}
                             <div className="flex items-center gap-1.5 bg-gray-200/70 dark:bg-base-300/60 p-1 rounded-xl">
                                 <button
                                     type="button"
@@ -1848,18 +1848,6 @@ print(response.choices[0].message.content)`;
                                 </button>
                                 <button
                                     type="button"
-                                    onClick={() => setActiveMenuTab('cli')}
-                                    className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all ${
-                                        activeMenuTab === 'cli'
-                                            ? 'bg-white dark:bg-base-100 text-blue-600 dark:text-blue-400 shadow-xs'
-                                            : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
-                                    }`}
-                                >
-                                    <Terminal size={14} className={activeMenuTab === 'cli' ? 'text-blue-600 dark:text-blue-400' : 'text-gray-400'} />
-                                    {t('proxy.cli_sync.title', { defaultValue: 'Agent工具一键配置' })}
-                                </button>
-                                <button
-                                    type="button"
                                     onClick={() => setActiveMenuTab('protocols')}
                                     className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all ${
                                         activeMenuTab === 'protocols'
@@ -1869,6 +1857,18 @@ print(response.choices[0].message.content)`;
                                 >
                                     <Share2 size={14} className={activeMenuTab === 'protocols' ? 'text-blue-600 dark:text-blue-400' : 'text-gray-400'} />
                                     {t('proxy.multi_protocol.title')}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setActiveMenuTab('cli')}
+                                    className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all ${
+                                        activeMenuTab === 'cli'
+                                            ? 'bg-white dark:bg-base-100 text-blue-600 dark:text-blue-400 shadow-xs'
+                                            : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+                                    }`}
+                                >
+                                    <Terminal size={14} className={activeMenuTab === 'cli' ? 'text-blue-600 dark:text-blue-400' : 'text-gray-400'} />
+                                    {t('proxy.cli_sync.title', { defaultValue: 'Agent工具一键配置' })}
                                 </button>
                             </div>
 
@@ -2383,7 +2383,15 @@ print(response.choices[0].message.content)`;
                             </div>
                         )}
 
-                        {/* TAB 2: CLI 一键配置 (cli) */}
+                        {/* TAB 3: 模型大全与协议 (protocols) */}
+                        {activeMenuTab === 'protocols' && (
+                            <div className="p-4 space-y-6">
+                                {renderMultiProtocolSection()}
+                                {renderSupportedModelsSection()}
+                            </div>
+                        )}
+
+                        {/* TAB 4: CLI 一键配置 (cli) */}
                         {activeMenuTab === 'cli' && (
                             <div className="p-4">
                                 <div className="bg-gray-50/60 dark:bg-base-200/50 rounded-xl p-3 border border-gray-200/60 dark:border-base-300">
@@ -2392,14 +2400,6 @@ print(response.choices[0].message.content)`;
                                         apiKey={appConfig.proxy.api_key}
                                     />
                                 </div>
-                            </div>
-                        )}
-
-                        {/* TAB 3: 多协议支持 (protocols) */}
-                        {activeMenuTab === 'protocols' && (
-                            <div className="p-4 space-y-6">
-                                {renderMultiProtocolSection()}
-                                {renderSupportedModelsSection()}
                             </div>
                         )}
                     </div>

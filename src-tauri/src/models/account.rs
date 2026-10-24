@@ -99,6 +99,12 @@ pub struct Account {
     /// 用户自定义标签
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custom_label: Option<String>,
+    /// [NEW] 运行时 QoS 状态 ("suspicious" | "jailed" | "probing" | "half_open")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qos_status: Option<String>,
+    /// [NEW] 运行时 QoS 冷却剩余时间 (秒)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qos_reset_seconds: Option<u64>,
 }
 
 impl Account {
@@ -130,6 +136,8 @@ impl Account {
             proxy_id: None,
             proxy_bound_at: None,
             custom_label: None,
+            qos_status: None,
+            qos_reset_seconds: None,
         }
     }
 
@@ -275,6 +283,34 @@ pub struct DeviceProfileVersion {
 pub struct AccountExportItem {
     pub email: String,
     pub refresh_token: String,
+}
+
+/// [NEW #3726] 批量导入输入项
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportAccountEntry {
+    #[serde(default)]
+    pub email: Option<String>,
+    pub refresh_token: String,
+}
+
+/// [NEW #3726] 批量导入实时进度事件
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchImportProgress {
+    pub current: usize,
+    pub total: usize,
+    pub success: usize,
+    pub failed: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_email: Option<String>,
+}
+
+/// [NEW #3726] 批量导入最终统计结果
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchImportResult {
+    pub total: usize,
+    pub success: usize,
+    pub failed: usize,
+    pub errors: Vec<String>,
 }
 
 /// 导出账号响应

@@ -47,6 +47,26 @@ struct QuotaResponse {
     models: std::collections::HashMap<String, crate::models::OfficialModelInfo>,
     #[serde(rename = "deprecatedModelIds")]
     deprecated_model_ids: Option<std::collections::HashMap<String, DeprecatedModelInfo>>,
+    #[serde(rename = "agentModelSorts", default)]
+    agent_model_sorts: Vec<AgentModelSort>,
+    #[serde(rename = "imageGenerationModelIds", default)]
+    image_generation_model_ids: Vec<String>,
+    #[serde(rename = "tieredModelIds", default)]
+    tiered_model_ids: Option<std::collections::HashMap<String, Vec<String>>>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct AgentModelSort {
+    #[serde(rename = "displayName")]
+    display_name: Option<String>,
+    #[serde(default)]
+    groups: Vec<AgentModelSortGroup>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct AgentModelSortGroup {
+    #[serde(rename = "modelIds", default)]
+    model_ids: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -425,39 +445,30 @@ pub async fn fetch_quota_with_cache(
                 // 动态更新官方全量模型结构体目录缓存
                 crate::models::OfficialModelCatalog::update(quota_response.models.clone());
 
-                for (name, info) in quota_response.models {
-                    if let Some(quota_info) = info.quota_info {
-                        let percentage = quota_info
-                            .remaining_fraction
-                            .map(|f| (f * 100.0) as i32)
-                            .unwrap_or(0);
-
-                        let reset_time = quota_info.reset_time.clone().unwrap_or_default();
-
-                        // Only keep models we care about (exclude internal chat models)
-                        if name.starts_with("gemini")
-                            || name.starts_with("claude")
-                            || name.starts_with("gpt")
-                            || name.starts_with("image")
-                            || name.starts_with("imagen")
-                        {
-                            let model_quota = crate::models::quota::ModelQuota {
-                                name,
-                                percentage,
-                                reset_time,
-                                display_name: info.display_name,
-                                supports_images: info.supports_images,
-                                supports_thinking: info.supports_thinking,
-                                thinking_budget: info.thinking_budget.map(|v| v as i32),
-                                recommended: info.recommended,
-                                max_tokens: info.max_tokens.map(|v| v as i32),
-                                max_output_tokens: info.max_output_tokens.map(|v| v as i32),
-                                model: Some(info.model),
-                                supported_mime_types: info.supported_mime_types,
-                            };
-                            quota_data.add_model(model_quota);
+                // 提取该账号在官方 fetchAvailableModels 中真实披露支持的推荐/专用模型集合：
+                // 1. agentModelSorts (Recommended 核心模型列表，如 gemini-4-argon-*, gemini-3.8-flash-*, claude-opus-5-5-*, claude-sonnet-5-5-* 或 claude-*-4-6, gpt-oss-120b-medium)
+                // 2. imageGenerationModelIds (图像生成模型，如 gemini-3.1-flash-image)
+                // 3. tieredModelIds (自适应分层模型，如 gemini-3.8-flash-tiered, gemini-3.5-flash-lite)
+                let mut official_supported_ids = std::collections::HashSet::new();
+                for sort in &quota_response.agent_model_sorts {
+                    for group in &sort.groups {
+                        for id in &group.model_ids {
+                            official_supported_ids.insert(id.trim().to_lowercase());
                         }
                     }
+                }
+                for id in &quota_response.image_generation_model_ids {
+                    official_supported_ids.insert(id.trim().to_lowercase());
+                }
+                if let Some(ref tiered_map) = quota_response.tiered_model_ids {
+                    for ids in tiered_map.values() {
+                        for id in ids {
+                            official_supported_ids.insert(id.trim().to_lowercase());
+                        }
+                    }
+                }
+                if !official_supported_ids.is_empty() {
+                    official_supported_ids.insert("gemini-3.1-flash-lite".to_string());
                 }
 
                 // Parse deprecated model routing rules
@@ -476,89 +487,250 @@ pub async fn fetch_quota_with_cache(
                     crate::models::quota::resolve_subscription_tier(subscription_tier.as_deref());
                 quota_data.subscription_tier = Some(final_tier);
 
-                // Best-effort: fetch grouped quota summary (weekly + 5h windows).
-                // Failure here must not block the primary quota result.
+                // Best-effort: 先行获取分组配额摘要 (weekly + 5h windows)。
+                // 这样在解析模型列表时，对于上游不再返回 quotaInfo 的 Gemini/Argon 系模型，
+                // 可以直接提取并绑定其所属分组的真实配额，杜绝模型被误丢弃导致调度器 503 (Issue #3737)。
                 let quota_groups =
                     fetch_quota_summary(access_token, email, project_id.as_deref(), account_id)
                         .await;
 
-                // [FIX #3426] Fuse real bucket quotas into models so UI doesn't show fake 100%
-                if let Some(ref groups) = quota_groups {
-                    for model in quota_data.models.iter_mut() {
-                        let name_lower = model.name.to_lowercase();
+                // 遍历官方公开模型目录，将模型可用性与额度解析解耦：
+                // 只要模型在官方支持清单且符合旗舰基准线，坚决予以保留，不再因缺少 quotaInfo 而丢弃模型。
+                for (name, info) in quota_response.models {
+                    let name_lower = name.trim().to_lowercase();
+
+                    // 显式过滤官方明确标记禁用的条目（如 disabled: true 或名字包含 -disabled / _disabled）
+                    if info.is_disabled()
+                        || name_lower.contains("-disabled")
+                        || name_lower.ends_with("_disabled")
+                    {
+                        continue;
+                    }
+
+                    let in_official_sort = official_supported_ids.is_empty()
+                        || official_supported_ids.contains(&name_lower);
+
+                    // 仅保留当前账号官方实际支持且符合旗舰基准线的模型（彻底剔除 2.5、3.5-flash-low、3-flash-agent、chat_* 等遗留内部条目）
+                    if !in_official_sort
+                        || !crate::proxy::common::model_mapping::is_model_compliant_with_baseline(
+                            &name,
+                        )
+                    {
+                        continue;
+                    }
+
+                    // 1. 提取模型级额度（若上游依然携带 quotaInfo）
+                    let model_pct: Option<i32> = info
+                        .quota_info
+                        .as_ref()
+                        .and_then(|qi| qi.remaining_fraction.map(|f| (f * 100.0).round() as i32));
+                    let model_reset: Option<String> = info
+                        .quota_info
+                        .as_ref()
+                        .and_then(|qi| qi.reset_time.clone())
+                        .filter(|s| !s.is_empty());
+
+                    // 2. 提取分组配额（来自 retrieveUserQuotaSummary 的 5h 与 weekly 双窗口）
+                    let mut group_pct: Option<i32> = None;
+                    let mut group_reset: Option<String> = None;
+
+                    if let Some(ref groups) = quota_groups {
                         let is_argon = name_lower.contains("argon");
                         let is_claude_or_gpt = !is_argon
                             && (name_lower.starts_with("claude") || name_lower.starts_with("gpt"));
                         let is_gemini = !is_argon && name_lower.starts_with("gemini");
 
-                        for group in groups {
-                            let gname = group.display_name.to_lowercase();
-                            let is_argon_group = gname.contains("argon");
-                            let is_claude_group = !is_argon_group
-                                && (gname.contains("claude")
+                        // 查找匹配的配额组：Argon 优先专属组，未命中时回退 Gemini；Claude/GPT 找 3P；Gemini 找常规 Gemini 组
+                        let matched_group = groups
+                            .iter()
+                            .find(|g| {
+                                let gname = g.display_name.to_lowercase();
+                                let is_argon_group = gname.contains("argon")
+                                    || g.buckets.iter().any(|b| {
+                                        let bid = b.bucket_id.to_lowercase();
+                                        let bname =
+                                            b.display_name.as_deref().unwrap_or("").to_lowercase();
+                                        bid.contains("argon") || bname.contains("argon")
+                                    });
+                                if is_argon {
+                                    return is_argon_group;
+                                }
+                                if is_argon_group {
+                                    return false;
+                                }
+                                let is_claude_group = gname.contains("claude")
                                     || gname.contains("gpt")
-                                    || gname.contains("3p"));
-                            let is_gemini_group = !is_argon_group
-                                && !is_claude_group
-                                && (gname.contains("gemini")
-                                    || (!gname.contains("claude")
-                                        && !gname.contains("gpt")
-                                        && !gname.contains("3p")));
+                                    || gname.contains("3p");
+                                if is_claude_or_gpt {
+                                    return is_claude_group;
+                                }
+                                // standard gemini
+                                !is_claude_group
+                                    && (gname.contains("gemini")
+                                        || (!gname.contains("claude")
+                                            && !gname.contains("gpt")
+                                            && !gname.contains("3p")))
+                            })
+                            .or_else(|| {
+                                // Argon 没有独立分组时的优雅降级：回退到通用 Gemini 分组
+                                if is_argon {
+                                    groups.iter().find(|g| {
+                                        let gname = g.display_name.to_lowercase();
+                                        !gname.contains("claude")
+                                            && !gname.contains("gpt")
+                                            && !gname.contains("3p")
+                                    })
+                                } else {
+                                    None
+                                }
+                            });
 
-                            let matches_group = if is_argon {
-                                is_argon_group
-                            } else if is_claude_or_gpt {
-                                is_claude_group
-                            } else if is_gemini {
-                                is_gemini_group
-                            } else {
-                                false
-                            };
+                        if let Some(group) = matched_group {
+                            let bucket_5h = group.buckets.iter().find(|b| {
+                                let win = b.window.to_lowercase();
+                                let bid = b.bucket_id.to_lowercase();
+                                win.contains("5h")
+                                    || bid.contains("5h")
+                                    || win.contains("hour")
+                                    || bid.contains("hour")
+                            });
+                            let bucket_weekly = group.buckets.iter().find(|b| {
+                                let win = b.window.to_lowercase();
+                                let bid = b.bucket_id.to_lowercase();
+                                win.contains("week")
+                                    || bid.contains("week")
+                                    || win.contains("7d")
+                                    || bid.contains("7d")
+                            });
 
-                            if matches_group {
-                                // 找到 5h 桶和 weekly 桶，综合计算受限程度最大的实际可用配额
-                                let bucket_5h = group.buckets.iter().find(|b| {
-                                    let win = b.window.to_lowercase();
-                                    let bid = b.bucket_id.to_lowercase();
-                                    win.contains("5h")
-                                        || bid.contains("5h")
-                                        || win.contains("hour")
-                                        || bid.contains("hour")
-                                });
-                                let bucket_weekly = group.buckets.iter().find(|b| {
-                                    let win = b.window.to_lowercase();
-                                    let bid = b.bucket_id.to_lowercase();
-                                    win.contains("week")
-                                        || bid.contains("week")
-                                        || win.contains("7d")
-                                        || bid.contains("7d")
-                                });
-
-                                let chosen_bucket = match (bucket_5h, bucket_weekly) {
-                                    (Some(h), Some(w)) => {
-                                        // 若周配额耗尽 (<= 0.001)，模型直接受限于周配额，重置时间使用周重置
-                                        if w.remaining_fraction <= 0.001 {
+                            let chosen_bucket = match (bucket_5h, bucket_weekly) {
+                                (Some(h), Some(w)) => {
+                                    if w.remaining_fraction <= 0.001 {
+                                        Some(w)
+                                    } else if h.remaining_fraction < w.remaining_fraction {
+                                        Some(h)
+                                    } else if w.remaining_fraction < h.remaining_fraction {
+                                        Some(w)
+                                    } else {
+                                        if !w.reset_time.is_empty() {
                                             Some(w)
-                                        } else if h.remaining_fraction <= w.remaining_fraction {
-                                            Some(h)
                                         } else {
-                                            Some(w)
+                                            Some(h)
                                         }
                                     }
-                                    (Some(h), None) => Some(h),
-                                    (None, Some(w)) => Some(w),
-                                    _ => group.buckets.first(),
-                                };
+                                }
+                                (Some(h), None) => Some(h),
+                                (None, Some(w)) => Some(w),
+                                _ => group.buckets.first(),
+                            };
 
-                                if let Some(b) = chosen_bucket {
-                                    model.percentage =
-                                        (b.remaining_fraction * 100.0).round() as i32;
-                                    if !b.reset_time.is_empty() {
-                                        model.reset_time = b.reset_time.clone();
-                                    }
-                                    break;
+                            if let Some(b) = chosen_bucket {
+                                group_pct = Some((b.remaining_fraction * 100.0).round() as i32);
+                                if !b.reset_time.is_empty() {
+                                    group_reset = Some(b.reset_time.clone());
                                 }
                             }
+                        }
+                    }
+
+                    // 3. 综合模型级与分组级额度：
+                    // - 若上游不再下发模型级 quotaInfo（如当前 Gemini 系）：自动回退使用分组额度
+                    // - 若两者皆存在：取两者更严格的额度，但模型级显式为 0% 时绝不被正数分组覆盖
+                    // - 若两者皆缺失：保留模型记录（100% 缺省，但不虚构耗尽重置时间），允许调度并由上游做最终鉴权
+                    let (final_percentage, final_reset) = match (model_pct, group_pct) {
+                        (Some(m_p), Some(g_p)) => {
+                            if m_p <= 0 {
+                                (0, model_reset.or(group_reset).unwrap_or_default())
+                            } else {
+                                let p = m_p.min(g_p);
+                                let r = if p == g_p {
+                                    group_reset.or(model_reset)
+                                } else {
+                                    model_reset.or(group_reset)
+                                };
+                                (p, r.unwrap_or_default())
+                            }
+                        }
+                        (Some(m_p), None) => (m_p, model_reset.unwrap_or_default()),
+                        (None, Some(g_p)) => (g_p, group_reset.unwrap_or_default()),
+                        (None, None) => (100, String::new()),
+                    };
+
+                    let model_quota = crate::models::quota::ModelQuota {
+                        name,
+                        percentage: final_percentage,
+                        reset_time: final_reset,
+                        display_name: info.display_name,
+                        supports_images: info.supports_images,
+                        supports_thinking: info.supports_thinking,
+                        thinking_budget: info.thinking_budget.map(|v| v as i32),
+                        recommended: info.recommended,
+                        max_tokens: info.max_tokens.map(|v| v as i32),
+                        max_output_tokens: info.max_output_tokens.map(|v| v as i32),
+                        model: Some(info.model),
+                        supported_mime_types: info.supported_mime_types,
+                    };
+                    quota_data.add_model(model_quota);
+                }
+
+                // [NEW] 若上游下发了 Argon 专属配额组，但 models 中未显式拆分条目时，为该账号注入 Argon 官方权威模型条目
+                if let Some(ref groups) = quota_groups {
+                    let has_argon_group = groups.iter().any(|g| {
+                        let gname = g.display_name.to_lowercase();
+                        gname.contains("argon")
+                            || g.buckets.iter().any(|b| {
+                                let bid = b.bucket_id.to_lowercase();
+                                let bname = b.display_name.as_deref().unwrap_or("").to_lowercase();
+                                bid.contains("argon") || bname.contains("argon")
+                            })
+                    });
+                    if has_argon_group
+                        && !quota_data
+                            .models
+                            .iter()
+                            .any(|m| m.name.to_lowercase().contains("argon"))
+                    {
+                        let argon_b = groups.iter().find_map(|g| {
+                            let gname = g.display_name.to_lowercase();
+                            if gname.contains("argon") {
+                                return g.buckets.first();
+                            }
+                            g.buckets.iter().find(|b| {
+                                let bid = b.bucket_id.to_lowercase();
+                                let bname = b.display_name.as_deref().unwrap_or("").to_lowercase();
+                                bid.contains("argon") || bname.contains("argon")
+                            })
+                        });
+                        let pct = argon_b
+                            .map(|b| (b.remaining_fraction * 100.0).round() as i32)
+                            .unwrap_or(100);
+                        let reset = argon_b.map(|b| b.reset_time.clone()).unwrap_or_default();
+                        for argon_name in [
+                            "gemini-4-argon",
+                            "gemini-4-argon-high",
+                            "gemini-4-argon-medium",
+                            "gemini-4-argon-low",
+                        ] {
+                            let label = match argon_name {
+                                "gemini-4-argon-high" => "Gemini 4 Argon (High)",
+                                "gemini-4-argon-medium" => "Gemini 4 Argon (Medium)",
+                                "gemini-4-argon-low" => "Gemini 4 Argon (Low)",
+                                _ => "Gemini 4 Argon",
+                            };
+                            quota_data.add_model(crate::models::quota::ModelQuota {
+                                name: argon_name.to_string(),
+                                percentage: pct,
+                                reset_time: reset.clone(),
+                                display_name: Some(label.to_string()),
+                                supports_images: Some(true),
+                                supports_thinking: Some(true),
+                                thinking_budget: Some(-1),
+                                recommended: Some(true),
+                                max_tokens: Some(1048576),
+                                max_output_tokens: Some(65536),
+                                model: Some("MODEL_PLACEHOLDER_M421".to_string()),
+                                supported_mime_types: None,
+                            });
                         }
                     }
                 }

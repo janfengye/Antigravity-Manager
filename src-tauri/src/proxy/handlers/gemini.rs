@@ -109,6 +109,13 @@ pub async fn handle_generate(
     // [DEFENSE] 净化 Gemini 原生请求体中的所有 inlineData (过滤或降级空数据/损坏图片)
     crate::proxy::mappers::common_utils::sanitize_gemini_payload_inline_data(&mut body);
 
+    let message_count = body
+        .get("contents")
+        .and_then(|c| c.as_array())
+        .map(|a| a.len())
+        .unwrap_or(1)
+        .max(1);
+
     // [Stage Timing] 阶段耗时度量变量 (毫秒)
     let clean_micros = clean_start.elapsed().as_micros() as u64;
     let clean_ms: f64 = clean_micros as f64 / 1000.0;
@@ -182,6 +189,8 @@ pub async fn handle_generate(
     let mut failure_statuses = FailureStatusTracker::default();
     let mut used_attempts = 0;
     let mut retried_without_thinking = false;
+    let mut retried_with_budget_degraded = false;
+    let mut degraded_wrapped_body: Option<Value> = None;
 
     let client_effort = body
         .get("request")
@@ -340,17 +349,27 @@ pub async fn handle_generate(
         // [NEW] 获取完整 Token 对象以注入动态规格 (dynamic > static default > 65535)
         let token_obj = token_manager.get_token_by_id(&account_id);
         let tf_start = std::time::Instant::now();
-        let mut wrapped_body = wrap_request_v2(
-            &body,
-            &project_id,
-            &mapped_model,
-            Some(account_id.as_str()),
-            Some(&session_id),
-            token_obj.as_ref(),
-            Some(&token_manager),
-            Some(&state.upstream),
-            Some(&affinity_key),
-        );
+        let mut wrapped_body = if let Some(body) = degraded_wrapped_body.take() {
+            body
+        } else {
+            let mut wb = wrap_request_v2(
+                &body,
+                &project_id,
+                &mapped_model,
+                Some(account_id.as_str()),
+                Some(&session_id),
+                token_obj.as_ref(),
+                Some(&token_manager),
+                Some(&state.upstream),
+                Some(&affinity_key),
+            );
+            if retried_with_budget_degraded {
+                crate::proxy::pipeline::InboundThinkingPipeline::try_degrade_thinking_budget(
+                    &mut wb,
+                );
+            }
+            wb
+        };
         let tf_micros = tf_start.elapsed().as_micros() as u64;
         let norm_total_micros = norm_start.elapsed().as_micros() as u64;
         norm_ms = norm_total_micros.saturating_sub(tf_micros) as f64 / 1000.0;
@@ -367,6 +386,7 @@ pub async fn handle_generate(
         crate::proxy::mappers::common_utils::ensure_gemini_payload_ends_with_user(
             &mut wrapped_body,
         );
+        let estimated_input_tokens = crate::proxy::pipeline::estimate_tokens(&wrapped_body);
 
         if let Some(ref recorder) = upstream_recorder {
             recorder.set_value(&wrapped_body);
@@ -438,6 +458,7 @@ pub async fn handle_generate(
                 last_error = e.clone();
                 failure_statuses.record(StatusCode::BAD_GATEWAY);
                 drop(image_permit.take());
+                token_manager.mark_account_transient_failure(&account_id, 30, &e);
                 debug!(
                     "Gemini Request failed on attempt {}/{}: {}",
                     attempt + 1,
@@ -564,6 +585,19 @@ pub async fn handle_generate(
                             retry_gemini = true;
                         } else {
                             ttft_ms = effective_attempt_start.elapsed().as_micros() as f64 / 1000.0;
+                            let is_thinking = body
+                                .get("generationConfig")
+                                .and_then(|g| g.get("thinkingConfig"))
+                                .is_some()
+                                || mapped_model.to_lowercase().contains("thinking");
+                            crate::proxy::handlers::common::report_qos_ttft(
+                                &token_manager,
+                                &account_id,
+                                Some(&affinity_key),
+                                ttft_ms,
+                                is_thinking,
+                                Some(estimated_input_tokens),
+                            );
                             if let Some(effective_item) =
                                 fallback_attempts.iter_mut().find(|a| a.is_effective)
                             {
@@ -606,6 +640,7 @@ pub async fn handle_generate(
                 let image_success_account = account_id.clone();
                 let image_success_model = mapped_model.clone();
                 let causal_anchor_clone = causal_anchor.clone();
+                let message_count_for_stream = message_count;
                 let in_flight_guard_for_stream = Arc::clone(&in_flight_guard);
                 let stream = async_stream::stream! {
                     let _in_flight = in_flight_guard_for_stream;
@@ -735,8 +770,8 @@ pub async fn handle_generate(
                                                                 thinking_acc.ingest_part(part);
                                                                 if let Some(sig) = part.get("thoughtSignature").and_then(|s| s.as_str()) {
                                                                     crate::proxy::SignatureCache::global()
-                                                                        .cache_session_signature(&s_id_for_stream, sig.to_string(), 1);
-                                                                    debug!("[Gemini-SSE] Cached session signature (len: {}) for session: {}", sig.len(), s_id_for_stream);
+                                                                        .cache_session_signature(&s_id_for_stream, sig.to_string(), message_count_for_stream);
+                                                                    debug!("[Gemini-SSE] Cached session signature (len: {}) for session: {} at count {}", sig.len(), s_id_for_stream, message_count_for_stream);
                                                                 }
                                                             }
                                                         }
@@ -836,11 +871,12 @@ pub async fn handle_generate(
                         .into_response());
                 } else {
                     // Collect to JSON
-                    use crate::proxy::mappers::gemini::collector::collect_stream_to_json_with_anchor;
-                    match collect_stream_to_json_with_anchor(
+                    use crate::proxy::mappers::gemini::collector::collect_stream_to_json_with_anchor_and_count;
+                    match collect_stream_to_json_with_anchor_and_count(
                         Box::pin(stream),
                         &s_id,
                         Some(&causal_anchor),
+                        message_count,
                     )
                     .await
                     {
@@ -929,6 +965,19 @@ pub async fn handle_generate(
             }
 
             ttft_ms = effective_attempt_start.elapsed().as_micros() as f64 / 1000.0;
+            let is_thinking = body
+                .get("generationConfig")
+                .and_then(|g| g.get("thinkingConfig"))
+                .is_some()
+                || mapped_model.to_lowercase().contains("thinking");
+            crate::proxy::handlers::common::report_qos_ttft(
+                &token_manager,
+                &account_id,
+                Some(&affinity_key),
+                ttft_ms,
+                is_thinking,
+                Some(estimated_input_tokens),
+            );
             if let Some(effective_item) = fallback_attempts.iter_mut().find(|a| a.is_effective) {
                 effective_item.duration_s = ttft_ms / 1000.0;
             }
@@ -968,9 +1017,9 @@ pub async fn handle_generate(
                                     crate::proxy::SignatureCache::global().cache_session_signature(
                                         &session_id,
                                         sig.to_string(),
-                                        1,
+                                        message_count,
                                     );
-                                    debug!("[Gemini-Response] Cached session signature (len: {}) for session: {}", sig.len(), session_id);
+                                    debug!("[Gemini-Response] Cached session signature (len: {}) for session: {} at count {}", sig.len(), session_id, message_count);
                                 }
                             }
                         }
@@ -1113,6 +1162,29 @@ pub async fn handle_generate(
             &error_text,
             retry_after.as_deref(),
         );
+
+        // [FIX #3713] 503 / 529 服务端过载：思考预算原地降级自愈 (Pipeline First)
+        // 当模型遭遇过载 (503/529 / overloaded)，若当前请求带有 -1 或超大思考预算，优先在当前账号上降级预算原地重试一次，
+        // 杜绝盲目全池轮换导致跨账号缓存丢失 (Prefix Cache Protection)。
+        if crate::proxy::pipeline::UpstreamClassification::is_server_overloaded(
+            status_code,
+            &error_text,
+        ) && !retried_with_budget_degraded
+            && crate::proxy::pipeline::InboundThinkingPipeline::try_degrade_thinking_budget(
+                &mut wrapped_body,
+            )
+        {
+            retried_with_budget_degraded = true;
+            degraded_wrapped_body = Some(wrapped_body);
+            force_rotate = false;
+            tracing::warn!(
+                "[Gemini] Upstream {}/overloaded detected. In-place self-healing: degraded thinking budget to 4000 on account {} (preserving prefix cache)",
+                status_code, email
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            continue;
+        }
+
         if classification.abandons_sticky_account() {
             token_manager.abandon_session(&affinity_key, &account_id);
             tracing::debug!(
@@ -1309,14 +1381,22 @@ pub async fn handle_list_models(
     let models: Vec<_> = model_ids
         .into_iter()
         .map(|id| {
+            let (fallback_in, fallback_out) =
+                crate::proxy::handlers::openai::resolve_model_token_limits(&id);
             let meta = metadata_map
                 .get(&id)
                 .or_else(|| metadata_map.get(&id.to_lowercase()));
             let display_name = meta
                 .and_then(|m| m.display_name.clone())
                 .unwrap_or_else(|| id.clone());
-            let input_limit = meta.and_then(|m| m.max_tokens).unwrap_or(128000);
-            let output_limit = meta.and_then(|m| m.max_output_tokens).unwrap_or(8192);
+            let input_limit = meta
+                .and_then(|m| m.max_tokens)
+                .map(|v| v as i64)
+                .unwrap_or(fallback_in);
+            let output_limit = meta
+                .and_then(|m| m.max_output_tokens)
+                .map(|v| v as i64)
+                .unwrap_or(fallback_out);
 
             json!({
                 "name": format!("models/{}", id),
@@ -1325,6 +1405,8 @@ pub async fn handle_list_models(
                 "description": "",
                 "inputTokenLimit": input_limit,
                 "outputTokenLimit": output_limit,
+                "maxTokens": input_limit,
+                "maxOutputTokens": output_limit,
                 "supportedGenerationMethods": ["generateContent", "countTokens"],
                 "temperature": 1.0,
                 "topP": 0.95,
@@ -1360,14 +1442,22 @@ pub async fn handle_get_model(
         )
         .await;
 
+        let (fallback_in, fallback_out) =
+            crate::proxy::handlers::openai::resolve_model_token_limits(&matched_id);
         let meta = metadata_map
             .get(&matched_id)
             .or_else(|| metadata_map.get(&matched_id.to_lowercase()));
         let display_name = meta
             .and_then(|m| m.display_name.clone())
             .unwrap_or_else(|| matched_id.clone());
-        let input_limit = meta.and_then(|m| m.max_tokens).unwrap_or(128000);
-        let output_limit = meta.and_then(|m| m.max_output_tokens).unwrap_or(8192);
+        let input_limit = meta
+            .and_then(|m| m.max_tokens)
+            .map(|v| v as i64)
+            .unwrap_or(fallback_in);
+        let output_limit = meta
+            .and_then(|m| m.max_output_tokens)
+            .map(|v| v as i64)
+            .unwrap_or(fallback_out);
 
         (
             StatusCode::OK,
@@ -1378,6 +1468,8 @@ pub async fn handle_get_model(
                 "description": "",
                 "inputTokenLimit": input_limit,
                 "outputTokenLimit": output_limit,
+                "maxTokens": input_limit,
+                "maxOutputTokens": output_limit,
                 "supportedGenerationMethods": ["generateContent", "countTokens"],
                 "temperature": 1.0,
                 "topP": 0.95,

@@ -62,7 +62,8 @@
         "selected": "已选择",
         "claude_series": "Claude 系列",
         "maximize": "最大化",
-        "app_name": "Antigravity Tools"
+        "app_name": "Antigravity Tools",
+        "copy_to_clipboard": "复制到剪贴板"
     },
     "nav": {
         "dashboard": "仪表盘",
@@ -221,9 +222,23 @@
         "no_client_account": "该应用当前暂无登录或绑定的账号",
         "go_switch_account": "前往切换账号",
         "switch_best_to_target": "一键切换最佳账号到 {{target}}",
-        "switch_this_to_target": "一键将此账号切换到 {{target}}"
+        "switch_this_to_target": "一键将此账号切换到 {{target}}",
+        "account_pool": "账号池"
     },
     "accounts": {
+        "qos": {
+            "suspicious": "疑似被限速",
+            "suspicious_hint": "上游首包延迟出现异常卡顿，已开启只出不进保护并暂缓新会话分流",
+            "jailed": "限速小黑屋中",
+            "jailed_hint": "已触发上游静默降速熔断并强制解绑会话，正在阶梯冷却中，后台探针将自动测速自愈",
+            "probing": "解限探测中",
+            "probing_hint": "正在向该账号发起纯净测速探针，检测上游服务质量是否已满血恢复",
+            "half_open": "观察缓刑中",
+            "half_open_hint": "探针通过，正在进行生产流量单路试探，连续稳定通过后将彻底恢复健康",
+            "release_btn": "解除",
+            "release_tooltip": "点击立即手动移除小黑屋限制，恢复账号正常调度",
+            "release_success": "已成功解除该账号的小黑屋限制，恢复正常调度"
+        },
         "account": "账号",
         "search_placeholder": "搜索邮箱...",
         "all": "全部",
@@ -367,6 +382,9 @@
         "weekly_tokens": "本周期 Token",
         "weekly_tokens_tooltip": "本实例在此配额周期记录的 Token 用量（输入 + 输出）",
         "quota_protected": "受保护",
+        "remaining_quota": "剩余配额: {{percentage}}%",
+        "reset_in": "重置: {{time}}",
+        "supported_official_models": "支持官方模型 ({{count}}个):",
         "details": {
             "title": "配额详情",
             "model_quota": "具体模型配额",
@@ -464,7 +482,8 @@
             "batch_warmup_title": "批量手动预热",
             "batch_warmup_msg": "确定要为选中的 {{count}} 个账号立即触发预热吗？"
         },
-        "switch_to_agy": "Switch to Antigravity CLI (agy)"
+        "switch_to_agy": "Switch to Antigravity CLI (agy)",
+        "switch_next_short": "切下个"
     },
     "settings": {
         "save": "保存设置",
@@ -792,7 +811,8 @@
             "placeholder": "输入全局系统提示词...\n例如：你是一位资深的全栈开发工程师，擅长 React 和 Rust。请使用简体中文回复。",
             "char_count": "{{count}} 字符",
             "long_prompt_warning": "提示词较长（超过 2000 字符），可能会占用较多的上下文窗口空间。"
-        }
+        },
+        "lightweight_mode_desc": "开启后退出或最小化到托盘将彻底释放 WebView 内存"
     },
     "tray": {
         "current": "当前",
@@ -800,11 +820,15 @@
         "switch_next": "切换下一个账号",
         "refresh_current": "刷新当前账号额度",
         "show_window": "显示主窗口",
+        "mini_view": "迷你悬浮窗",
         "quit": "退出应用 (Exit)",
         "no_account": "无账号",
         "unknown_quota": "未知 (点击刷新)",
         "forbidden": "账号被封禁",
-        "lightweight_mode": "轻量模式 (退出时释放内存)"
+        "open_console": "打开主控制台",
+        "lightweight_mode": "轻量模式 (退出时释放内存)",
+        "pin_desc": "固定在桌面（点击常驻桌面，不随失焦收起）",
+        "unpin_desc": "已固定常驻（点击取消固定，失焦自动收起）"
     },
     "proxy": {
         "title": "API 反代服务",
@@ -1419,7 +1443,7 @@
             "title": "使用示例"
         },
         "multi_protocol": {
-            "title": "多协议支持 (Multi-Protocol Support)",
+            "title": "模型大全与协议",
             "subtitle": "快速同步 API 地址与密钥到本地 AI 工具",
             "description": "反代服务支持 OpenAI、Anthropic 和 Gemini 协议，满足不同工具的集成需求",
             "openai_label": "OpenAI 协议",
@@ -1428,7 +1452,7 @@
             "anthropic_tools": "Claude Code CLI",
             "gemini_label": "Gemini 协议",
             "gemini_tools": "Google AI SDK, LangChain",
-            "quick_integration": "快速集成 (Quick Integration)",
+            "quick_integration": "快速集成",
             "click_tip": "👆 点击模型以更新代码示例",
             "copy_base": "复制 Base"
         },
@@ -1694,7 +1718,7 @@
             "claude": "Claude",
             "images": "绘图",
             "capture_health": "捕获健康检查",
-            "capture_health_tip": "默认关闭：过滤全部 GET 成功请求（含 /v1/models 模型列表轮询与 /health 探针）且不入库；失败请求始终记录；开启后才全部记录并落库",
+            "capture_health_tip": "默认关闭：过滤全部 GET 成功请求（含 /v1/models 模型列表轮询与 /health 探针）以及三方网关探活探测且不入库；失败请求始终记录；开启后才全部记录并落库",
             "internal_error_log": "内部错误记录在 {{path}}，滑动窗口",
             "reset": "重置",
             "by_account": "按账号筛选",

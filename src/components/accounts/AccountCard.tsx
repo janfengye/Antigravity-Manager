@@ -7,6 +7,9 @@ import { useTranslation } from 'react-i18next';
 import { useConfigStore } from '../../stores/useConfigStore';
 import { GroupQuotaCard } from './GroupQuotaCard';
 import { getValidationBlockedStatusLabel } from './accountValidationStatus';
+import { showToast } from '../common/ToastContainer';
+import { releaseAccountQoSJail } from '../../services/accountService';
+import { QoSStatusBadge } from './QoSStatusBadge';
 import { getLiveLimitForModel } from '../../utils/liveLimit';
 import { getGroupQuotaSummaries } from '../../utils/quotaDisplay';
 
@@ -52,6 +55,16 @@ function AccountCard({ account, selected, onSelect, isCurrent: propIsCurrent, ac
         setIsEditingLabel(false);
     };
 
+    const handleReleaseJail = async () => {
+        try {
+            await releaseAccountQoSJail(account.id);
+            showToast(t('accounts.qos.release_success', '已解除该账号的小黑屋限制'), 'success');
+            onRefresh();
+        } catch (err: any) {
+            showToast(err?.message || '解除失败', 'error');
+        }
+    };
+
     const handleCancelLabel = () => {
         setLabelInput(account.custom_label || '');
         setIsEditingLabel(false);
@@ -69,6 +82,15 @@ function AccountCard({ account, selected, onSelect, isCurrent: propIsCurrent, ac
     const groupSummaries = useMemo(() => {
         return getGroupQuotaSummaries(account.quota?.quota_groups, account.quota?.models, tier);
     }, [account.quota?.quota_groups, account.quota?.models, tier]);
+
+    const modelCapabilities = useMemo(() => {
+        const supported = Array.from(new Set(groupSummaries.flatMap(s => s.supportedModels || [])));
+        const hasArgon = supported.some(m => m.includes('argon')) || groupSummaries.some(s => s.key === 'argon');
+        const hasClaude55 = supported.some(m => m.includes('5-5') || m.includes('5.5'));
+        const hasClaude46 = supported.some(m => m.includes('4-6') || m.includes('4.6'));
+        const hasGpt = supported.some(m => m.startsWith('gpt'));
+        return { hasArgon, hasClaude55, hasClaude46, hasGpt };
+    }, [groupSummaries]);
 
     const isGroupProtected = (key: 'gemini' | 'claude' | 'argon') => {
         if (!config?.quota_protection?.enabled) return false;
@@ -171,6 +193,12 @@ function AccountCard({ account, selected, onSelect, isCurrent: propIsCurrent, ac
                                     {validationBlockedLabel.toUpperCase()}
                                 </span>
                             )}
+                            <QoSStatusBadge
+                                status={account.qos_status}
+                                resetSeconds={account.qos_reset_seconds}
+                                size="sm"
+                                onRelease={handleReleaseJail}
+                            />
                             {/* 订阅类型徽章 */}
                             {(() => {
                                 const tier = getAccountTier(account);
@@ -205,6 +233,36 @@ function AccountCard({ account, selected, onSelect, isCurrent: propIsCurrent, ac
                                 <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-300 text-[9px] font-bold shadow-sm border border-orange-200/50 dark:border-orange-800/50">
                                     <Tag className="w-2.5 h-2.5" />
                                     {account.custom_label}
+                                </span>
+                            )}
+                            {/* 核心模型能力直观徽章 */}
+                            {modelCapabilities.hasArgon && (
+                                <span
+                                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-gradient-to-r from-purple-500/15 to-indigo-500/15 text-purple-700 dark:text-purple-300 text-[9px] font-bold border border-purple-200/60 dark:border-purple-800/50"
+                                >
+                                    <Sparkles className="w-2.5 h-2.5 text-purple-500" />
+                                    Argon
+                                </span>
+                            )}
+                            {modelCapabilities.hasClaude55 && (
+                                <span
+                                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-500/15 text-amber-700 dark:text-amber-300 text-[9px] font-bold border border-amber-200/60 dark:border-amber-800/50"
+                                >
+                                    Claude 5.5
+                                </span>
+                            )}
+                            {modelCapabilities.hasClaude46 && !modelCapabilities.hasClaude55 && (
+                                <span
+                                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-500/10 text-amber-600/90 dark:text-amber-400/90 text-[9px] font-bold border border-amber-200/40 dark:border-amber-800/30"
+                                >
+                                    Claude 4.6
+                                </span>
+                            )}
+                            {modelCapabilities.hasGpt && (
+                                <span
+                                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 text-[9px] font-bold border border-emerald-200/60 dark:border-emerald-800/50"
+                                >
+                                    GPT-120B
                                 </span>
                             )}
                         </div>

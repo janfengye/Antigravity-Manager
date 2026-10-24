@@ -64,7 +64,8 @@
         "selected": "Selected",
         "claude_series": "Claude Series",
         "maximize": "Maximize",
-        "app_name": "Antigravity Tools"
+        "app_name": "Antigravity Tools",
+        "copy_to_clipboard": "Скопировать в буфер"
     },
     "nav": {
         "dashboard": "Дашборд",
@@ -208,9 +209,23 @@
         "no_client_account": "Нет активного или привязанного аккаунта для этого приложения",
         "go_switch_account": "Перейти к смене аккаунта",
         "switch_best_to_target": "Переключить лучший аккаунт на {{target}}",
-        "switch_this_to_target": "Переключить этот аккаунт на {{target}}"
+        "switch_this_to_target": "Переключить этот аккаунт на {{target}}",
+        "account_pool": "Пул аккаунтов",
+        "view_mode_title_5h": "5-часовое плавающее окно",
+        "view_mode_title_weekly": "7-дневная недельная квота",
+        "view_mode_title_weighted": "Комплексный взвешенный вид"
     },
     "accounts": {
+        "qos": {
+            "suspicious": "Подозрение на лимит",
+            "suspicious_hint": "Обнаружена аномальная задержка первого токена. Выделение новых сессий временно приостановлено.",
+            "jailed": "В карантине QoS",
+            "jailed_hint": "Обнаружено скрытое ограничение скорости, сессия отвязана. Находится в ступенчатом охлаждении с автопроверкой.",
+            "probing": "Проверка восстановления",
+            "probing_hint": "Отправка легковесного зонда для проверки полного восстановления скорости.",
+            "half_open": "Пробный период",
+            "half_open_hint": "Зонд успешно пройден. Выполняется пробное тестирование реальным трафиком перед полным восстановлением."
+        },
         "account": "Аккаунт",
         "search_placeholder": "Поиск почты...",
         "all": "Все",
@@ -335,6 +350,9 @@
         "quota_window_weekly": "7-дневная еженедельная квота",
         "quota_window_weekly_short": "Еженедельная",
         "quota_protected": "Защищено",
+        "remaining_quota": "Остаток квоты: {{percentage}}%",
+        "reset_in": "Сброс: {{time}}",
+        "supported_official_models": "Поддерживаемые официальные модели ({{count}}):",
         "details": {
             "title": "Детали квоты",
             "model_quota": "Квоты отдельных моделей",
@@ -443,7 +461,15 @@
         "quota_group_claude": "Модели Claude и GPT",
         "weekly_constrained_tooltip": "Ограничено недельной квотой",
         "weekly_tokens": "Токены за цикл",
-        "weekly_tokens_tooltip": "Токены, зафиксированные этим инстансом в текущем цикле квоты (ввод + вывод)"
+        "weekly_tokens_tooltip": "Токены, зафиксированные этим инстансом в текущем цикле квоты (ввод + вывод)",
+        "client_classic": "Classic",
+        "client_classic_tooltip": "Текущий аккаунт Antigravity Classic",
+        "client_ide": "IDE",
+        "client_ide_tooltip": "Текущий аккаунт Antigravity IDE",
+        "client_cli": "CLI",
+        "client_cli_tooltip": "Текущий аккаунт Antigravity CLI (agy)",
+        "switch_next_short": "След.",
+        "weekly_exhausted_tooltip": "Недельная квота исчерпана, защита активирована"
     },
     "settings": {
         "save": "Сохранить настройки",
@@ -771,7 +797,8 @@
         "branding": {
             "title": "Инструменты Antigravity",
             "subtitle": "Профессиональное управление аккаунтами"
-        }
+        },
+        "lightweight_mode_desc": "Полностью освобождает память WebView при выходе или сворачивании в трей"
     },
     "tray": {
         "current": "Текущий",
@@ -779,11 +806,15 @@
         "switch_next": "Переключить на следующий аккаунт",
         "refresh_current": "Обновить текущую квоту",
         "show_window": "Показать главное окно",
+        "mini_view": "Компактный вид",
         "quit": "Выйти из приложения",
         "no_account": "Нет аккаунта",
         "unknown_quota": "Неизвестно (Нажмите для обновления)",
         "forbidden": "Аккаунт запрещен",
-        "lightweight_mode": "Легковесный режим (выгрузка памяти)"
+        "lightweight_mode": "Легковесный режим (выгрузка памяти)",
+        "open_console": "Открыть консоль",
+        "pin_desc": "Закрепить на рабочем столе (не скрывать при потере фокуса)",
+        "unpin_desc": "Закреплено (нажмите, чтобы открепить, авто-скрытие при потере фокуса)"
     },
     "proxy": {
         "title": "Сервис API Прокси",
@@ -1385,7 +1416,7 @@
             "original_placeholder": "Оригинал (например, gpt-4 или gpt-4*)"
         },
         "multi_protocol": {
-            "title": "Поддержка протоколов",
+            "title": "Каталог моделей и протоколы",
             "subtitle": "Синхронизируйте API и ключи с вашими инструментами",
             "description": "Прокси поддерживает протоколы OpenAI, Anthropic и Gemini для легкой интеграции.",
             "openai_label": "OpenAI",

@@ -92,6 +92,7 @@ pub struct OpenAIChatStreamHandler {
     pub has_content: bool,
     pub has_thinking: bool,
     pub is_thinking_active: bool,
+    pub has_emitted_finish_reason: bool,
 }
 
 impl ProtocolStreamHandler for OpenAIChatStreamHandler {
@@ -291,7 +292,10 @@ impl ProtocolStreamHandler for OpenAIChatStreamHandler {
                         }
                     }
 
-                    let raw_finish_reason = candidate.get("finishReason").and_then(|f| f.as_str());
+                    let raw_finish_reason = candidate
+                        .get("finishReason")
+                        .or_else(|| candidate.get("finish_reason"))
+                        .and_then(|f| f.as_str());
 
                     let gemini_finish_reason = raw_finish_reason.map(|f| match f {
                         "STOP" => "stop",
@@ -334,6 +338,9 @@ impl ProtocolStreamHandler for OpenAIChatStreamHandler {
                         self.is_thinking_active = false;
                         if !content_out.is_empty() {
                             self.has_content = true;
+                        }
+                        if finish_reason.is_some() {
+                            self.has_emitted_finish_reason = true;
                         }
                         let delta = if !content_out.is_empty() {
                             json!({ "content": content_out })
@@ -394,6 +401,42 @@ impl ProtocolStreamHandler for OpenAIChatStreamHandler {
 
     fn emit_finalize(&mut self) -> Vec<Bytes> {
         let mut chunks = Vec::new();
+
+        // [收尾保底防御 Fixes #3716]
+        // 若流已产生正文或工具调用，但上游在未显式下发 finishReason 的情况下关闭了连接 (EOF) 或仅下发了 usageMetadata：
+        // 严格遵循 OpenAI 流式契约，在发射 [DONE] 之前补发带有终态 finish_reason ("stop" 或 "tool_calls") 的收尾块。
+        // 防止下游客户端（如 OpenCode、Cline）判定为 finish=unknown 并错误触发空 assistant 续步导致上游 400 报错。
+        if !self.has_emitted_finish_reason
+            && (self.has_content || !self.emitted_tool_calls.is_empty())
+        {
+            self.has_emitted_finish_reason = true;
+            let final_reason = if !self.emitted_tool_calls.is_empty() {
+                "tool_calls"
+            } else {
+                "stop"
+            };
+            let mut finish_chunk = json!({
+                "id": &self.stream_id,
+                "object": "chat.completion.chunk",
+                "created": self.created_ts,
+                "model": &self.model,
+                "choices": [{
+                    "index": 0,
+                    "delta": {},
+                    "finish_reason": final_reason
+                }]
+            });
+            if !self.include_usage {
+                if let Some(usage) = self.final_usage.take() {
+                    finish_chunk["usage"] = serde_json::to_value(usage).unwrap_or_default();
+                }
+            }
+            chunks.push(Bytes::from(format!(
+                "data: {}\n\n",
+                serde_json::to_string(&finish_chunk).unwrap_or_default()
+            )));
+        }
+
         if self.include_usage {
             if let Some(usage) = self.final_usage.take() {
                 let usage_chunk = json!({
@@ -476,6 +519,7 @@ where
         has_content: false,
         has_thinking: false,
         is_thinking_active: false,
+        has_emitted_finish_reason: false,
     };
 
     let config =
@@ -2320,5 +2364,81 @@ mod tests {
             all_content
         );
         assert_eq!(final_finish_reason, Some("stop".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_openai_stream_emits_fallback_finish_reason_when_upstream_omits_it() {
+        // [Fixes #3716] 模拟上游只吐了文本且随流关闭正常 EOF，未显式发送 finishReason 候选块
+        let chunk1_json = json!({
+            "candidates": [{
+                "content": {
+                    "parts": [{ "text": "Hello, this is a response." }]
+                }
+            }]
+        });
+
+        // 第二帧只发送 usage，没有 candidates
+        let chunk2_json = json!({
+            "usageMetadata": {
+                "promptTokenCount": 15,
+                "candidatesTokenCount": 6,
+                "totalTokenCount": 21
+            }
+        });
+
+        let items: Vec<Result<Bytes, reqwest::Error>> = vec![
+            Ok(Bytes::from(format!("data: {}\n\n", chunk1_json))),
+            Ok(Bytes::from(format!("data: {}\n\n", chunk2_json))),
+        ];
+
+        let gemini_stream = Box::pin(stream::iter(items));
+
+        let mut openai_stream = create_openai_sse_stream(
+            gemini_stream,
+            "gemini-3.8-flash-high".to_string(),
+            "session-3716".to_string(),
+            0,
+            None,
+            false,
+        );
+
+        let mut finish_reasons = Vec::new();
+        let mut got_done = false;
+
+        while let Some(result) = openai_stream.next().await {
+            if let Ok(bytes) = result {
+                let s = String::from_utf8_lossy(&bytes).to_string();
+                for line in s.lines() {
+                    if line.starts_with("data: ") {
+                        if line.contains("[DONE]") {
+                            got_done = true;
+                        } else {
+                            let json_str = line.trim_start_matches("data: ").trim();
+                            if let Ok(json) = serde_json::from_str::<Value>(json_str) {
+                                if let Some(choices) =
+                                    json.get("choices").and_then(|c| c.as_array())
+                                {
+                                    for choice in choices {
+                                        if let Some(fr) =
+                                            choice.get("finish_reason").and_then(|f| f.as_str())
+                                        {
+                                            finish_reasons.push(fr.to_string());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        assert!(got_done, "Stream must terminate with [DONE]");
+        // 关键断言：即使上游未显式发送 finishReason，网关在终态必须补发带有 finish_reason: 'stop' 的收尾块
+        assert_eq!(
+            finish_reasons,
+            vec!["stop".to_string()],
+            "Must emit finish_reason 'stop' before stream end to avoid finish=unknown"
+        );
     }
 }

@@ -10,6 +10,7 @@ import { formatCompactNumber } from '../../utils/format';
 import { useAccountStore } from '../../stores/useAccountStore';
 import { isTauri } from '../../utils/env';
 import { RequestDetailModal } from './RequestDetailModal';
+import { QoSStatusBadge } from '../accounts/QoSStatusBadge';
 
 
 interface ProxyRequestLog {
@@ -122,6 +123,16 @@ const LogTable: React.FC<LogTableProps> = ({
     onLogClick,
     t
 }) => {
+    const { accounts } = useAccountStore();
+    const accountQosByEmail = useMemo(() => {
+        const map = new Map<string, 'suspicious' | 'jailed' | 'probing' | 'half_open'>();
+        accounts.forEach(acc => {
+            if (acc.email && acc.qos_status) {
+                map.set(acc.email.toLowerCase(), acc.qos_status);
+            }
+        });
+        return map;
+    }, [accounts]);
     const containerRef = useRef<HTMLDivElement>(null);
     const [containerWidth, setContainerWidth] = useState<number>(0);
     const isResizingRef = useRef(false);
@@ -417,8 +428,16 @@ const LogTable: React.FC<LogTableProps> = ({
 
                                  {/* 4. 服务账号 */}
                                  <td style={{ width: `${colWidths.account}px`, maxWidth: `${colWidths.account}px` }} className="py-2.5 px-3 align-middle overflow-hidden box-border">
-                                     <div className="text-gray-700 dark:text-gray-300 font-sans text-xs truncate max-w-full" title={log.account_email || ''}>
-                                         {log.account_email ? log.account_email.replace(/(.{3}).*(@.*)/, '$1***$2') : '-'}
+                                     <div className="flex items-center gap-1.5 min-w-0 max-w-full">
+                                         <span className="text-gray-700 dark:text-gray-300 font-sans text-xs truncate" title={log.account_email || ''}>
+                                             {log.account_email ? log.account_email.replace(/(.{3}).*(@.*)/, '$1***$2') : '-'}
+                                         </span>
+                                         {log.account_email && accountQosByEmail.get(log.account_email.toLowerCase()) && (
+                                             <QoSStatusBadge
+                                                 status={accountQosByEmail.get(log.account_email.toLowerCase())}
+                                                 size="xs"
+                                             />
+                                         )}
                                      </div>
                                  </td>
 
@@ -696,6 +715,7 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
             ]) as ProxyStats;
 
             if (currentStats) setStats(currentStats);
+            fetchAccounts();
         } catch (e: any) {
             console.error("Failed to load proxy data", e);
             if (e.message === 'Request timeout') {
@@ -811,11 +831,12 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
                             return merged.slice(0, 100);
                         });
 
-                        // Fetch stats and total count from backend instead of local calculation
+                        // Fetch stats, total count and latest account QoS states from backend
                         try {
                             const [currentStats, count] = await Promise.all([
                                 invoke<ProxyStats>('get_proxy_stats'),
-                                invoke<number>('get_proxy_logs_count_filtered', { filter: '', errorsOnly: false })
+                                invoke<number>('get_proxy_logs_count_filtered', { filter: '', errorsOnly: false }),
+                                fetchAccounts()
                             ]);
                             if (isMountedRef.current) {
                                 if (currentStats) setStats(currentStats);
@@ -1101,7 +1122,7 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
                                 ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
                                 : 'bg-white dark:bg-base-200 text-gray-700 dark:text-gray-200 border-gray-300 dark:border-base-300 hover:bg-gray-100 dark:hover:bg-base-300/80 hover:text-gray-900 dark:hover:text-white shadow-2xs'
                         }`}
-                        title={t('monitor.filters.capture_health_tip', { defaultValue: '默认关闭：过滤全部 GET 成功请求（含 /v1/models 模型列表轮询与 /health 探针）且不入库；失败请求始终记录；开启后才全部记录并落库' })}
+                        title={t('monitor.filters.capture_health_tip', { defaultValue: '默认关闭：过滤全部 GET 成功请求（含 /v1/models 模型列表轮询与 /health 探针）以及三方网关探活探测且不入库；失败请求始终记录；开启后才全部记录并落库' })}
                     >
                         <span className={`w-1.5 h-1.5 rounded-full ${captureHealthLogs ? 'bg-white animate-pulse' : 'bg-gray-400 dark:bg-gray-500'}`} />
                         {t('monitor.filters.capture_health', { defaultValue: '捕获健康检查' })}

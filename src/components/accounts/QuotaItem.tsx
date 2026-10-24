@@ -81,7 +81,7 @@ export function QuotaItem({ label, percentage, resetTime, isProtected, liveLimit
             <div
                 className={cn(
                     "absolute inset-y-0 left-0 transition-all duration-700 ease-out opacity-15 dark:opacity-20",
-                    showLiveIssue ? (isUnavailable ? "bg-rose-500" : "bg-amber-500") : getBgColorClass(percentage)
+                    isUnavailable && percentage <= 0 ? "bg-rose-500" : getBgColorClass(percentage)
                 )}
                 style={{ width: `${percentage}%` }}
             />

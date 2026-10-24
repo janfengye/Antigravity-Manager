@@ -6,10 +6,88 @@ use axum::{
     middleware::Next,
     response::Response,
 };
+use std::borrow::Cow;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::proxy::{ProxyAuthMode, ProxySecurityConfig};
+
+/// 从请求中提取 API Key / Token
+/// 支持提取顺序：
+/// 1. Authorization header (Bearer token / Raw token)
+/// 2. x-api-key header
+/// 3. x-goog-api-key header (Google Gemini / Google Cloud)
+/// 4. URL query 参数 ?key=... (Google Gemini 官方 REST 协议规范)
+pub fn extract_api_key<B>(request: &Request<B>) -> Option<Cow<'_, str>> {
+    // 1. Authorization header
+    if let Some(auth_val) = request
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|h| h.to_str().ok())
+    {
+        let trimmed = auth_val.trim();
+        let token = if let Some(stripped) = trimmed.strip_prefix("Bearer ") {
+            stripped.trim()
+        } else if let Some(stripped) = trimmed.strip_prefix("bearer ") {
+            stripped.trim()
+        } else if trimmed.eq_ignore_ascii_case("bearer") {
+            ""
+        } else {
+            trimmed
+        };
+        if !token.is_empty() {
+            return Some(Cow::Borrowed(token));
+        }
+    }
+
+    // 2. x-api-key header
+    if let Some(val) = request
+        .headers()
+        .get("x-api-key")
+        .and_then(|h| h.to_str().ok())
+    {
+        let trimmed = val.trim();
+        if !trimmed.is_empty() {
+            return Some(Cow::Borrowed(trimmed));
+        }
+    }
+
+    // 3. x-goog-api-key header
+    if let Some(val) = request
+        .headers()
+        .get("x-goog-api-key")
+        .and_then(|h| h.to_str().ok())
+    {
+        let trimmed = val.trim();
+        if !trimmed.is_empty() {
+            return Some(Cow::Borrowed(trimmed));
+        }
+    }
+
+    // 4. URL query 参数 (?key=...)
+    if let Some(query) = request.uri().query() {
+        for (k, v) in url::form_urlencoded::parse(query.as_bytes()) {
+            if k == "key" {
+                match v {
+                    Cow::Borrowed(s) => {
+                        let trimmed = s.trim();
+                        if !trimmed.is_empty() {
+                            return Some(Cow::Borrowed(trimmed));
+                        }
+                    }
+                    Cow::Owned(s) => {
+                        let trimmed = s.trim();
+                        if !trimmed.is_empty() {
+                            return Some(Cow::Owned(trimmed.to_string()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
 
 /// API Key 认证中间件 (代理接口使用，遵循 auth_mode)
 pub async fn auth_middleware(
@@ -39,8 +117,14 @@ async fn auth_middleware_internal(
     let method = request.method().clone();
     let path = request.uri().path().to_string();
 
-    // 过滤心跳和健康检查请求,避免日志噪音
-    let is_health_check = path == "/healthz" || path == "/api/health" || path == "/health";
+    // 过滤心跳、健康检查与探针请求,避免日志噪音
+    let is_health_check = path == "/healthz"
+        || path == "/api/health"
+        || path == "/health"
+        || path == "/version"
+        || path == "/v1/version"
+        || path == "/props"
+        || path == "/v1/props";
     let is_internal_endpoint = path.starts_with("/internal/");
     if !path.contains("event_logging") && !is_health_check {
         tracing::info!("Request: {} {}", method, path);
@@ -74,20 +158,10 @@ async fn auth_middleware_internal(
         // AI 代理接口 (v1/chat/completions 等)
         if matches!(effective_mode, ProxyAuthMode::Off) {
             // [FIX] 即使 auth_mode=Off，也需要尝试识别 User Token 以记录使用情况
-            // 先检查是否携带了 User Token
-            let api_key = request
-                .headers()
-                .get(header::AUTHORIZATION)
-                .and_then(|h| h.to_str().ok())
-                .and_then(|s| s.strip_prefix("Bearer ").or(Some(s)))
-                .or_else(|| {
-                    request
-                        .headers()
-                        .get("x-api-key")
-                        .and_then(|h| h.to_str().ok())
-                });
+            // 先检查是否携带了 User Token (支持 header 或 URL query ?key=)
+            let api_key = extract_api_key(&request);
 
-            if let Some(token) = api_key {
+            if let Some(token) = api_key.as_deref() {
                 // 尝试验证是否为 User Token（不阻止请求，只记录）
                 if let Ok(Some(user_token)) =
                     crate::modules::user_token_db::get_token_by_value(token)
@@ -118,24 +192,8 @@ async fn auth_middleware_internal(
         }
     }
 
-    // 从 header 中提取 API key
-    let api_key = request
-        .headers()
-        .get(header::AUTHORIZATION)
-        .and_then(|h| h.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer ").or(Some(s)))
-        .or_else(|| {
-            request
-                .headers()
-                .get("x-api-key")
-                .and_then(|h| h.to_str().ok())
-        })
-        .or_else(|| {
-            request
-                .headers()
-                .get("x-goog-api-key")
-                .and_then(|h| h.to_str().ok())
-        });
+    // 从 header 或 URL query (?key=) 中提取 API key
+    let api_key = extract_api_key(&request);
 
     if security.api_key.is_empty()
         && (security.admin_password.is_none()
@@ -153,22 +211,28 @@ async fn auth_middleware_internal(
     let authorized = if force_strict {
         // 管理接口：优先使用独立的 admin_password，如果没有则回退使用 api_key
         match &security.admin_password {
-            Some(pwd) if !pwd.is_empty() => api_key.map(|k| k == pwd).unwrap_or(false),
+            Some(pwd) if !pwd.is_empty() => api_key.as_deref().map(|k| k == pwd).unwrap_or(false),
             _ => {
                 // 回退使用 api_key
-                api_key.map(|k| k == security.api_key).unwrap_or(false)
+                api_key
+                    .as_deref()
+                    .map(|k| k == security.api_key)
+                    .unwrap_or(false)
             }
         }
     } else {
         // AI 代理接口：仅允许使用 api_key
-        api_key.map(|k| k == security.api_key).unwrap_or(false)
+        api_key
+            .as_deref()
+            .map(|k| k == security.api_key)
+            .unwrap_or(false)
     };
 
     if authorized {
         Ok(next.run(request).await)
     } else if !force_strict && api_key.is_some() {
         // 尝试验证 UserToken
-        let token = api_key.unwrap();
+        let token = api_key.as_deref().unwrap();
 
         // 提取 IP (复用 ip_filter 规范化逻辑，支持 IPv4/IPv6 及 ConnectInfo)
         let client_ip = crate::proxy::middleware::ip_filter::extract_client_ip(&request)
@@ -354,5 +418,138 @@ mod tests {
             ));
         let resp = app.clone().oneshot(req_spoofed).await.unwrap();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn test_extract_api_key_sources() {
+        // 1. Authorization: Bearer
+        let req = Request::builder()
+            .header("Authorization", "Bearer sk-bearer-token")
+            .body(())
+            .unwrap();
+        assert_eq!(extract_api_key(&req).as_deref(), Some("sk-bearer-token"));
+
+        // 2. Authorization: bearer (小写)
+        let req = Request::builder()
+            .header("Authorization", "bearer sk-lowercase-token")
+            .body(())
+            .unwrap();
+        assert_eq!(extract_api_key(&req).as_deref(), Some("sk-lowercase-token"));
+
+        // 3. Authorization: raw token (无 Bearer 前缀)
+        let req = Request::builder()
+            .header("Authorization", "sk-raw-token")
+            .body(())
+            .unwrap();
+        assert_eq!(extract_api_key(&req).as_deref(), Some("sk-raw-token"));
+
+        // 4. x-api-key header
+        let req = Request::builder()
+            .header("x-api-key", "sk-x-api-key")
+            .body(())
+            .unwrap();
+        assert_eq!(extract_api_key(&req).as_deref(), Some("sk-x-api-key"));
+
+        // 5. x-goog-api-key header (Google Gemini)
+        let req = Request::builder()
+            .header("x-goog-api-key", "AIzaSyGeminiHeaderKey")
+            .body(())
+            .unwrap();
+        assert_eq!(
+            extract_api_key(&req).as_deref(),
+            Some("AIzaSyGeminiHeaderKey")
+        );
+
+        // 6. URL query: ?key=... (Google Gemini REST 协议)
+        let req = Request::builder()
+            .uri("/v1beta/models?key=AIzaSyGeminiQueryKey")
+            .body(())
+            .unwrap();
+        assert_eq!(
+            extract_api_key(&req).as_deref(),
+            Some("AIzaSyGeminiQueryKey")
+        );
+
+        // 7. URL query: 混合其它参数 ?alt=sse&key=...&other=1
+        let req = Request::builder()
+            .uri("/v1beta/models/gemini-2.5-flash:generateContent?alt=sse&key=AIzaSyMixedQuery&stream=true")
+            .body(())
+            .unwrap();
+        assert_eq!(extract_api_key(&req).as_deref(), Some("AIzaSyMixedQuery"));
+
+        // 8. 优先级：Header 优先于 Query
+        let req = Request::builder()
+            .header("x-goog-api-key", "header-key")
+            .uri("/v1beta/models?key=query-key")
+            .body(())
+            .unwrap();
+        assert_eq!(extract_api_key(&req).as_deref(), Some("header-key"));
+
+        // 9. 空值/空白处理
+        let req = Request::builder()
+            .uri("/v1beta/models?key=%20%20")
+            .body(())
+            .unwrap();
+        assert_eq!(extract_api_key(&req), None);
+
+        let req = Request::builder()
+            .uri("/v1beta/models?key=")
+            .body(())
+            .unwrap();
+        assert_eq!(extract_api_key(&req), None);
+
+        let req = Request::builder()
+            .header("Authorization", "Bearer   ")
+            .body(())
+            .unwrap();
+        assert_eq!(extract_api_key(&req), None);
+    }
+
+    #[tokio::test]
+    async fn test_auth_middleware_with_gemini_query_key() {
+        use axum::routing::get;
+        use tower::ServiceExt;
+
+        let _ = crate::modules::user_token_db::init_db();
+
+        let security = Arc::new(RwLock::new(ProxySecurityConfig {
+            auth_mode: ProxyAuthMode::Strict,
+            api_key: "valid-gemini-key".to_string(),
+            admin_password: None,
+            allow_lan_access: true,
+            port: 8045,
+            security_monitor: crate::proxy::config::SecurityMonitorConfig::default(),
+        }));
+
+        let app = axum::Router::new()
+            .route("/v1beta/models", get(|| async { StatusCode::OK }))
+            .layer(axum::middleware::from_fn_with_state(
+                security.clone(),
+                auth_middleware,
+            ));
+
+        // 1. 通过 URL query 携带正确的 API Key 访问 Gemini 接口 -> 200 OK
+        let req_valid = Request::builder()
+            .uri("/v1beta/models?key=valid-gemini-key")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(req_valid).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // 2. 通过 URL query 携带错误的 API Key（未通过主 API Key，进入 UserToken 校验失败） -> 403 Forbidden
+        let req_invalid = Request::builder()
+            .uri("/v1beta/models?key=wrong-key")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(req_invalid).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+        // 3. 不带任何 Key 访问 -> 401 Unauthorized
+        let req_none = Request::builder()
+            .uri("/v1beta/models")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(req_none).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 }

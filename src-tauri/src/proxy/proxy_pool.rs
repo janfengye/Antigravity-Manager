@@ -248,10 +248,31 @@ impl ProxyPoolManager {
         if let Some(proxy_id) = self.account_bindings.get(account_id) {
             if let Some(entry) = config.proxies.iter().find(|p| p.id == *proxy_id.value()) {
                 if entry.enabled {
-                    // 如果开启了自动故障转移且代理不健康，则返回 None (将回退到其他策略或失败)
-                    if config.auto_failover && !entry.is_healthy {
-                        return Ok(None);
+                    // 1. 若代理健康，直接使用专属绑定代理
+                    if entry.is_healthy {
+                        return Ok(Some(self.build_proxy_config(entry)?));
                     }
+
+                    // 2. 若代理不健康且启用了自动故障转移，优先从公用池选择其他可用代理
+                    if config.auto_failover {
+                        if let Ok(Some(fallback_proxy)) = self.select_proxy_from_pool(config).await
+                        {
+                            tracing::warn!(
+                                "[Proxy] Bound proxy {} for account {} is unhealthy; auto-failover to pool proxy {}",
+                                entry.id,
+                                account_id,
+                                fallback_proxy.entry_id
+                            );
+                            return Ok(Some(fallback_proxy));
+                        }
+                    }
+
+                    // 3. 兜底防御：若无其他可用代理，继续使用绑定代理，杜绝回退 Direct 直连泄露服务器源站 IP
+                    tracing::warn!(
+                        "[Proxy] Bound proxy {} for account {} is marked unhealthy, but routing through it to prevent Direct IP leak",
+                        entry.id,
+                        account_id
+                    );
                     return Ok(Some(self.build_proxy_config(entry)?));
                 }
             }
@@ -348,12 +369,9 @@ impl ProxyPoolManager {
         self.select_by_priority(proxies)
     }
 
-    /// 构建 rquest::Proxy 配置
-    fn build_proxy_config(&self, entry: &ProxyEntry) -> Result<PoolProxyConfig, String> {
-        let raw_url = crate::proxy::config::normalize_proxy_url(&entry.url);
-
-        // 尝试解析 URL，提取可能内嵌在 URL 中的 username 和 password
-        let (clean_url, parsed_auth) = match url::Url::parse(&raw_url) {
+    /// 解析并清理 URL 中的凭据
+    pub fn parse_and_clean_proxy_url(raw_url: &str) -> (String, Option<(String, String)>) {
+        match url::Url::parse(raw_url) {
             Ok(mut u) => {
                 let user = if !u.username().is_empty() {
                     Some(u.username().to_string())
@@ -363,8 +381,9 @@ impl ProxyPoolManager {
                 let pass = u.password().map(|p| p.to_string());
 
                 // 清理 URL 中的凭据以防特定底层库解析异常
-                let _ = u.set_username("");
+                // 注意：必须先清理 password 再清理 username，确保符合 WHATWG URL 规范并杜绝凭据残留
                 let _ = u.set_password(None);
+                let _ = u.set_username("");
 
                 let auth = if let (Some(user), Some(pass)) = (user, pass) {
                     Some((user, pass))
@@ -373,8 +392,14 @@ impl ProxyPoolManager {
                 };
                 (u.to_string(), auth)
             }
-            Err(_) => (raw_url.clone(), None),
-        };
+            Err(_) => (raw_url.to_string(), None),
+        }
+    }
+
+    /// 构建 rquest::Proxy 配置
+    fn build_proxy_config(&self, entry: &ProxyEntry) -> Result<PoolProxyConfig, String> {
+        let raw_url = crate::proxy::config::normalize_proxy_url(&entry.url);
+        let (clean_url, parsed_auth) = Self::parse_and_clean_proxy_url(&raw_url);
 
         let mut proxy = rquest::Proxy::all(&clean_url)
             .or_else(|_| rquest::Proxy::all(&raw_url))
@@ -383,12 +408,17 @@ impl ProxyPoolManager {
         // 优先使用结构化 auth，兜底使用从 URL 内嵌解析出的 auth
         if let Some(auth) = &entry.auth {
             if !auth.username.is_empty() {
-                if auth.password.starts_with("ag_enc_") && parsed_auth.is_some() {
-                    tracing::warn!(
-                        "[ProxyPool] Proxy password decryption failed (retains ag_enc_ prefix); falling back to credentials embedded in URL"
-                    );
-                    let (user, pass) = parsed_auth.as_ref().unwrap();
-                    proxy = proxy.basic_auth(user, pass);
+                if auth.password.starts_with("ag_enc_") {
+                    if let Some((user, pass)) = &parsed_auth {
+                        tracing::warn!(
+                            "[ProxyPool] Proxy password decryption failed (retains ag_enc_ prefix); falling back to credentials embedded in URL"
+                        );
+                        proxy = proxy.basic_auth(user, pass);
+                    } else {
+                        tracing::warn!(
+                            "[ProxyPool] Proxy password decryption failed (retains ag_enc_ prefix) and no URL credentials available; refusing to send encrypted ciphertext as password"
+                        );
+                    }
                 } else {
                     proxy = proxy.basic_auth(&auth.username, &auth.password);
                 }
@@ -595,9 +625,9 @@ impl ProxyPoolManager {
         let client_result = Client::builder()
             .proxy(proxy_cfg.proxy)
             .emulation(Emulation::Chrome123)
-            .connect_timeout(Duration::from_secs(5))
+            .connect_timeout(Duration::from_secs(10))
             .pool_idle_timeout(Duration::from_secs(45))
-            .timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(15))
             .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36")
             .build();
 
@@ -738,5 +768,135 @@ mod tests {
         let res = pool.build_proxy_config(&entry);
         assert!(res.is_ok());
         assert_eq!(res.unwrap().entry_id, "p3");
+    }
+
+    #[test]
+    fn test_parse_and_clean_proxy_url_strips_both_user_and_pass() {
+        let raw = "http://myuser:mypassword@127.0.0.1:10080";
+        let (clean_url, auth) = ProxyPoolManager::parse_and_clean_proxy_url(raw);
+        assert_eq!(clean_url, "http://127.0.0.1:10080/");
+        assert_eq!(auth, Some(("myuser".to_string(), "mypassword".to_string())));
+    }
+
+    #[test]
+    fn test_parse_and_clean_proxy_url_socks5h() {
+        let raw = "socks5h://socks_user:socks_pass@127.0.0.1:1080";
+        let (clean_url, auth) = ProxyPoolManager::parse_and_clean_proxy_url(raw);
+        assert_eq!(clean_url, "socks5h://127.0.0.1:1080");
+        assert_eq!(
+            auth,
+            Some(("socks_user".to_string(), "socks_pass".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_build_proxy_config_blocks_ciphertext_when_no_url_auth() {
+        let pool = ProxyPoolManager::new(Arc::new(RwLock::new(ProxyPoolConfig::default())));
+        let entry = ProxyEntry {
+            id: "p_cipher".to_string(),
+            name: "test_cipher".to_string(),
+            url: "http://127.0.0.1:10080".to_string(),
+            auth: Some(ProxyAuth {
+                username: "struct_user".to_string(),
+                password: "ag_enc_v2_broken_key_payload".to_string(),
+            }),
+            enabled: true,
+            priority: 1,
+            tags: vec![],
+            max_accounts: None,
+            health_check_url: None,
+            last_check_time: None,
+            is_healthy: true,
+            latency: None,
+        };
+
+        let res = pool.build_proxy_config(&entry);
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap().entry_id, "p_cipher");
+    }
+
+    #[tokio::test]
+    async fn test_bound_account_prevents_direct_leak_when_unhealthy() {
+        let pool = ProxyPoolManager::new(Arc::new(RwLock::new(ProxyPoolConfig {
+            enabled: true,
+            auto_failover: true,
+            proxies: vec![ProxyEntry {
+                id: "bound_p1".to_string(),
+                name: "test_bound".to_string(),
+                url: "http://127.0.0.1:8080".to_string(),
+                auth: None,
+                enabled: true,
+                priority: 1,
+                tags: vec![],
+                max_accounts: None,
+                health_check_url: None,
+                last_check_time: None,
+                is_healthy: false, // Mark proxy as unhealthy
+                latency: None,
+            }],
+            ..Default::default()
+        })));
+
+        let _ = pool
+            .bind_account_to_proxy("acc_test".to_string(), "bound_p1".to_string())
+            .await;
+
+        let res = pool.get_proxy_for_account("acc_test").await;
+        assert!(res.is_ok(), "Expected Ok, got {:?}", res);
+        let proxy_opt = res.unwrap();
+        assert!(
+            proxy_opt.is_some(),
+            "Bound account must NOT silently fall back to None (Direct leak)"
+        );
+        assert_eq!(proxy_opt.unwrap().entry_id, "bound_p1");
+    }
+
+    #[tokio::test]
+    async fn test_bound_account_fails_over_to_healthy_pool_proxy() {
+        let pool = ProxyPoolManager::new(Arc::new(RwLock::new(ProxyPoolConfig {
+            enabled: true,
+            auto_failover: true,
+            proxies: vec![
+                ProxyEntry {
+                    id: "bound_p1".to_string(),
+                    name: "test_bound".to_string(),
+                    url: "http://127.0.0.1:8080".to_string(),
+                    auth: None,
+                    enabled: true,
+                    priority: 1,
+                    tags: vec![],
+                    max_accounts: None,
+                    health_check_url: None,
+                    last_check_time: None,
+                    is_healthy: false, // unhealthy
+                    latency: None,
+                },
+                ProxyEntry {
+                    id: "pool_p2".to_string(),
+                    name: "test_pool".to_string(),
+                    url: "http://127.0.0.1:8081".to_string(),
+                    auth: None,
+                    enabled: true,
+                    priority: 1,
+                    tags: vec![],
+                    max_accounts: None,
+                    health_check_url: None,
+                    last_check_time: None,
+                    is_healthy: true, // healthy
+                    latency: None,
+                },
+            ],
+            ..Default::default()
+        })));
+
+        let _ = pool
+            .bind_account_to_proxy("acc_test".to_string(), "bound_p1".to_string())
+            .await;
+
+        let res = pool.get_proxy_for_account("acc_test").await;
+        assert!(res.is_ok());
+        let proxy_opt = res.unwrap();
+        assert!(proxy_opt.is_some());
+        assert_eq!(proxy_opt.unwrap().entry_id, "pool_p2");
     }
 }

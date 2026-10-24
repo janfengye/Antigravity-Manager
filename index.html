@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" style="background-color: #1a1f2e;">
+<html lang="en">
 
 <head>
   <meta charset="UTF-8" />
@@ -9,14 +9,20 @@
   <script>
     (function () {
       try {
+        const isMini = window.location.search.includes('mini') || 
+                       (typeof window !== 'undefined' && window.__TAURI_INTERNALS__?.metadata?.currentWindow?.label === 'mini');
+        if (isMini) {
+          document.documentElement.classList.add('mini-window');
+          document.documentElement.style.backgroundColor = 'transparent';
+        } else {
+          document.documentElement.style.backgroundColor = '#1a1f2e';
+        }
+
         const savedTheme = localStorage.getItem('app-theme-preference');
         const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
 
         // Determine if should be dark for later use, but ALWAYS start with splash color
         const shouldBeDark = savedTheme === 'dark' || ((!savedTheme || savedTheme === 'system') && systemDark);
-
-        // Set background color IMMEDIATELY to SPLASH COLOR (seamless transition)
-        document.documentElement.style.backgroundColor = '#1a1f2e';
 
         if (shouldBeDark) {
           document.documentElement.classList.add('dark');
@@ -27,18 +33,21 @@
         }
       } catch (e) {
         console.error('Failed to apply theme during boot:', e);
-        document.documentElement.style.backgroundColor = '#1a1f2e';
       }
     })();
   </script>
   <style>
-    /* Critical CSS: Force splash color initially */
-    html {
+    /* Critical CSS: Force splash color initially for main window */
+    html:not(.mini-window) {
       background-color: #1a1f2e !important;
     }
 
-    /* These specific overrides will apply when React loads and removes the splash screen logic, 
-       but for now we want everything to look like the splash screen */
+    html.mini-window,
+    html.mini-window body,
+    body.mini-window {
+      background-color: transparent !important;
+      background: transparent !important;
+    }
 
     body {
       margin: 0;
@@ -47,7 +56,7 @@
   </style>
 </head>
 
-<body style="margin: 0; background-color: #1a1f2e;">
+<body style="margin: 0;">
 
 
 

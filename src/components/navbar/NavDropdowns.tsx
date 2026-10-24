@@ -4,6 +4,7 @@ import { ChevronDown, MoreVertical, Sun, Moon, LogOut, Minimize2 } from 'lucide-
 import { useTranslation } from 'react-i18next';
 import type { NavItem, Language } from './constants';
 import { isTauri } from '../../utils/env';
+import { invoke } from '@tauri-apps/api/core';
 import { useViewStore } from '../../stores/useViewStore';
 import { normalizeLanguageCode } from '../../stores/useConfigStore';
 
@@ -229,7 +230,11 @@ export function MoreDropdown({
                     {/* 迷你视图 */}
                     <button
                         onClick={() => {
-                            setMiniView(true);
+                            if (isTauri()) {
+                                invoke('show_mini_view').catch(() => {});
+                            } else {
+                                setMiniView(true);
+                            }
                             setIsOpen(false);
                         }}
                         className="w-full px-4 py-2.5 text-left text-sm flex items-center gap-3 hover:bg-gray-50 dark:hover:bg-base-100 transition-colors text-gray-700 dark:text-gray-300"

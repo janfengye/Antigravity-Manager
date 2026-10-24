@@ -18,9 +18,11 @@
 
 /* 禁止过度滚动和橡皮筋效果 */
 html,
-body {
+body,
+#root {
   overscroll-behavior: none;
   height: 100%;
+  width: 100%;
   overflow-y: hidden;
   overflow-x: hidden;
   margin: 0;
@@ -28,16 +30,26 @@ body {
   border: none;
 }
 
-html {
+/* Mini 悬浮窗强制全透明，彻底消除直角白边/黑边，透出真实桌面圆角与阴影 */
+html.mini-window,
+html.mini-window body,
+body.mini-window,
+#root.mini-root {
+  background: transparent !important;
+  background-color: transparent !important;
+}
+
+/* 主窗口浅色与暗色默认背景 */
+html:not(.mini-window) {
   background-color: #FAFBFC;
 }
 
-html.dark {
+html.dark:not(.mini-window) {
   background-color: #09090b;
 }
 
-/* 全局样式 */
-body {
+/* 全局样式（仅限制非 mini 窗口） */
+body:not(.mini-window) {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
     'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
@@ -46,6 +58,10 @@ body {
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
   background-color: #FAFBFC;
+}
+
+.dark body:not(.mini-window) {
+  background-color: #09090b;
 }
 
 /* LobeHub UI flex center fallback for @lobehub/icons avatar components */

@@ -12,10 +12,15 @@ export default function ThemeManager() {
     useEffect(() => {
         const init = async () => {
             await loadConfig();
-            // Show window after a short delay to ensure React has painted
+            // Show window after a short delay to ensure React has painted (main window only)
             setTimeout(async () => {
                 if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
-                    await getCurrentWindow().show();
+                    const win = getCurrentWindow();
+                    if (win.label !== 'mini') {
+                        await win.show();
+                        await win.unminimize().catch(() => {});
+                        await win.setFocus().catch(() => {});
+                    }
                 }
             }, 100);
         };
@@ -29,14 +34,17 @@ export default function ThemeManager() {
         const applyTheme = async (theme: string) => {
             const root = document.documentElement;
             const isDark = theme === 'dark';
+            const isMini = typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__ && getCurrentWindow().label === 'mini';
 
             // Set Tauri window background color
             // Skip on Linux due to crash with transparent windows + softbuffer
+            // Skip for mini window to preserve native Tauri transparency
             try {
-                if (!isLinux() && (window as any).__TAURI_INTERNALS__) {
+                if (!isLinux() && (window as any).__TAURI_INTERNALS__ && !isMini) {
+                    const win = getCurrentWindow();
                     const bgColor = isDark ? '#1d232a' : '#FAFBFC';
                     // Don't await this, let it happen in background to avoid blocking React render
-                    getCurrentWindow().setBackgroundColor(bgColor).catch(e =>
+                    win.setBackgroundColor(bgColor).catch(e =>
                         console.error('Failed to set window background color:', e)
                     );
 
@@ -54,7 +62,18 @@ export default function ThemeManager() {
             root.setAttribute('data-theme', theme);
 
             // Set inline style for immediate visual feedback
-            root.style.backgroundColor = isDark ? '#1d232a' : '#FAFBFC';
+            if (isMini) {
+                root.style.setProperty('background-color', 'transparent', 'important');
+                root.style.setProperty('background', 'transparent', 'important');
+                if (document.body) {
+                    document.body.style.setProperty('background-color', 'transparent', 'important');
+                    document.body.style.setProperty('background', 'transparent', 'important');
+                    document.body.classList.add('mini-window');
+                }
+                root.classList.add('mini-window');
+            } else {
+                root.style.backgroundColor = isDark ? '#1d232a' : '#FAFBFC';
+            }
 
             // Set Tailwind dark mode class
             if (isDark) {

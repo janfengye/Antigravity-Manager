@@ -117,7 +117,7 @@ impl AccountService {
     ) -> Result<String, String> {
         let handle = match &self.integration {
             modules::integration::SystemManager::Desktop(h) => Some(h.clone()),
-            modules::integration::SystemManager::Headless => None,
+            _ => None,
         };
         modules::oauth_server::prepare_oauth_url(handle, oauth_client_key).await
     }
@@ -128,7 +128,7 @@ impl AccountService {
     ) -> Result<Account, String> {
         let handle = match &self.integration {
             modules::integration::SystemManager::Desktop(h) => Some(h.clone()),
-            modules::integration::SystemManager::Headless => None,
+            _ => None,
         };
         let token_res = modules::oauth_server::start_oauth_flow(handle, oauth_client_key).await?;
         self.process_oauth_token(token_res).await
@@ -137,7 +137,7 @@ impl AccountService {
     pub async fn complete_oauth_login(&self) -> Result<Account, String> {
         let handle = match &self.integration {
             modules::integration::SystemManager::Desktop(h) => Some(h.clone()),
-            modules::integration::SystemManager::Headless => None,
+            _ => None,
         };
         let token_res = modules::oauth_server::complete_oauth_flow(handle).await?;
         self.process_oauth_token(token_res).await

@@ -320,15 +320,18 @@ where
                     };
 
                     if last_activity.elapsed() >= std::time::Duration::from_secs(phase_timeout_secs) {
-                        // [关键自适应跃迁：思考至正文过渡断崖检测]
-                        // 若处于思考期，且静默时间达到稳态滑动超时，但正文/工具调用尚未产生，
-                        // 说明思考吐字已完成，上游正处于生成正文或大工具调用的计算静默期（过渡断崖 Transition Cliff）。
-                        // 此时绝不可直接超时误杀，而应自动跃迁至 Transition 状态，重置时间基准点，
-                        // 赋予独立的 transition_secs (180s) 宽限期，并继续下发心跳保活。
-                        if phase == StreamPhase::Thinking && !handler.has_content() {
+                        // [关键自适应跃迁：思考/引导文本至巨型工具调用过渡断崖检测]
+                        // 无论当前处于思考期 (Thinking) 还是已输出简短引导文本的正文期 (Streaming)，
+                        // 当静默时间首次达到稳态滑动超时 (streaming_sliding_secs) 时，
+                        // 上游可能正处于 Google v1internal 整包缓冲巨型 functionCall JSON 或深层状态切换的计算静默期（过渡断崖 Transition Cliff）。
+                        // 此时绝不可直接在半句话处超时截断并伪造 end_turn，而应自动跃迁至 Transition 状态，重置时间基准点，
+                        // 赋予独立的 transition_secs (180s) 宽限期，并继续下发心跳保活；
+                        // 若在 Transition 宽限期内仍无任何 chunk 到达，则因 phase 已是 Transition，将在下一轮超时中正常走优雅收尾或报错。
+                        if matches!(phase, StreamPhase::Thinking | StreamPhase::Streaming) {
                             tracing::info!(
-                                "[{}] 思考流静默已达 {}s，检测到过渡断崖 (Transition Cliff)，自动跃迁至 Transition 状态并开启 {}s 宽限期",
+                                "[{}] {:?} 流静默已达 {}s，检测到过渡断崖 (Transition Cliff)，自动跃迁至 Transition 状态并开启 {}s 宽限期",
                                 config.adapter_name,
+                                phase,
                                 phase_timeout_secs,
                                 config.transition_secs
                             );
@@ -438,10 +441,14 @@ where
             buffer.clear();
         }
 
-        // 正常收尾
-        let final_chunks = handler.emit_finalize();
-        for c in final_chunks {
-            yield Ok(c);
+        // [Double-Finalization Guard]
+        // 若尾部冲刷使得 handler 已经进入终结态（例如 process_line 接收到了 [DONE] 或终结事件），
+        // 严禁二次调用 emit_finalize()，防止向客户端发射重复的 [DONE] 帧或 message_stop 事件导致客户端协议报错
+        if !handler.is_terminal() {
+            let final_chunks = handler.emit_finalize();
+            for c in final_chunks {
+                yield Ok(c);
+            }
         }
 
         handler.on_finish();
@@ -614,15 +621,15 @@ mod tests {
     async fn test_lifecycle_idle_timeout_after_content_gracefully_finalizes() {
         let mock_stream = async_stream::stream! {
             yield Ok::<_, String>(Bytes::from("data: partial content\n"));
-            // 保持静默超过稳态滑动超时 (streaming_sliding_secs = 1s)
-            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+            // 保持静默超过稳态滑动超时 (streaming_sliding_secs = 1s) + 过渡断崖宽限期 (transition_secs = 1s)
+            tokio::time::sleep(std::time::Duration::from_millis(3200)).await;
             yield Ok::<_, String>(Bytes::from("data: unreachable\n"));
         };
 
         let handler = MockHandler::new(false, false);
         let config =
             StreamLifecycleConfig::new("test", "test_fn", "trace_idle_after_content".to_string())
-                .with_timeouts(5, 5, 1)
+                .with_timeouts(5, 1, 1)
                 .with_heartbeat_secs(1);
         let mut stream = run_stream_lifecycle(Box::pin(mock_stream), handler, config);
 
@@ -648,6 +655,44 @@ mod tests {
             "Must NOT propagate raw Err on idle timeout after content"
         );
         assert!(!full_output.contains("unreachable"));
+    }
+
+    #[tokio::test]
+    async fn test_lifecycle_streaming_preamble_to_large_tool_call_cliff_auto_promotion() {
+        // 模拟真实业务场景（如 Gemini 4 Argon / Claude 生成巨型 Write/Edit 工具调用）：
+        // 模型先输出一段简短引导文本（如 "我将把重构后的漫画阅读..."，此时 has_content() == true 且 phase == Streaming），
+        // 随后 Google v1internal 上游进入整包缓冲巨型 functionCall JSON 的长静默期（超过 streaming_sliding_secs = 1s，但未超过 transition_secs = 4s）。
+        // 验证状态机在 Streaming 阶段首次达到滑动超时时同样自动跃迁至 Transition 赋予宽限期，
+        // 绝不在半句话处提前截断并伪造 end_turn！
+        let mock_stream = async_stream::stream! {
+            yield Ok::<_, String>(Bytes::from("data: preamble_text\n"));
+            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+            yield Ok::<_, String>(Bytes::from("data: large_tool_call_payload\n"));
+        };
+
+        let handler = MockHandler::new(false, false);
+        let config =
+            StreamLifecycleConfig::new("test", "test_fn", "trace_streaming_cliff".to_string())
+                .with_timeouts(5, 4, 1)
+                .with_heartbeat_secs(1);
+        let mut stream = run_stream_lifecycle(Box::pin(mock_stream), handler, config);
+
+        let mut output = Vec::new();
+        while let Some(item) = stream.next().await {
+            if let Ok(b) = item {
+                output.push(String::from_utf8_lossy(&b).to_string());
+            }
+        }
+
+        let full_output = output.join("");
+        assert!(full_output.contains("processed:data: preamble_text"));
+        assert!(
+            full_output.contains("processed:data: large_tool_call_payload"),
+            "Stream must survive tool-call buffering cliff after preamble text and emit the buffered tool call payload"
+        );
+        assert!(full_output.contains("[finalized]"));
+        assert!(!full_output.contains("[truncated]"));
+        assert!(!full_output.contains("[initial_error]"));
     }
 
     #[tokio::test]

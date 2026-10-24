@@ -1285,8 +1285,12 @@ pub struct ModelInput {
 /// families, in which case only the name is written.
 fn series_defaults_for(model_id: &str) -> Option<Value> {
     let id = model_id.to_lowercase();
-    // Gemini 3.x / 3.5 / 3.1 family: 1M context, 64k output, multimodal in, text out.
-    if id.starts_with("gemini-3") || id.starts_with("gemini-3.1") || id.starts_with("gemini-3.5") {
+    // Gemini 4 / 3.x family: 1M context, 64k output, multimodal in, text out.
+    if id.starts_with("gemini-4")
+        || id.starts_with("gemini-3")
+        || id.starts_with("gemini-3.1")
+        || id.starts_with("gemini-3.5")
+    {
         return Some(serde_json::json!({
             "limit": { "context": 1_048_576, "output": 65_536 },
             "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] },
@@ -1299,7 +1303,14 @@ fn series_defaults_for(model_id: &str) -> Option<Value> {
             "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] },
         }));
     }
-    // Claude family: 200k context, 64k output.
+    // Claude 5.5 family: 1M context, 128k output.
+    if id.starts_with("claude-opus-5-5") || id.starts_with("claude-sonnet-5-5") {
+        return Some(serde_json::json!({
+            "limit": { "context": 1_000_000, "output": 128_000 },
+            "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] },
+        }));
+    }
+    // Claude 4.6 family: 200k context, 64k output.
     if id.starts_with("claude") {
         return Some(serde_json::json!({
             "limit": { "context": 200_000, "output": 64_000 },

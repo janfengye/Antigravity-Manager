@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Antigravity Tools",
-  "version": "4.9.8",
+  "version": "5.0.0",
   "identifier": "com.lbjlaq.antigravity-tools",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -10,6 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
+    "macOSPrivateApi": true,
     "withGlobalTauri": false,
     "windows": [
       {
@@ -21,6 +22,20 @@
         "hiddenTitle": true,
         "transparent": false,
         "visible": false
+      },
+      {
+        "label": "mini",
+        "title": "Antigravity Mini",
+        "url": "index.html?mini=1",
+        "width": 360,
+        "height": 360,
+        "decorations": false,
+        "resizable": false,
+        "shadow": true,
+        "transparent": true,
+        "alwaysOnTop": false,
+        "visible": false,
+        "skipTaskbar": true
       }
     ],
     "security": {

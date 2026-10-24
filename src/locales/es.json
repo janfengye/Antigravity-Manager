@@ -64,7 +64,8 @@
         "selected": "Selected",
         "claude_series": "Claude Series",
         "maximize": "Maximize",
-        "app_name": "Antigravity Tools"
+        "app_name": "Antigravity Tools",
+        "copy_to_clipboard": "Copiar al portapapeles"
     },
     "nav": {
         "dashboard": "Panel",
@@ -208,9 +209,23 @@
         "no_client_account": "No hay ninguna cuenta activa o vinculada para esta aplicación",
         "go_switch_account": "Ir a cambiar de cuenta",
         "switch_best_to_target": "Cambiar la mejor cuenta a {{target}}",
-        "switch_this_to_target": "Cambiar esta cuenta a {{target}}"
+        "switch_this_to_target": "Cambiar esta cuenta a {{target}}",
+        "account_pool": "Grupo de cuentas",
+        "view_mode_title_5h": "Vista de ventana móvil de 5 horas",
+        "view_mode_title_weekly": "Vista de cuota semanal de 7 días",
+        "view_mode_title_weighted": "Vista ponderada integral"
     },
     "accounts": {
+        "qos": {
+            "suspicious": "Sospecha de Límite",
+            "suspicious_hint": "Latencia inicial anormal detectada en el servidor ascendente. Asignación de nuevas sesiones pausada.",
+            "jailed": "En Aislamiento QoS",
+            "jailed_hint": "Se detectó limitación silenciosa y se desvinculó la sesión. En enfriamiento escalonado con sondeo automático.",
+            "probing": "Sondeando Recuperación",
+            "probing_hint": "Enviando sonda ligera para verificar si la calidad del servicio se ha recuperado por completo.",
+            "half_open": "En Observación",
+            "half_open_hint": "Sonda superada. Probando con tráfico real; se restablecerá por completo tras respuestas estables."
+        },
         "account": "Cuenta",
         "search_placeholder": "Buscar correo...",
         "all": "Todas",
@@ -335,6 +350,9 @@
         "quota_window_weekly": "Cuota semanal de 7 días",
         "quota_window_weekly_short": "Semanal",
         "quota_protected": "Protegida",
+        "remaining_quota": "Cuota restante: {{percentage}}%",
+        "reset_in": "Reinicio: {{time}}",
+        "supported_official_models": "Modelos oficiales soportados ({{count}}):",
         "details": {
             "title": "Detalles de Cuota",
             "model_quota": "Cuotas individuales de modelos",
@@ -443,7 +461,15 @@
         "quota_group_claude": "Modelos Claude y GPT",
         "weekly_constrained_tooltip": "Restringido por el límite semanal",
         "weekly_tokens": "Tokens del ciclo",
-        "weekly_tokens_tooltip": "Tokens registrados por esta instancia en este ciclo de cuota (entrada + salida)"
+        "weekly_tokens_tooltip": "Tokens registrados por esta instancia en este ciclo de cuota (entrada + salida)",
+        "client_classic": "Clásico",
+        "client_classic_tooltip": "Cuenta iniciada en Antigravity Clásico",
+        "client_ide": "IDE",
+        "client_ide_tooltip": "Cuenta iniciada en Antigravity IDE",
+        "client_cli": "CLI",
+        "client_cli_tooltip": "Cuenta iniciada en Antigravity CLI (agy)",
+        "switch_next_short": "Siguiente",
+        "weekly_exhausted_tooltip": "Cuota semanal agotada, protección activada"
     },
     "settings": {
         "save": "Guardar Configuración",
@@ -771,7 +797,8 @@
         "branding": {
             "title": "Antigravity Tools",
             "subtitle": "Gestión profesional de cuentas"
-        }
+        },
+        "lightweight_mode_desc": "Libera completamente la memoria de WebView al salir o minimizar a la bandeja"
     },
     "tray": {
         "current": "Actual",
@@ -779,11 +806,15 @@
         "switch_next": "Cambiar a la Siguiente Cuenta",
         "refresh_current": "Actualizar Cuota Actual",
         "show_window": "Mostrar Ventana Principal",
+        "mini_view": "Vista Mini",
         "quit": "Salir de la Aplicación",
         "no_account": "Sin Cuenta",
         "unknown_quota": "Desconocido (Clic para Actualizar)",
         "forbidden": "Cuenta Prohibida",
-        "lightweight_mode": "Modo Ligero (Liberar memoria al cerrar)"
+        "lightweight_mode": "Modo Ligero (Liberar memoria al cerrar)",
+        "open_console": "Abrir consola",
+        "pin_desc": "Fijar al escritorio (no ocultar al perder el foco)",
+        "unpin_desc": "Fijado (haz clic para desfijar, ocultar automáticamente)"
     },
     "proxy": {
         "title": "Servicio de Proxy API",
@@ -1385,7 +1416,7 @@
             "original_placeholder": "Original (ej. gpt-4 o gpt-4*)"
         },
         "multi_protocol": {
-            "title": "Soporte Multi-Protocolo",
+            "title": "Catálogo de Modelos y Protocolos",
             "subtitle": "Integración perfecta con sus herramientas y CLIs de IA favoritas",
             "description": "El proxy local soporta protocolos OpenAI, Anthropic y Gemini, asegurando compatibilidad con una amplia gama de aplicaciones.",
             "openai_label": "Protocolo OpenAI",

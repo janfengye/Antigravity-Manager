@@ -715,7 +715,7 @@ mod variant_tests {
 
         apply_variant(&mut request, effort, Some(1_000)).expect("Gemini 3.1 Pro must resolve");
 
-        assert_eq!(request.model, "gemini-pro-agent");
+        assert_eq!(request.model, "gemini-3.1-pro-high");
     }
 
     #[test]
@@ -1047,8 +1047,17 @@ pub async fn handle_messages(
         } else if is_client_control {
             // [CRITICAL FIX] 客户端控制模式下，客户端未传数字预算（全缺省或仅传等级）
             // 严禁保留 apply_variant 内部赋予的 spec.thinking_budget (4000)！保持真实客户端状态
+            // 必须保留客户端传来的 effort_hint 思考等级提示，避免进入下游 Pipeline 时因双空丢失导致上游静默抑制
             if let Some(ref mut t) = request.thinking {
                 t.budget_tokens = None;
+                t.effort = effort_hint.clone();
+            }
+        } else {
+            // 网关权威控制模式下，若客户端携带了 effort_hint，保留其思考等级提示供下游 Pipeline 精准感知
+            if let Some(ref mut t) = request.thinking {
+                if t.effort.is_none() && effort_hint.is_some() {
+                    t.effort = effort_hint.clone();
+                }
             }
         }
         tracing::info!(
@@ -1696,9 +1705,12 @@ pub async fn handle_messages(
 
     let mut last_error = String::new();
     let mut retried_without_thinking = false;
+    let mut retried_with_budget_degraded = false;
+    let mut degraded_gemini_body: Option<serde_json::Value> = None;
     let mut last_email: Option<String> = None;
     let mut last_mapped_model: Option<String> = None;
     let mut last_status = StatusCode::SERVICE_UNAVAILABLE; // Default to 503 if no response reached
+    let mut failure_statuses = super::common::FailureStatusTracker::default();
     let mut force_rotate = false;
 
     // [Stage Timing] 阶段耗时度量变量 (毫秒，保留微秒级浮点精度)
@@ -1729,6 +1741,7 @@ pub async fn handle_messages(
             if last_status == StatusCode::SERVICE_UNAVAILABLE || last_status == StatusCode::OK {
                 last_status = StatusCode::GATEWAY_TIMEOUT;
             }
+            failure_statuses.record(StatusCode::GATEWAY_TIMEOUT);
             if last_error.is_empty() {
                 last_error = format!(
                     "Gateway global request budget exceeded ({}s)",
@@ -1748,6 +1761,7 @@ pub async fn handle_messages(
             if last_status == StatusCode::SERVICE_UNAVAILABLE || last_status == StatusCode::OK {
                 last_status = StatusCode::GATEWAY_TIMEOUT;
             }
+            failure_statuses.record(StatusCode::GATEWAY_TIMEOUT);
             break;
         }
 
@@ -1845,6 +1859,10 @@ pub async fn handle_messages(
         last_email = Some(email.clone());
         info!("✓ Using account: {} (type: {})", email, config.request_type);
 
+        let mapped_model = token_manager
+            .resolve_dynamic_model_for_account(&account_id, &mapped_model)
+            .await;
+
         // 方案 A：移除后台任务静默降级策略，请求直通客户端指定的模型，与 OpenAI 协议保持一致
         let mut request_with_mapped = request_for_body.clone();
 
@@ -1857,44 +1875,57 @@ pub async fn handle_messages(
         // let _trace_id = format!("req_{}", chrono::Utc::now().timestamp_subsec_millis());
 
         let token_obj = token_manager.get_token_by_id(&account_id);
-        let (mut gemini_body, transform_timing) =
-            match crate::proxy::mappers::claude::transform_claude_request_in_timed(
-                &request_with_mapped,
-                &project_id,
-                retried_without_thinking,
-                Some(account_id.as_str()),
-                &store_key,
-                &affinity_key,
-                token_obj.as_ref(),
-            ) {
-                Ok((b, timing)) => {
-                    debug!(
-                        "[{}] Transformed Gemini Body: {}",
-                        trace_id,
-                        serde_json::to_string_pretty(&b).unwrap_or_default()
-                    );
-                    (b, timing)
-                }
-                Err(e) => {
-                    let headers = [
-                        ("X-Mapped-Model", request_with_mapped.model.as_str()),
-                        ("X-Upstream-Model", config.final_model.as_str()),
-                        ("X-Account-Email", email.as_str()),
-                    ];
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        headers,
-                        Json(json!({
-                            "type": "error",
-                            "error": {
-                                "type": "api_error",
-                                "message": format!("Transform error: {}", e)
-                            }
-                        })),
-                    )
-                        .into_response();
-                }
-            };
+        let (mut gemini_body, transform_timing) = if let Some(body) = degraded_gemini_body.take() {
+            (
+                body,
+                crate::proxy::mappers::claude::request::TransformTiming::default(),
+            )
+        } else {
+            let (mut b, timing) =
+                match crate::proxy::mappers::claude::transform_claude_request_in_timed(
+                    &request_with_mapped,
+                    &project_id,
+                    retried_without_thinking,
+                    Some(account_id.as_str()),
+                    &store_key,
+                    &affinity_key,
+                    token_obj.as_ref(),
+                ) {
+                    Ok((b, timing)) => {
+                        debug!(
+                            "[{}] Transformed Gemini Body: {}",
+                            trace_id,
+                            serde_json::to_string_pretty(&b).unwrap_or_default()
+                        );
+                        (b, timing)
+                    }
+                    Err(e) => {
+                        let headers = [
+                            ("X-Mapped-Model", request_with_mapped.model.as_str()),
+                            ("X-Upstream-Model", config.final_model.as_str()),
+                            ("X-Account-Email", email.as_str()),
+                        ];
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            headers,
+                            Json(json!({
+                                "type": "error",
+                                "error": {
+                                    "type": "api_error",
+                                    "message": format!("Transform error: {}", e)
+                                }
+                            })),
+                        )
+                            .into_response();
+                    }
+                };
+            if retried_with_budget_degraded {
+                crate::proxy::pipeline::InboundThinkingPipeline::try_degrade_thinking_budget(
+                    &mut b,
+                );
+            }
+            (b, timing)
+        };
 
         let _ =
             crate::proxy::mappers::context_manager::ContextManager::apply_post_transit_context_mgmt(
@@ -2012,6 +2043,8 @@ pub async fn handle_messages(
             Ok(r) => r,
             Err(e) => {
                 last_error = e.clone();
+                failure_statuses.record(StatusCode::GATEWAY_TIMEOUT);
+                token_manager.mark_account_transient_failure(&account_id, 30, &e);
                 debug!(
                     "Request failed on attempt {}/{}: {}",
                     attempt + 1,
@@ -2145,6 +2178,14 @@ pub async fn handle_messages(
                 // 这确保下游客户端（Claude Code 等）看门狗持续被心跳保活，绝不会因 Prefill 或推理思考等待触发 5 分钟无响应断连 (CLI error 'Request timed out')。
                 if client_wants_stream {
                     ttft_ms = effective_attempt_start.elapsed().as_micros() as f64 / 1000.0;
+                    crate::proxy::handlers::common::report_qos_ttft(
+                        &token_manager,
+                        &account_id,
+                        Some(affinity_key.as_str()),
+                        ttft_ms,
+                        request.thinking.is_some(),
+                        Some(raw_estimated as u32),
+                    );
                     if let Some(effective_item) =
                         fallback_attempts.iter_mut().find(|a| a.is_effective)
                     {
@@ -2269,6 +2310,14 @@ pub async fn handle_messages(
 
                             // We found real data!
                             ttft_ms = effective_attempt_start.elapsed().as_micros() as f64 / 1000.0;
+                            crate::proxy::handlers::common::report_qos_ttft(
+                                &token_manager,
+                                &account_id,
+                                Some(affinity_key.as_str()),
+                                ttft_ms,
+                                request.thinking.is_some(),
+                                Some(raw_estimated as u32),
+                            );
                             if let Some(effective_item) =
                                 fallback_attempts.iter_mut().find(|a| a.is_effective)
                             {
@@ -2489,6 +2538,14 @@ pub async fn handle_messages(
                 );
 
                 ttft_ms = effective_attempt_start.elapsed().as_micros() as f64 / 1000.0;
+                crate::proxy::handlers::common::report_qos_ttft(
+                    &token_manager,
+                    &account_id,
+                    Some(affinity_key.as_str()),
+                    ttft_ms,
+                    request.thinking.is_some(),
+                    Some(raw_estimated as u32),
+                );
                 if let Some(effective_item) = fallback_attempts.iter_mut().find(|a| a.is_effective)
                 {
                     effective_item.duration_s = ttft_ms / 1000.0;
@@ -2530,6 +2587,7 @@ pub async fn handle_messages(
         // 1. 立即提取状态码和 headers（防止 response 被 move）
         let status_code = status.as_u16();
         last_status = status;
+        failure_statuses.record(status);
         let retry_after = response
             .headers()
             .get("Retry-After")
@@ -2630,6 +2688,61 @@ pub async fn handle_messages(
                 "[{}] Unbound session {} from account {} due to status {}",
                 trace_id, affinity_key, email, status_code
             );
+        }
+
+        // [FIX #3713] 503 / 529 服务端过载：思考预算原地降级自愈 (Pipeline First)
+        // 当模型遭遇过载 (503/529 / overloaded)，若当前请求带有 -1 或超大思考预算，优先在当前账号上降级预算原地重试一次，
+        // 杜绝盲目全池轮换导致跨账号缓存丢失 (Prefix Cache Protection)。
+        if crate::proxy::pipeline::UpstreamClassification::is_server_overloaded(
+            status_code,
+            &error_text,
+        ) && !retried_with_budget_degraded
+            && crate::proxy::pipeline::InboundThinkingPipeline::try_degrade_thinking_budget(
+                &mut gemini_body,
+            )
+        {
+            retried_with_budget_degraded = true;
+            degraded_gemini_body = Some(gemini_body);
+            force_rotate = false;
+            tracing::warn!(
+                "[{}] Upstream {}/overloaded detected. In-place self-healing: degraded thinking budget to 4000 on account {} (preserving prefix cache)",
+                trace_id, status_code, email
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            continue;
+        }
+
+        // [FIX #3721] 400 强制工具调用与思考冲突：自愈剔除 thinkingConfig 原地重试 (Pipeline First)
+        if crate::proxy::pipeline::UpstreamClassification::is_thinking_tool_choice_conflict(
+            status_code,
+            &error_text,
+        ) && !retried_without_thinking
+        {
+            retried_without_thinking = true;
+            if let Some(req) = gemini_body
+                .get_mut("request")
+                .and_then(Value::as_object_mut)
+            {
+                if let Some(gc) = req
+                    .get_mut("generationConfig")
+                    .and_then(Value::as_object_mut)
+                {
+                    gc.remove("thinkingConfig");
+                }
+            } else if let Some(gc) = gemini_body
+                .get_mut("generationConfig")
+                .and_then(Value::as_object_mut)
+            {
+                gc.remove("thinkingConfig");
+            }
+            degraded_gemini_body = Some(gemini_body);
+            force_rotate = false;
+            tracing::warn!(
+                "[{}] Upstream 400 tool_choice/thinking conflict detected. In-place self-healing: stripped thinkingConfig on account {}, retrying.",
+                trace_id, email
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            continue;
         }
 
         // 4. 处理 400 错误 (Thinking 签名失效 或 块顺序错误)
@@ -2844,7 +2957,9 @@ pub async fn handle_messages(
         }
     }
 
-    let response_status = normalize_claude_error_status(last_status.as_u16());
+    // 所有尝试均失败：仅当全部结构化失败状态均为 429 时返回 429，一旦包含网络/看门狗超时则降级为 504/502/503
+    let final_status = failure_statuses.final_status();
+    let response_status = normalize_claude_error_status(final_status.as_u16());
     let headers = crate::proxy::handlers::common::build_token_error_headers_for_protocol(
         "claude",
         last_mapped_model.as_deref(),
@@ -2881,15 +2996,34 @@ pub async fn handle_list_models(State(state): State<AppState>) -> impl IntoRespo
     let data: Vec<_> = model_ids
         .into_iter()
         .map(|id| {
+            let (fallback_ctx, fallback_out) =
+                crate::proxy::handlers::openai::resolve_model_token_limits(&id);
+            let meta = metadata_map
+                .get(&id)
+                .or_else(|| metadata_map.get(&id.to_lowercase()));
+            let ctx_len = meta
+                .and_then(|m| m.max_tokens)
+                .map(|v| v as i64)
+                .unwrap_or(fallback_ctx);
+            let out_len = meta
+                .and_then(|m| m.max_output_tokens)
+                .map(|v| v as i64)
+                .unwrap_or(fallback_out);
             let mut obj = json!({
                 "id": id,
                 "object": "model",
                 "created": 1706745600,
-                "owned_by": "antigravity"
+                "owned_by": "antigravity",
+                "context_length": ctx_len,
+                "max_context_length": ctx_len,
+                "max_input_tokens": ctx_len,
+                "max_model_len": ctx_len,
+                "max_tokens": ctx_len,
+                "input_token_limit": ctx_len,
+                "max_completion_tokens": out_len,
+                "max_output_tokens": out_len,
+                "output_token_limit": out_len,
             });
-            let meta = metadata_map
-                .get(&id)
-                .or_else(|| metadata_map.get(&id.to_lowercase()));
             if let Some(m) = meta {
                 if let Ok(serde_json::Value::Object(map)) = serde_json::to_value(m) {
                     if let Some(target) = obj.as_object_mut() {
@@ -2935,18 +3069,37 @@ pub async fn handle_retrieve_model(
         )
         .await;
 
+        let (fallback_ctx, fallback_out) =
+            crate::proxy::handlers::openai::resolve_model_token_limits(&matched_id);
         let meta = metadata_map
             .get(&matched_id)
             .or_else(|| metadata_map.get(&matched_id.to_lowercase()));
         let display_name = meta
             .and_then(|m| m.display_name.clone())
             .unwrap_or_else(|| matched_id.clone());
+        let ctx_len = meta
+            .and_then(|m| m.max_tokens)
+            .map(|v| v as i64)
+            .unwrap_or(fallback_ctx);
+        let out_len = meta
+            .and_then(|m| m.max_output_tokens)
+            .map(|v| v as i64)
+            .unwrap_or(fallback_out);
 
         let mut obj = json!({
             "type": "model",
             "id": matched_id.clone(),
             "display_name": display_name,
-            "created_at": "2024-10-22T00:00:00Z"
+            "created_at": "2024-10-22T00:00:00Z",
+            "context_length": ctx_len,
+            "max_context_length": ctx_len,
+            "max_input_tokens": ctx_len,
+            "max_model_len": ctx_len,
+            "max_tokens": ctx_len,
+            "input_token_limit": ctx_len,
+            "max_completion_tokens": out_len,
+            "max_output_tokens": out_len,
+            "output_token_limit": out_len,
         });
 
         if let Some(m) = meta {

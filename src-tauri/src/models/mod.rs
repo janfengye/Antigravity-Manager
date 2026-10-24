@@ -6,7 +6,8 @@ pub mod token;
 
 pub use account::{
     Account, AccountExportItem, AccountExportResponse, AccountIndex, AccountSummary,
-    ActiveClientsStatus, DeviceProfile, DeviceProfileVersion,
+    ActiveClientsStatus, BatchImportProgress, BatchImportResult, DeviceProfile,
+    DeviceProfileVersion, ImportAccountEntry,
 };
 pub use config::{AppConfig, CircuitBreakerConfig, QuotaProtectionConfig};
 pub use official_model::{OfficialModelCatalog, OfficialModelInfo};

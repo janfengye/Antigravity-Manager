@@ -64,7 +64,8 @@
         "selected": "選択済み",
         "claude_series": "Claude シリーズ",
         "maximize": "最大化",
-        "app_name": "Antigravity Tools"
+        "app_name": "Antigravity Tools",
+        "copy_to_clipboard": "クリップボードにコピー"
     },
     "nav": {
         "dashboard": "ダッシュボード",
@@ -208,9 +209,23 @@
         "no_client_account": "このアプリに有効なアカウントがありません",
         "go_switch_account": "アカウント切り替えへ",
         "switch_best_to_target": "{{target}} の最適アカウントに切り替え",
-        "switch_this_to_target": "このアカウントを {{target}} に切り替え"
+        "switch_this_to_target": "このアカウントを {{target}} に切り替え",
+        "account_pool": "アカウントプール",
+        "view_mode_title_5h": "5時間ローリングウィンドウビュー",
+        "view_mode_title_weekly": "7日間週間クォータビュー",
+        "view_mode_title_weighted": "総合加重ビュー"
     },
     "accounts": {
+        "qos": {
+            "suspicious": "速度制限の疑い",
+            "suspicious_hint": "アップストリームの初回応答遅延が検出されました。新規セッションの割り当てを一時停止しています。",
+            "jailed": "冷却制限中",
+            "jailed_hint": "サイレントスロットリングを検出しセッションを解除しました。段階的冷却中で、バックグラウンドプローブが自動テストします。",
+            "probing": "復旧測定中",
+            "probing_hint": "アカウントのアップストリーム品質が完全に回復したか軽量プローブで測定中です。",
+            "half_open": "試用観察中",
+            "half_open_hint": "プローブに成功しました。少量の本番トラフィックで試行中で、安定確認後に完全復帰します。"
+        },
         "account": "アカウント",
         "search_placeholder": "メールを検索...",
         "all": "すべて",
@@ -335,6 +350,9 @@
         "quota_window_weekly": "7-Day Weekly Quota",
         "quota_window_weekly_short": "Weekly",
         "quota_protected": "保護中",
+        "remaining_quota": "残余クォータ: {{percentage}}%",
+        "reset_in": "リセット: {{time}}",
+        "supported_official_models": "対応公式モデル ({{count}}件):",
         "details": {
             "title": "クォータ詳細",
             "model_quota": "個別モデルクォータ",
@@ -443,7 +461,15 @@
         "quota_group_claude": "Claude & GPT モデル",
         "weekly_constrained_tooltip": "週間クォータの上限による制限",
         "weekly_tokens": "サイクル Token",
-        "weekly_tokens_tooltip": "このインスタンスが現在のクォータサイクルで記録した Token 使用量（入力 + 出力）"
+        "weekly_tokens_tooltip": "このインスタンスが現在のクォータサイクルで記録した Token 使用量（入力 + 出力）",
+        "client_classic": "クラシック",
+        "client_classic_tooltip": "現在 Antigravity クラシックにログインしているアカウント",
+        "client_ide": "IDE",
+        "client_ide_tooltip": "現在 Antigravity IDE にログインしているアカウント",
+        "client_cli": "CLI",
+        "client_cli_tooltip": "現在 Antigravity CLI (agy) にログインしているアカウント",
+        "switch_next_short": "次へ",
+        "weekly_exhausted_tooltip": "週間クォータが枯渇し、自動保護が有効化されました"
     },
     "settings": {
         "save": "設定を保存",
@@ -771,7 +797,8 @@
         "branding": {
             "title": "Antigravity Tools",
             "subtitle": "プロフェッショナルなアカウント管理"
-        }
+        },
+        "lightweight_mode_desc": "有効にすると、終了またはトレイ格納時にWebViewメモリを完全に解放します"
     },
     "tray": {
         "current": "現在",
@@ -779,11 +806,15 @@
         "switch_next": "次のアカウントに切り替え",
         "refresh_current": "現在のクォータを更新",
         "show_window": "メインウィンドウを表示",
+        "mini_view": "ミニビュー",
         "quit": "アプリを終了",
         "no_account": "アカウントなし",
         "unknown_quota": "不明 (クリックして更新)",
         "forbidden": "アカウント使用不可",
-        "lightweight_mode": "軽量モード (トレイ時にメモリ解放)"
+        "lightweight_mode": "軽量モード (トレイ時にメモリ解放)",
+        "open_console": "コンソールを開く",
+        "pin_desc": "デスクトップに固定（クリックして常駐、フォーカス喪失時も非表示にしない）",
+        "unpin_desc": "固定中（クリックして固定解除、フォーカス喪失時に自動収納）"
     },
     "proxy": {
         "title": "APIプロキシサービス",
@@ -1385,7 +1416,7 @@
             "original_placeholder": "元の名称 (例: gpt-4 または gpt-4*)"
         },
         "multi_protocol": {
-            "title": "マルチプロトコルサポート",
+            "title": "モデルカタログとプロトコル",
             "subtitle": "お気に入りの AI ツールや CLI とシームレスに統合",
             "description": "ローカルプロキシは OpenAI、Anthropic、および Gemini プロトコルをサポートしており、幅広いアプリケーションとの互換性を確保しています。",
             "openai_label": "OpenAI プロトコル",
