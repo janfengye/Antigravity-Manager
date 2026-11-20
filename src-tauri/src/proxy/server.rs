@@ -286,6 +286,7 @@ struct AccountResponse {
     proxy_disabled_reason: Option<String>,
     proxy_disabled_at: Option<i64>,
     protected_models: Vec<String>,
+    forbidden_models: Vec<String>,
     live_limited_models: HashMap<String, crate::models::account::LiveLimitStatus>,
     /// [NEW] 403 验证阻止状态
     validation_blocked: bool,
@@ -297,6 +298,11 @@ struct AccountResponse {
     /// 出现在响应里，前端 AccountErrorDialog 的首选分支因此恒为 undefined、只能回退去
     /// 解析 validation_blocked_reason 里的嵌套 JSON（issue #3631）。
     validation_url: Option<String>,
+    banned: bool,
+    banned_code: Option<String>,
+    banned_reason: Option<String>,
+    banned_at: Option<i64>,
+    ban_appeal_url: Option<String>,
     quota: Option<QuotaResponse>,
     device_bound: bool,
     last_used: i64,
@@ -389,6 +395,7 @@ fn to_account_response(
         proxy_disabled_reason: account.proxy_disabled_reason.clone(),
         proxy_disabled_at: account.proxy_disabled_at,
         protected_models: account.protected_models.iter().cloned().collect(),
+        forbidden_models: account.forbidden_models.iter().cloned().collect(),
         live_limited_models: account.live_limited_models.clone(),
         quota: account.quota.as_ref().map(|q| QuotaResponse {
             models: q
@@ -414,6 +421,11 @@ fn to_account_response(
         validation_blocked_until: account.validation_blocked_until,
         validation_blocked_reason: account.validation_blocked_reason.clone(),
         validation_url: account.validation_url.clone(),
+        banned: account.banned,
+        banned_code: account.banned_code.clone(),
+        banned_reason: account.banned_reason.clone(),
+        banned_at: account.banned_at,
+        ban_appeal_url: account.ban_appeal_url.clone(),
         qos_status: account.qos_status.clone(),
         qos_reset_seconds: account.qos_reset_seconds,
     }
@@ -432,6 +444,7 @@ pub struct AxumServer {
     #[allow(dead_code)] // 预留给 cloudflared 运行状态查询与后续控制
     pub cloudflared_state: Arc<crate::commands::cloudflared::CloudflaredState>,
     pub is_running: Arc<RwLock<bool>>,
+    pub port: u16,
     pub token_manager: Arc<TokenManager>, // [NEW] 暴露出 TokenManager 供反代服务复用
     pub proxy_pool_state: Arc<tokio::sync::RwLock<crate::proxy::config::ProxyPoolConfig>>, // [NEW] 代理池配置状态
     pub proxy_pool_manager: Arc<crate::proxy::proxy_pool::ProxyPoolManager>, // [NEW] 暴露代理池管理器供命令调用
@@ -918,6 +931,7 @@ impl AxumServer {
             .route("/proxy/cloudflared/stop", post(admin_cloudflared_stop))
             .route("/system/open-folder", post(admin_open_folder))
             .route("/proxy/stats", get(admin_get_proxy_stats))
+            .route("/proxy/test-model", post(admin_test_model))
             .route("/logs", get(admin_get_proxy_logs_filtered))
             .route("/logs/count", get(admin_get_proxy_logs_count_filtered))
             .route("/logs/disk-size", get(admin_get_proxy_db_disk_size))
@@ -980,11 +994,27 @@ impl AxumServer {
                 "/accounts/:accountId/toggle-proxy",
                 post(admin_toggle_proxy_status),
             )
+            .route(
+                "/accounts/:accountId/clear-forbidden",
+                post(admin_clear_account_forbidden),
+            )
             .route("/accounts/warmup", post(admin_warm_up_all_accounts))
             .route("/accounts/:accountId/warmup", post(admin_warm_up_account))
             .route(
                 "/accounts/:accountId/priority",
                 post(admin_update_account_priority),
+            )
+            .route(
+                "/accounts/:accountId/project-id",
+                post(admin_update_account_project_id),
+            )
+            .route(
+                "/accounts/:accountId/auto-fetch-project-id",
+                post(admin_auto_fetch_account_project_id),
+            )
+            .route(
+                "/accounts/:accountId/label",
+                post(admin_update_account_label),
             )
             .route(
                 "/system/data-dir",
@@ -1015,6 +1045,10 @@ impl AxumServer {
             .route(
                 "/system/timeouts/effective-first-byte",
                 get(admin_get_effective_first_byte_timeouts),
+            )
+            .route(
+                "/system/timeouts/effective-upload",
+                get(admin_get_effective_upload_timeouts),
             )
             .route(
                 "/system/autostart/status",
@@ -1107,15 +1141,26 @@ impl AxumServer {
             .layer(DefaultBodyLimit::max(max_body_size)) // 放宽 body 大小限制
             .with_state(state.clone());
 
-        // 静态文件托管 (用于 Headless/Docker 模式)
-        let dist_path = std::env::var("ABV_DIST_PATH").unwrap_or_else(|_| "dist".to_string());
-        let app = if std::path::Path::new(&dist_path).exists() {
-            tracing::info!("正在托管静态资源: {}", dist_path);
-            app.fallback_service(tower_http::services::ServeDir::new(&dist_path).fallback(
-                tower_http::services::ServeFile::new(format!("{}/index.html", dist_path)),
-            ))
-        } else {
+        // 静态文件托管 (用于 Headless/Docker 模式，可通过 ABV_DISABLE_WEB 显式关闭)
+        let disable_web = std::env::var("ABV_DISABLE_WEB")
+            .map(|v| matches!(v.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(false);
+
+        let app = if disable_web {
+            tracing::info!("Web 管理控制台已通过配置或入参关闭 (Pure-Proxy 纯代理模式)");
             app
+        } else {
+            let dist_path = resolve_static_dist_path();
+            if let Some(path_buf) = dist_path {
+                let path_str = path_buf.to_string_lossy().to_string();
+                tracing::info!("正在托管静态资源: {}", path_str);
+                app.fallback_service(tower_http::services::ServeDir::new(&path_buf).fallback(
+                    tower_http::services::ServeFile::new(path_buf.join("index.html")),
+                ))
+            } else {
+                tracing::warn!("未找到前端静态资源目录 (dist)，Web 仪表盘静态托管未激活");
+                app
+            }
         };
 
         // 绑定地址（使用 socket2 开启 SO_REUSEADDR，通配地址自动开启 IPv6/IPv4 双栈支持）
@@ -1142,6 +1187,7 @@ impl AxumServer {
             debug_logging: debug_logging_state.clone(),
             cloudflared_state,
             is_running: is_running_state,
+            port,
             token_manager: token_manager.clone(),
             proxy_pool_state,
             proxy_pool_manager,
@@ -1312,6 +1358,30 @@ fn bind_dual_stack_socket(port: u16) -> Result<tokio::net::TcpListener, String> 
         .map_err(|e| format!("转换为 Tokio TcpListener 失败 ([::]:{}): {}", port, e))
 }
 
+/// 解析前端静态资源目录，不依赖当前工作目录。
+/// 优先级：ABV_DIST_PATH > ./dist > 可执行文件同级 dist > 可执行文件上级 ../share/antigravity/dist
+fn resolve_static_dist_path() -> Option<std::path::PathBuf> {
+    use std::path::PathBuf;
+
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(p) = std::env::var("ABV_DIST_PATH") {
+        if !p.trim().is_empty() {
+            candidates.push(PathBuf::from(p));
+        }
+    }
+    candidates.push(PathBuf::from("dist"));
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join("dist"));
+            candidates.push(dir.join("../share/antigravity/dist"));
+        }
+    }
+
+    candidates
+        .into_iter()
+        .find(|p| p.join("index.html").is_file())
+}
+
 /// 绑定 TCP 监听器（启用地址复用，遇通配地址如 0.0.0.0 / :: 时自动开启 IPv6/IPv4 双栈支持）
 fn bind_tcp_listener(host: &str, port: u16) -> Result<tokio::net::TcpListener, String> {
     let clean_host = host.trim_matches('[').trim_matches(']');
@@ -1444,11 +1514,17 @@ async fn admin_list_accounts(
                 proxy_disabled_reason: acc.proxy_disabled_reason,
                 proxy_disabled_at: acc.proxy_disabled_at,
                 protected_models: acc.protected_models.into_iter().collect(),
+                forbidden_models: acc.forbidden_models.into_iter().collect(),
                 live_limited_models: acc.live_limited_models,
                 validation_blocked: acc.validation_blocked,
                 validation_blocked_until: acc.validation_blocked_until,
                 validation_blocked_reason: acc.validation_blocked_reason,
                 validation_url: acc.validation_url,
+                banned: acc.banned,
+                banned_code: acc.banned_code,
+                banned_reason: acc.banned_reason,
+                banned_at: acc.banned_at,
+                ban_appeal_url: acc.ban_appeal_url,
                 quota,
                 device_bound: acc.device_profile.is_some(),
                 last_used: acc.last_used,
@@ -1550,11 +1626,17 @@ async fn admin_get_current_account(
                 proxy_disabled_reason: acc.proxy_disabled_reason,
                 proxy_disabled_at: acc.proxy_disabled_at,
                 protected_models: acc.protected_models.into_iter().collect(),
+                forbidden_models: acc.forbidden_models.into_iter().collect(),
                 live_limited_models: acc.live_limited_models,
                 validation_blocked: acc.validation_blocked,
                 validation_blocked_until: acc.validation_blocked_until,
                 validation_blocked_reason: acc.validation_blocked_reason,
                 validation_url: acc.validation_url,
+                banned: acc.banned,
+                banned_code: acc.banned_code,
+                banned_reason: acc.banned_reason,
+                banned_at: acc.banned_at,
+                ban_appeal_url: acc.ban_appeal_url,
                 quota,
                 device_bound: acc.device_profile.is_some(),
                 last_used: acc.last_used,
@@ -2063,6 +2145,9 @@ async fn admin_save_config(
     // 同步全局内存配置（热更新思考预算、系统提示词、图像思考模式与审计策略）
     crate::proxy::update_thinking_budget_config(new_config.proxy.thinking_budget.clone());
     crate::proxy::update_global_system_prompt_config(new_config.proxy.global_system_prompt.clone());
+    crate::proxy::mappers::prompt_sanitizer::PromptSanitizer::update_prompt_rewrite_config(
+        &new_config.proxy.prompt_rewrite,
+    );
     crate::proxy::update_image_thinking_mode(new_config.proxy.image_thinking_mode.clone());
     crate::proxy::update_multimodal_config(new_config.proxy.multimodal.clone());
     crate::proxy::update_stream_timeout_config(new_config.proxy.stream_timeouts.clone());
@@ -2538,6 +2623,126 @@ async fn admin_get_proxy_stats(
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
     let stats = state.monitor.get_stats().await;
     Ok(Json(stats))
+}
+
+#[derive(serde::Deserialize)]
+struct AdminTestModelRequest {
+    model: String,
+    #[serde(default, rename = "targetAccountId")]
+    target_account_id: Option<String>,
+}
+
+fn probe_selection_error_response(
+    error: crate::modules::probe::ProbeSelectionError,
+) -> (StatusCode, Json<ErrorResponse>) {
+    let status = match error {
+        crate::modules::probe::ProbeSelectionError::NoCandidates => StatusCode::BAD_REQUEST,
+        crate::modules::probe::ProbeSelectionError::AllCandidatesFailed { .. } => {
+            StatusCode::BAD_GATEWAY
+        }
+    };
+    (
+        status,
+        Json(ErrorResponse {
+            error: error.to_string(),
+        }),
+    )
+}
+
+async fn admin_test_model(
+    State(state): State<AppState>,
+    Json(payload): Json<AdminTestModelRequest>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    let port = state.port;
+    let accounts = crate::modules::account::list_accounts().unwrap_or_default();
+
+    let (chosen_account, token, pid) = if let Some(acc_id) = payload
+        .target_account_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+    {
+        let acc = accounts
+            .iter()
+            .find(|a| a.id == acc_id)
+            .cloned()
+            .ok_or_else(|| {
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(ErrorResponse {
+                        error: "未找到指定的账号".to_string(),
+                    }),
+                )
+            })?;
+        let (t, p) = crate::modules::quota::get_valid_token_for_warmup(&acc)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse { error: e }),
+                )
+            })?;
+        (acc, t, p)
+    } else {
+        // Web 端“自动调度”遵循反代号池语义：默认排除手动禁用反代的账号。
+        let probe =
+            crate::modules::probe::pick_auto_probe_account(&accounts, &payload.model, false)
+                .await
+                .map_err(probe_selection_error_response)?;
+        (probe.account, probe.access_token, probe.project_id)
+    };
+
+    let warmup_url = format!("http://127.0.0.1:{}/internal/warmup", port);
+    let body = serde_json::json!({
+        "email": chosen_account.email,
+        "model": payload.model,
+        "access_token": token,
+        "project_id": pid,
+        "account_id": chosen_account.id,
+        "probe_intent": true
+    });
+
+    let client = rquest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .no_proxy()
+        .build()
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("创建客户端失败: {}", e),
+                }),
+            )
+        })?;
+
+    let resp = client
+        .post(&warmup_url)
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("发送预热检测请求失败: {}", e),
+                }),
+            )
+        })?;
+
+    let result = resp
+        .json::<crate::proxy::handlers::warmup::WarmupResponse>()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("解析预热检测结果失败: {}", e),
+                }),
+            )
+        })?;
+
+    Ok(Json(result))
 }
 
 async fn admin_get_data_dir_path() -> impl IntoResponse {
@@ -3069,15 +3274,27 @@ async fn admin_get_update_settings() -> impl IntoResponse {
     }
 }
 
-async fn admin_check_for_updates() -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-    let info = crate::modules::update_checker::check_for_updates()
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse { error: e }),
-            )
-        })?;
+#[derive(Debug, Deserialize)]
+struct AdminCheckForUpdatesPayload {
+    channel: Option<crate::modules::update_checker::UpdateChannel>,
+}
+
+async fn admin_check_for_updates(
+    payload: Option<Json<AdminCheckForUpdatesPayload>>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    let target_channel = payload.and_then(|p| p.0.channel);
+    let info_result = if let Some(ch) = target_channel {
+        crate::modules::update_checker::check_for_updates_with_channel(ch).await
+    } else {
+        crate::modules::update_checker::check_for_updates().await
+    };
+
+    let info = info_result.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse { error: e }),
+        )
+    })?;
     Ok(Json(info))
 }
 
@@ -3190,6 +3407,10 @@ async fn admin_detect_remote_hub_fingerprint(
 
 async fn admin_get_effective_first_byte_timeouts() -> impl IntoResponse {
     Json(crate::commands::proxy::get_effective_first_byte_timeouts())
+}
+
+async fn admin_get_effective_upload_timeouts() -> impl IntoResponse {
+    Json(crate::commands::proxy::get_effective_timeout_config())
 }
 
 async fn admin_toggle_auto_launch(Json(_payload): Json<serde_json::Value>) -> impl IntoResponse {
@@ -3337,9 +3558,16 @@ struct ToggleProxyRequest {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct AccountPriorityRequest {
     #[serde(deserialize_with = "crate::models::account::deserialize_priority")]
     priority: u8,
+    #[serde(
+        default,
+        alias = "model_priorities",
+        deserialize_with = "crate::models::account::deserialize_optional_model_priorities"
+    )]
+    model_priorities: Option<std::collections::HashMap<String, u8>>,
 }
 
 async fn admin_update_account_priority(
@@ -3347,17 +3575,89 @@ async fn admin_update_account_priority(
     Path(account_id): Path<String>,
     Json(payload): Json<AccountPriorityRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-    crate::modules::account::update_account_priority(&account_id, payload.priority).map_err(
-        |e| {
+    let has_model_override = payload.model_priorities.is_some();
+    let saved_model_priorities = crate::modules::account::update_account_priority_with_models(
+        &account_id,
+        payload.priority,
+        payload.model_priorities,
+    )
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse { error: e }),
+        )
+    })?;
+    state.token_manager.update_account_model_priorities(
+        &account_id,
+        payload.priority,
+        if has_model_override {
+            Some(saved_model_priorities)
+        } else {
+            None
+        },
+    );
+    Ok(StatusCode::OK)
+}
+
+#[derive(Debug, Deserialize)]
+struct AccountProjectIdRequest {
+    #[serde(default, alias = "projectId")]
+    project_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AccountLabelRequest {
+    label: String,
+}
+
+async fn admin_update_account_project_id(
+    State(state): State<AppState>,
+    Path(account_id): Path<String>,
+    Json(payload): Json<AccountProjectIdRequest>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    crate::modules::account::update_account_project_id(&account_id, payload.project_id.clone())
+        .map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse { error: e }),
             )
-        },
-    )?;
+        })?;
     state
         .token_manager
-        .update_account_priority(&account_id, payload.priority);
+        .update_account_project_id(&account_id, payload.project_id);
+    Ok(StatusCode::OK)
+}
+
+async fn admin_auto_fetch_account_project_id(
+    State(state): State<AppState>,
+    Path(account_id): Path<String>,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let pid = crate::modules::account::auto_fetch_account_project_id(&account_id)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e })),
+            )
+        })?;
+    state
+        .token_manager
+        .update_account_project_id(&account_id, Some(pid.clone()));
+    Ok(Json(serde_json::json!(pid)))
+}
+
+async fn admin_update_account_label(
+    Path(account_id): Path<String>,
+    Json(payload): Json<AccountLabelRequest>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    crate::commands::update_account_label(account_id, payload.label)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse { error: e }),
+            )
+        })?;
     Ok(StatusCode::OK)
 }
 
@@ -3378,7 +3678,34 @@ async fn admin_toggle_proxy_status(
         )
     })?;
 
-    // 同步到运行中的反代服务
+    // 同步到运行中的反代服务（含固定账号清理与手动恢复时运行态解锁）
+    if !payload.enable {
+        let pref_id = state.token_manager.get_preferred_account().await;
+        if pref_id.as_deref() == Some(&account_id) {
+            state.token_manager.set_preferred_account(None).await;
+            if let Ok(mut cfg) = crate::modules::config::load_app_config() {
+                if cfg.proxy.preferred_account_id.as_deref() == Some(&account_id) {
+                    cfg.proxy.preferred_account_id = None;
+                    let _ = crate::modules::config::save_app_config(&cfg);
+                }
+            }
+        }
+    } else {
+        state.token_manager.prepare_manual_enable(&account_id);
+    }
+    let _ = state.token_manager.reload_account(&account_id).await;
+
+    Ok(StatusCode::OK)
+}
+
+async fn admin_clear_account_forbidden(
+    State(state): State<AppState>,
+    Path(account_id): Path<String>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    crate::modules::account::clear_account_forbidden_lock(&account_id)
+        .map_err(|e| (StatusCode::BAD_REQUEST, Json(ErrorResponse { error: e })))?;
+
+    state.token_manager.prepare_manual_enable(&account_id);
     let _ = state.token_manager.reload_account(&account_id).await;
 
     Ok(StatusCode::OK)
@@ -3807,11 +4134,14 @@ async fn admin_sync_account_from_db(
     })?;
     let current_target = index.current_target_ide.as_deref();
     let is_agy = current_target == Some("agy");
+    let is_acp = crate::modules::integration::is_acp_target(current_target);
 
     // 逻辑参考自 sync_account_from_db command
     let credential = if is_agy {
         crate::modules::integration::read_from_system_keyring_only()
             .map(|state| state.refresh_token)
+    } else if is_acp {
+        crate::modules::integration::read_acp_credentials().map(|state| state.refresh_token)
     } else {
         migration::get_refresh_token_from_db(current_target)
     };
@@ -3834,7 +4164,7 @@ async fn admin_sync_account_from_db(
         }
     }
 
-    let account = if is_agy {
+    let account = if is_agy || is_acp {
         let accounts = account::list_accounts().map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -5316,5 +5646,54 @@ mod save_update_settings_payload_tests {
             resolve_oauth_redirect_uri(8045, Some("https://my-domain.example.com/"), false),
             "https://my-domain.example.com/auth/callback"
         );
+    }
+}
+
+#[cfg(test)]
+mod admin_test_model_tests {
+    use super::*;
+    use crate::modules::probe::ProbeSelectionError;
+
+    #[test]
+    fn test_probe_selection_error_status_mapping() {
+        let (no_candidates, _) = probe_selection_error_response(ProbeSelectionError::NoCandidates);
+        assert_eq!(no_candidates, StatusCode::BAD_REQUEST);
+
+        let (all_failed, _) =
+            probe_selection_error_response(ProbeSelectionError::AllCandidatesFailed {
+                reasons: vec!["account@example.com: token refresh failed".to_string()],
+            });
+        assert_eq!(all_failed, StatusCode::BAD_GATEWAY);
+    }
+
+    #[test]
+    fn test_admin_test_model_request_deserialization() {
+        use super::AdminTestModelRequest;
+
+        // 1. 带 targetAccountId 的请求（Web 前端单模型测试）
+        let with_account: AdminTestModelRequest = serde_json::from_value(serde_json::json!({
+            "model": "gemini-2.5-pro",
+            "targetAccountId": "acc-12345"
+        }))
+        .expect("should deserialize with targetAccountId");
+        assert_eq!(with_account.model, "gemini-2.5-pro");
+        assert_eq!(with_account.target_account_id.as_deref(), Some("acc-12345"));
+
+        // 2. targetAccountId 为 null（Web 前端自动调度模式）
+        let auto_dispatch_null: AdminTestModelRequest = serde_json::from_value(serde_json::json!({
+            "model": "gemini-2.5-flash",
+            "targetAccountId": null
+        }))
+        .expect("should deserialize with null targetAccountId");
+        assert_eq!(auto_dispatch_null.model, "gemini-2.5-flash");
+        assert_eq!(auto_dispatch_null.target_account_id, None);
+
+        // 3. 缺少 targetAccountId 字段（原生 API 调用）
+        let bare: AdminTestModelRequest = serde_json::from_value(serde_json::json!({
+            "model": "claude-sonnet-4-5"
+        }))
+        .expect("should deserialize without targetAccountId");
+        assert_eq!(bare.model, "claude-sonnet-4-5");
+        assert_eq!(bare.target_account_id, None);
     }
 }

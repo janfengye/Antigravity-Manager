@@ -29,6 +29,7 @@ export interface ProxyConfig {
     hub_cl?: string;
     thinking_budget?: ThinkingBudgetConfig;
     global_system_prompt?: GlobalSystemPromptConfig;
+    prompt_rewrite?: PromptRewriteConfig;
     image_thinking_mode?: 'enabled' | 'disabled'; // [NEW] 图像思维模式开关
     only_raw_quota_models?: boolean; // [NEW] 是否只暴露真实配额模型
     proxy_pool?: ProxyPoolConfig;
@@ -142,6 +143,123 @@ export interface GlobalSystemPromptConfig {
     content: string;
 }
 
+/** 提示词与工具清洗规则的作用范围 */
+export type PromptRewriteScope = 'all' | 'prompt' | 'tools';
+
+/** 风控提示词清理规则（行式：匹配内容 → 替换为） */
+export interface PromptRewriteRule {
+    /** 稳定 ID */
+    id: string;
+    /** 匹配内容：支持 * 通配符（同一行内任意字符）与 \n / \t / \\ 转义 */
+    pattern: string;
+    /** 替换内容：留空表示删除匹配内容 */
+    replacement: string;
+    /** 规则作用范围：'all' (全部) | 'prompt' (仅系统提示词) | 'tools' (仅工具声明描述) */
+    scope?: PromptRewriteScope;
+    /** 是否启用 */
+    enabled: boolean;
+}
+
+/** 风控提示词清理方案 */
+export interface PromptRewriteConfig {
+    enabled: boolean;
+    /** 是否启用内置身份归一化（默认 true） */
+    normalize_identity?: boolean;
+    /** 系统提示词隐身侧载模式：'auto' (非官方身份自动侧载) | 'always' (总是侧载) | 'off' (关闭) */
+    sideload_mode?: 'auto' | 'always' | 'off';
+    /** 是否对 tools[].description 深度执行脱敏与自定义规则清洗（默认 true） */
+    sanitize_tools_description?: boolean;
+    rules: PromptRewriteRule[];
+}
+
+/** 官方推荐风控预设规则集（经过生产环境与 WAF 实测验证） */
+export const RECOMMENDED_PROMPT_REWRITE_PRESETS: PromptRewriteRule[] = [
+    {
+        id: "preset-opencode",
+        pattern: "You are an AI agent running in OpenCode*",
+        replacement: "",
+        scope: "prompt",
+        enabled: true,
+    },
+    {
+        id: "preset-claude-code-agent",
+        pattern: "You are an interactive agent that helps users with software engineering tasks*",
+        replacement: "",
+        scope: "prompt",
+        enabled: true,
+    },
+    {
+        id: "preset-opencode-session-move",
+        pattern: "*tools.opencode.session*move*",
+        replacement: "tools.opencode.session_relocate",
+        scope: "all",
+        enabled: true,
+    },
+    {
+        id: "preset-dsh-identity",
+        pattern: "You are an AI agent powered by DeepSeek Harness*",
+        replacement: "",
+        scope: "prompt",
+        enabled: true,
+    },
+    {
+        id: "preset-dsh-model",
+        pattern: "You are a coding agent powered by *gemini*",
+        replacement: "",
+        scope: "prompt",
+        enabled: true,
+    },
+    {
+        id: "preset-dsh-browser-context",
+        pattern: "*The browser provides no implicit DOM, route, or screenshot context*",
+        replacement: "The browser exposes no DOM tree, route list, or page screenshot context",
+        scope: "prompt",
+        enabled: true,
+    },
+    {
+        id: "preset-workbuddy",
+        pattern: "*WorkBuddy*",
+        replacement: "",
+        scope: "all",
+        enabled: true,
+    },
+    {
+        id: "preset-workbuddy-powered-by",
+        pattern: "*This conversation is powered by *",
+        replacement: "Selected model: ",
+        scope: "prompt",
+        enabled: true,
+    },
+    {
+        id: "preset-codex-desktop-context",
+        pattern: "*# Codex desktop context*",
+        replacement: "# Desktop application context",
+        scope: "prompt",
+        enabled: true,
+    },
+    {
+        id: "preset-codex-as-role",
+        pattern: "*as Codex:*",
+        replacement: "as an assistant:",
+        scope: "prompt",
+        enabled: true,
+    },
+    {
+        id: "preset-codex-intro",
+        pattern: "*the codex cli is an open*source project*",
+        replacement: "",
+        scope: "prompt",
+        enabled: true,
+    },
+    {
+        id: "preset-anthropic-billing",
+        pattern: "*x-anthropic-billing-header:*",
+        replacement: "",
+        scope: "prompt",
+        enabled: true,
+    },
+];
+
 export interface DebugLoggingConfig {
     enabled: boolean;
     output_dir?: string;
@@ -153,8 +271,10 @@ export type AffinityScope = 'session' | 'api_key';
 export interface StickySessionConfig {
     mode: SchedulingMode;
     max_wait_seconds: number;
+    request_429_grace_ms?: number;
     max_spillover_accounts?: number;
     affinity_scope?: AffinityScope;
+    cache_settling_delay_ms?: number;
 }
 
 export interface ScheduledWarmupConfig {
@@ -202,6 +322,12 @@ export interface AppConfig {
     theme: string;
     auto_refresh: boolean;
     refresh_interval: number;
+    /** 启动完成、账号加载就绪后异步刷新一次全部配额 */
+    startup_refresh?: boolean;
+    /** 批量配额刷新与启动探测时的同时探测账号数（滑动窗口容量），默认 5，范围 1~20 */
+    refresh_concurrency?: number;
+    /** 全量配额刷新的滑动窗口延迟（秒）；账号完成后等待该时间再让位给下一个账号 */
+    refresh_slide_delay_secs?: number;
     auto_sync: boolean;
     sync_interval: number;
     auto_switch_classic_depleted?: boolean; // [NEW] 兼容旧版开关
@@ -296,5 +422,7 @@ export interface HubFingerprint {
     cl: string;
     user_agent: string;
     source: 'custom' | 'remote' | 'local' | 'baseline';
+    latest_remote_version?: string;
+    update_available?: boolean;
 }
 
